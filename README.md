@@ -78,6 +78,24 @@ every region but the US has them, and the US region leaves them out.
 Without the folders, keep `Region=US`: the other regions, and `ALL`, expect
 both cars (the Corsa is one of their starter cars).
 
+It works the other way round too: a UK/EU install has no `CARS\CIVIC` or
+`CARS\RSX`. Data Setup skips them as well; set `Region=EU` (which never shows
+them), or copy both folders from a US copy to keep `Region=US`.
+
+### Music and speech in `SDATA\sdat.viv`
+
+Some installs keep the music and speech in one archive, `SDATA\sdat.viv`,
+instead of the `pfdata` and `speech` folders. Data Setup unpacks it by itself
+(into a cache under `%LOCALAPPDATA%\NFSU2-3DS`, never into the game's folder),
+so there is nothing to do by hand.
+
+### "Download ZIP" and ffmpeg
+
+`ffmpeg.exe` is kept with Git LFS, so a GitHub "Download ZIP" of the source
+holds only a small placeholder in its place. Use the release zip, clone with
+Git LFS installed, or install ffmpeg (with libx264) on the PATH: Data Setup
+then uses that one, and says so if it finds none.
+
 ### From a command line
 
 The Tools folder's `nfsu2-3ds.exe` does the same without a window:
@@ -217,6 +235,9 @@ crashed.
 ## Building from source
 
 Requires devkitPro's 3DS tools (devkitARM, libctru, citro2d and citro3d).
+The port is built and tested with **libctru 2.4.1**, citro2d 1.6.0 and
+citro3d 1.7.1. Newer libctru releases have hung at boot or shown a black
+screen, and the build script warns when another version is installed.
 In PowerShell, from the repository's top folder:
 
 ```powershell

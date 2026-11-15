@@ -94,13 +94,13 @@ typedef struct {
 // is the EVENT_ICONS widgets' authored alpha, which the nodes keep until the
 // fade byte is first set. `poolCount` caps the nodes at the pooled widgets.
 void cribmap_init(CribMap* m, const EventDb* events, const TrackDb* tracks,
-	const Profile* p, int poolCount, u8 alpha, u64 nowMs);
+	const NfsProfile* p, int poolCount, u8 alpha, u64 nowMs);
 
 // ScrollEvent (0x4CC140) and ScrollRegion (0x4E0E50), `dir` -1 or +1. True
 // when the selection moved, which is the only case retail plays a sound.
 bool cribmap_scroll_event(CribMap* m, int dir, u64 nowMs, float dt);
 bool cribmap_scroll_region(CribMap* m, const EventDb* events, const TrackDb* tracks,
-	const Profile* p, int dir, u64 nowMs, float dt);
+	const NfsProfile* p, int dir, u64 nowMs, float dt);
 
 // Jumps straight to node `k` (the port's tap on an icon): Scroll's own steps,
 // repeated until the current node is `k`.

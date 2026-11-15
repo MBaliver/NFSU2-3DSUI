@@ -295,7 +295,14 @@ def main():
             h264 = open(tmp, "rb").read()
         blob, count, sps = build_container(h264, fnum, fden, pic_h(name))
         if count != nframes:
-            raise SystemExit("%s: %d access units but the .vp6 has %d frames" % (name, count, nframes))
+            # Some EU movies' MVhd headers give more frames than the stream
+            # holds (e.g. 4545 said, 4471 decoded). The .mvd's own header and
+            # index already carry the real count (build_container), so pack
+            # those and say so: the clip may drift slightly against its audio.
+            print("warning: %s: the .vp6 header says %d frames but ffmpeg decoded %d -- "
+                  "packed %d; slight A/V drift is possible on this clip"
+                  % (name, nframes, count, count), file=sys.stderr)
+            nframes = count
         tmpdst = dst + ".new"
         with open(tmpdst, "wb") as f:
             f.write(blob)

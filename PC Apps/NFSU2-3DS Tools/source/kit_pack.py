@@ -225,9 +225,9 @@ DEFAULT_CARS = ("240SX", "3000GT", "350Z", "A3", "CELICA", "CIVIC", "COROLLA", "
                 "IMPREZAWRX", "IS300", "LANCEREVO8", "MIATA", "MUSTANGGT", "NAVIGATOR",
                 "PEUGOT", "PEUGOT106", "RSX", "RX7", "RX8", "SENTRA", "SKYLINE", "SUPRA",
                 "TIBURON", "TT")
-# Only the UK/EU PC release has these two CARS folders; an install without
-# them skips their kits (tools/stage.py REGIONAL_CARS).
-REGIONAL_CARS = ("CORSA", "PEUGOT106")
+# Only the UK/EU PC release has CORSA and PEUGOT106, only the US one CIVIC and
+# RSX; an install without one skips its kit (tools/stage.py REGIONAL_CARS).
+REGIONAL_CARS = ("CORSA", "PEUGOT106", "CIVIC", "RSX")
 
 
 def ext(h, s):

@@ -79,10 +79,14 @@ PLAYER_CARS = ["240SX", "3000GT", "350Z", "A3", "CELICA", "CIVIC", "COROLLA", "C
                "ECLIPSE", "ESCALADE", "FOCUS", "G35", "GOLF", "GTO", "HUMMER", "IMPREZAWRX", "IS300",
                "LANCEREVO8", "MIATA", "MUSTANGGT", "NAVIGATOR", "PEUGOT", "PEUGOT106", "RSX", "RX7",
                "RX8", "SENTRA", "SKYLINE", "SUPRA", "TIBURON", "TT"]
-# The regional cars: only the UK/EU PC release has their CARS folders. Packed
-# when the install has them, skipped when it doesn't; the game shows them by
-# its Region (cardb_region_allows), and the US region never does.
-REGIONAL_CARS = ["CORSA", "PEUGOT106"]
+# The regional cars. The Corsa and the 106 are only in the UK/EU PC release;
+# the Civic and the RSX are only in the US one (an EU install has no
+# CARS\CIVIC or CARS\RSX). Each is packed when the install has it, skipped
+# when it doesn't; the game shows them by its Region (cardb_region_allows):
+# US leaves out the Corsa and the 106, every other region the Civic and RSX.
+EU_ONLY_CARS = ["CORSA", "PEUGOT106"]
+US_ONLY_CARS = ["CIVIC", "RSX"]
+REGIONAL_CARS = EU_ONLY_CARS + US_ONLY_CARS
 TRAFFIC_CARS = ["4DR_SEDAN", "4DR_SEDAN02", "COUPE", "HATCHBACK", "HATCHBACK02", "MINIVAN",
                 "PANELVAN", "PARCELVAN", "PICKUP", "SUV", "TAXI", "TAXI02"]
 # The frontend rooms (MegaloShop01 is never entered).
@@ -176,6 +180,43 @@ def child_env():
 def regional_absent(pc):
     """The REGIONAL_CARS this install has no CARS folder for."""
     return [c for c in REGIONAL_CARS if not os.path.isdir(pcp(pc, "CARS", c))]
+
+
+def _sdata_cache(pc):
+    """Where an install's SDATA/sdat.viv is unpacked: a per-user cache, never
+    the PC install (it may not be writable) nor the SD card."""
+    import hashlib
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    key = hashlib.sha1(os.path.normcase(os.path.abspath(pc)).encode("utf-8")).hexdigest()[:12]
+    return os.path.join(base, "NFSU2-3DS", "sdata", key)
+
+
+def sdata_root(pc):
+    """The folder holding pfdata/MusicSFx.mus and speech/: the install itself
+    when it has them loose, else the cache sdat.viv is unpacked into. Some
+    installs keep both only inside SDATA/sdat.viv (an EA BIG4 archive)."""
+    if os.path.isfile(pcp(pc, "pfdata", "MusicSFx.mus")):
+        return pc
+    if os.path.isfile(pcp(pc, "SDATA", "sdat.viv")):
+        return _sdata_cache(pc)
+    return pc
+
+
+def ensure_sdata(pc, log=print):
+    """Unpack SDATA/sdat.viv when the install has no loose pfdata/speech; a
+    later run finds the files already there and only checks their sizes."""
+    sr = sdata_root(pc)
+    if sr == pc:
+        return sr
+    import viv_unpack
+    viv = pcp(pc, "SDATA", "sdat.viv")
+    log("stage: no pfdata/MusicSFx.mus in this install -- unpacking the music and speech from %s "
+        "into %s" % (viv, sr))
+    viv_unpack.unpack(viv, sr, log=log)
+    return sr
 
 
 def build_plan(pc, gd, tracks=ALL_TRACKS):
@@ -321,14 +362,17 @@ def build_plan(pc, gd, tracks=ALL_TRACKS):
 
     # The audio builders keep what they find unless --force; a stale step
     # means the source or the builder changed, so it rebuilds everything.
-    pack("music", "eatrax_build (EA Trax)", ["eatrax_build.py"], [pcp(pc, "pfdata", "MusicSFx.mus")],
+    # pfdata/ and speech/ come from the install, or from its SDATA/sdat.viv
+    # unpacked into a cache (sdata_root).
+    sr = sdata_root(pc)
+    pack("music", "eatrax_build (EA Trax)", ["eatrax_build.py"], [pcp(sr, "pfdata", "MusicSFx.mus")],
          [J(gd, "eatrax", "*.dspm"), J(gd, "eatrax", "tracks.txt")], 28,
          [py("eatrax_build.py", "--out", J(gd, "eatrax"), "--force")])
     pack("speech", "speech_build (career speech)", ["speech_build.py"],
-         [pcp(pc, "speech", "UG2_Speech.big"), pcp(pc, "speech", "UG2_Speech.idx")],
+         [pcp(sr, "speech", "UG2_Speech.big"), pcp(sr, "speech", "UG2_Speech.idx")],
          [J(gd, "speech", "g*.dspm"), J(gd, "speech", "UG2_Speech.idx")], 858,
          [py("speech_build.py", "--out", J(gd, "speech"), "--force")])
-    pack("speech", "nisaudio_build (NIS streams)", ["nisaudio_build.py"], [pcp(pc, "speech", "nisaudio.big")],
+    pack("speech", "nisaudio_build (NIS streams)", ["nisaudio_build.py"], [pcp(sr, "speech", "nisaudio.big")],
          [J(gd, "speech", "colstream*.dspm"), J(gd, "speech", "thunder*.dspm"),
           J(gd, "speech", "nisend_*.dspm"), J(gd, "speech", "nisstart_*.dspm")], 128,
          [py("nisaudio_build.py", "--out", J(gd, "speech"), "--force")])
@@ -542,13 +586,25 @@ def stage(pc, gd, only=(), tracks=ALL_TRACKS, force=False, list_only=False, log=
     missing = check_install(pc)
     if missing:
         raise SystemExit("not an NFSU2 PC install (%s missing): %s" % (", ".join(missing), pc))
+    # Said up front, not as a WinError 216 from the first packer that runs it.
+    import toolbin
+    ff = toolbin.ffmpeg_problem()
+    if ff and not list_only:
+        raise SystemExit(ff)
     # The packers that open the install by a fixed path (eatrax_build,
     # speech_build ...) read this one.
     os.environ["NFSU2_PC_ROOT"] = os.path.abspath(pc)
+    # ... and eatrax_build / speech_build / nisaudio_build this one.
+    os.environ["NFSU2_SDATA_ROOT"] = os.path.abspath(ensure_sdata(pc, log))
     absent = regional_absent(pc)
-    if absent:
+    eu = [c for c in absent if c in EU_ONLY_CARS]
+    us = [c for c in absent if c in US_ONLY_CARS]
+    if eu:
         log("stage: no %s in this install's CARS (only the UK/EU PC release has them) -- skipped; "
-            "the game runs without them, and the US region never shows them" % " / ".join(absent))
+            "the game runs without them, and the US region never shows them" % " / ".join(eu))
+    if us:
+        log("stage: no %s in this install's CARS (only the US PC release has them) -- skipped; "
+            "set Region=EU in nfsu2_config.txt, which never shows them" % " / ".join(us))
     steps = build_plan(pc, gd, tracks)
     for g in only:
         if g not in GROUPS:
@@ -641,6 +697,9 @@ def pack_mod(pc, gd, mod_dir, name=None, out=None, log=print, stop=None, progres
                 mods[os.path.normcase(os.path.normpath(p))] = rel
         # The packers that open the install by a fixed path read the overlay.
         os.environ["NFSU2_PC_ROOT"] = ov
+        # A mod's own pfdata/ or speech/ files are in the overlay, not in
+        # a setup run's sdat.viv cache.
+        os.environ.pop("NFSU2_SDATA_ROOT", None)
         _mtime_cache.clear()
         steps = build_plan(ov, staged)
         used, sel = set(), []

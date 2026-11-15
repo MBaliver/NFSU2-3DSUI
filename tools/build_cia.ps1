@@ -101,22 +101,42 @@ Set-Content -Path $stampPath -Value $driveLetter -Encoding ASCII
 
 # The 3DS's GPU freezes on a vertex shader output component left unwritten or
 # written twice, which Azahar draws (#327), so the build refuses one.
+#
+# Both scripts run from the repo root by a relative path: when the python on
+# PATH is devkitPro's msys2 one, it cannot open an absolute Windows path
+# ("C:\...\tools\x.py"), and the build died here before compiling anything.
 $python = Get-Command python -ErrorAction SilentlyContinue
 if ($python) {
-    & $python.Source (Join-Path $PSScriptRoot "pica_output_check.py")
-    if ($LASTEXITCODE -ne 0) {
-        throw "pica_output_check.py: a shader would hang the 3DS (see above)"
+    Push-Location $root
+    try {
+        & $python.Source "tools/pica_output_check.py"
+        if ($LASTEXITCODE -ne 0) {
+            throw "pica_output_check.py: a shader would hang the 3DS (see above)"
+        }
+
+        # The HOME Menu banner, its sound and the icon (3DS Files\meta\nfsu2),
+        # from the PC data. Without the PC files the committed copies are used.
+        & $python.Source "tools/make_banner.py"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "make_banner.py failed -- the committed banner in meta\nfsu2 is used"
+        }
+    } finally {
+        Pop-Location
     }
 } else {
     Write-Warning "python not on PATH -- the shader output check is skipped"
 }
 
-# The HOME Menu banner, its sound and the icon (3DS Files\meta\nfsu2), from
-# the PC data. Without the PC files the committed copies are used.
-if ($python) {
-    & $python.Source (Join-Path $PSScriptRoot "make_banner.py")
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "make_banner.py failed -- the committed banner in meta\nfsu2 is used"
+# The port is built and tested against libctru 2.4.1 (citro2d 1.6.0, citro3d
+# 1.7.1). Newer libctru has hung at boot before gfxInitDefault() (TASKS #61)
+# and a tester's CIA built on a current one came up black, so say so up front.
+$pacman = "C:\devkitPro\msys2\usr\bin\pacman.exe"
+if (Test-Path $pacman) {
+    $ctru = (& $pacman -Q libctru 2>$null) -replace '^libctru\s+', ''
+    if ($ctru -and $ctru -notlike "2.4.1*") {
+        Write-Warning ("libctru $ctru is installed; this port is tested on 2.4.1 only. " +
+            "Newer libctru builds have hung or shown a black screen at boot. " +
+            "Downgrade with pacman -U <cached libctru-2.4.1 package> if the build misbehaves.")
     }
 }
 

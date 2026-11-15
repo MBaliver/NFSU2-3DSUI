@@ -89,7 +89,7 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MUS = os.path.join(os.environ.get("NFSU2_PC_ROOT") or os.path.join(ROOT, "PC Files"), "pfdata", "MusicSFx.mus")
+MUS = os.path.join(os.environ.get("NFSU2_SDATA_ROOT") or os.environ.get("NFSU2_PC_ROOT") or os.path.join(ROOT, "PC Files"), "pfdata", "MusicSFx.mus")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import toolbin  # noqa: E402  (dspenc / vgmstream-cli / ffmpeg on any system)
 DSPENC = toolbin.find("dspenc")

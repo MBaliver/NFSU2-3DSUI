@@ -61,7 +61,8 @@ THIRD_PARTY = ["numpy", "PIL", "PIL.Image", "lz4", "lz4.block", "lz4.frame", "pe
 def tool_files():
     """Every tools/*.py a step of the plan runs or imports, and the apps'."""
     pc = stage.DEFAULT_PC if stage.DEFAULT_PC and os.path.isdir(stage.DEFAULT_PC) else None
-    scripts = {"nfsu2_app.py", "nfsu2_gui.py", "stage.py", "mod_overlay.py", "toolbin.py", "pack_world.py"}
+    scripts = {"nfsu2_app.py", "nfsu2_gui.py", "stage.py", "mod_overlay.py", "toolbin.py", "pack_world.py",
+               "viv_unpack.py"}
     scripts.update(stage.TRACK_SCRIPTS)
     if pc:
         for s in stage.build_plan(pc, tempfile.gettempdir()):

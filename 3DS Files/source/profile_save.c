@@ -479,7 +479,7 @@ unsigned int profile_career_slot_hash(int slot) {
 	return profile_ea_hash(name);
 }
 
-void profile_career_choose(Profile* p, int slot, const unsigned int parts[PROFILE_CAR_SLOTS],
+void profile_career_choose(NfsProfile* p, int slot, const unsigned int parts[PROFILE_CAR_SLOTS],
 	float perf, bool traded)
 {
 	if (!p || slot < 0 || slot >= PROFILE_NUM_CAREER_SLOTS || !parts)
@@ -534,7 +534,7 @@ static void recordFromParts(ProfileCarRecord* c, const unsigned int* parts) {
 
 // FindEmptyTunedCarSlot (Speed.elf 0x8013427C): the first record whose name
 // hash (+4) is 0.
-int profile_tuned_free_slot(const Profile* p) {
+int profile_tuned_free_slot(const NfsProfile* p) {
 	if (!p)
 		return -1;
 	for (int i = 0; i < PROFILE_NUM_TUNED_SLOTS; i++)
@@ -546,7 +546,7 @@ int profile_tuned_free_slot(const Profile* p) {
 // AddNewTunedCar (0x80134314): FillFromStockCar on the empty slot, named
 // FEngHashString("TUNED_CAR_%d", index). The record is the stock car's slot
 // array with a fresh PhysicsUpgradeSpecification and default tunings.
-bool profile_tuned_add(Profile* p, int slot, const unsigned int parts[PROFILE_CAR_SLOTS],
+bool profile_tuned_add(NfsProfile* p, int slot, const unsigned int parts[PROFILE_CAR_SLOTS],
 	float perf)
 {
 	if (!p || slot < 0 || slot >= PROFILE_NUM_TUNED_SLOTS || !parts)
@@ -570,7 +570,7 @@ bool profile_tuned_add(Profile* p, int slot, const unsigned int parts[PROFILE_CA
 }
 
 // DeleteTunedCar: the record back to an empty one.
-void profile_tuned_delete(Profile* p, int slot) {
+void profile_tuned_delete(NfsProfile* p, int slot) {
 	if (!p || slot < 0 || slot >= PROFILE_NUM_TUNED_SLOTS)
 		return;
 	memset(&p->tunedCar[slot], 0, sizeof(p->tunedCar[slot]));
@@ -583,7 +583,7 @@ void profile_tuned_delete(Profile* p, int slot) {
 	p->tunedCarWrite[slot] |= PROFILE_CAREER_WRITE_FILLED;
 }
 
-void profile_tuned_to_work(Profile* p, int slot) {
+void profile_tuned_to_work(NfsProfile* p, int slot) {
 	if (!p || slot < 0 || slot >= PROFILE_NUM_TUNED_SLOTS)
 		return;
 	const int w = PROFILE_WORK_SLOT;
@@ -602,7 +602,7 @@ void profile_tuned_to_work(Profile* p, int slot) {
 	p->careerCarWrite[w] = 0;
 }
 
-void profile_preset_to_work(Profile* p, const unsigned int parts[PROFILE_CAR_SLOTS]) {
+void profile_preset_to_work(NfsProfile* p, const unsigned int parts[PROFILE_CAR_SLOTS]) {
 	if (!p || !parts)
 		return;
 	const int w = PROFILE_WORK_SLOT;
@@ -620,7 +620,7 @@ void profile_preset_to_work(Profile* p, const unsigned int parts[PROFILE_CAR_SLO
 	p->careerCarWrite[w] = 0;
 }
 
-void profile_work_to_tuned(Profile* p, int slot) {
+void profile_work_to_tuned(NfsProfile* p, int slot) {
 	if (!p || slot < 0 || slot >= PROFILE_NUM_TUNED_SLOTS)
 		return;
 	const int w = PROFILE_WORK_SLOT;
@@ -642,7 +642,7 @@ void profile_work_to_tuned(Profile* p, int slot) {
 // string at 0x8032934C), a name no slot carries, and hasCareerCar is clear --
 // so a fresh career has no car, one open slot, and the car lot's buy to fill
 // it.
-static void defaultCareerCars(Profile* p) {
+static void defaultCareerCars(NfsProfile* p) {
 	for (int i = 0; i < PROFILE_NUM_CAREER_SLOTS; i++) {
 		ProfileCarRecord* c = &p->careerCar[i];
 		memset(c, 0, sizeof(*c));
@@ -668,7 +668,7 @@ static void defaultCareerCars(Profile* p) {
 	p->hasCareerCar = false;
 }
 
-static void parsePayload(const unsigned char* b, Profile* p) {
+static void parsePayload(const unsigned char* b, NfsProfile* p) {
 	memset(p, 0, sizeof(*p));
 
 	memcpy(p->name, b + OFF_PROFILENAME, 32);
@@ -855,7 +855,7 @@ static void parsePayload(const unsigned char* b, Profile* p) {
 	}
 }
 
-bool profile_load_file(const char* path, Profile* out) {
+bool profile_load_file(const char* path, NfsProfile* out) {
 	FILE* f = fopen(path, "rb");
 	if (!f) {
 		pslogf("profile_load_file: fopen(%s) failed", path);
@@ -1165,7 +1165,7 @@ bool profile_delete(const ProfileEntry* e) {
 // ---------------------------------------------------------------------------
 // defaults / creation
 // ---------------------------------------------------------------------------
-void profile_default_player1(Profile* out) {
+void profile_default_player1(NfsProfile* out) {
 	memset(out, 0, sizeof(*out));
 	strcpy(out->name, "Player 1");
 	out->currentCarSlot = -1;
@@ -1335,7 +1335,7 @@ static bool writeInPlace(const char* path, const unsigned char* data, size_t len
 	return fclose(f) == 0 && ok;
 }
 
-bool profile_save_career(Profile* p) {
+bool profile_save_career(NfsProfile* p) {
 	if (!p->isLoaded || !p->sourcePath[0]) {
 		pslog("profile_save_career: no loaded save to write back to");
 		return false;
@@ -1707,7 +1707,7 @@ unsigned char* profile_load_cover(const char* title) {
 // The two loops below are SPEED2.EXE's, unrolled ten records at a time there
 // (0x20 passes): a record counts when its s16 at +0x00 is the track and its
 // byte at +0x03 the kind.
-bool profile_best_time(const Profile* p, int trackId, int kind, int* out) {
+bool profile_best_time(const NfsProfile* p, int trackId, int kind, int* out) {
 	bool found = false;
 	int best = 0x7FFFFFFF;
 	for (int i = 0; i < PROFILE_NUM_HIGHSCORES; i++) {
@@ -1721,7 +1721,7 @@ bool profile_best_time(const Profile* p, int trackId, int kind, int* out) {
 	return found;
 }
 
-int profile_best_score(const Profile* p, int trackId, int kind) {
+int profile_best_score(const NfsProfile* p, int trackId, int kind) {
 	int best = 0;
 	for (int i = 0; i < PROFILE_NUM_HIGHSCORES; i++) {
 		const ProfileHighScore* h = &p->highScores[i];
@@ -1743,7 +1743,7 @@ int profile_high_score_race_type(unsigned int mask) {
 // FindHighScore (0x8013127C): the record for this exact key, or NULL. Unlike
 // the two scans above it reads the category byte as well, so a six-lap best
 // and a three-lap best on the same track live in their own records.
-static ProfileHighScore* findHighScore(Profile* p, int trackId, int kind, int category) {
+static ProfileHighScore* findHighScore(NfsProfile* p, int trackId, int kind, int category) {
 	for (int i = 0; i < PROFILE_NUM_HIGHSCORES; i++) {
 		ProfileHighScore* h = &p->highScores[i];
 		if (h->trackId == (short)trackId && (signed char)h->kind == (signed char)kind &&
@@ -1754,7 +1754,7 @@ static ProfileHighScore* findHighScore(Profile* p, int trackId, int kind, int ca
 }
 
 // GetEmptyHighScore (0x80131434): the first record with no track in it.
-static ProfileHighScore* emptyHighScore(Profile* p) {
+static ProfileHighScore* emptyHighScore(NfsProfile* p) {
 	for (int i = 0; i < PROFILE_NUM_HIGHSCORES; i++)
 		if (p->highScores[i].trackId == 0)
 			return &p->highScores[i];
@@ -1778,7 +1778,7 @@ static bool brokeRecord(int raceType, const ProfileHighScore* rec, int bestLapTi
 	return bestLapTicks < rec->value;
 }
 
-int profile_commit_high_score(Profile* p, int raceType, int trackId, int kind,
+int profile_commit_high_score(NfsProfile* p, int raceType, int trackId, int kind,
 		int category, int bestLapTicks, int driftScore) {
 	ProfileHighScore* rec = findHighScore(p, trackId, kind, category);
 	int wrote = 0;

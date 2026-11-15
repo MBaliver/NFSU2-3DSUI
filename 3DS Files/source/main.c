@@ -5937,7 +5937,7 @@ static int g_profileEntryCount;
 // actual save is loaded off the card. File scope rather than a local of main()
 // because every frontend screen's header reads it: see
 // FRONTEND_PLAYER_NAME_HASH / syncFrontendHeader().
-static Profile gProfile;
+static NfsProfile gProfile;
 #define PROFILE_UNNAMED_STRING 0xCF4F80C2u
 
 // Byte [0x86347C], the flag UI_StartCareer's builder (0x4AF110) tests to decide
@@ -7052,7 +7052,7 @@ static void resolveProfilePaint(const Config* cfg) {
 // way worldInitSim() does it and for the same reason: cardb_load() reads the
 // chunk headers plus one payload, and 46 records of drivetrain nobody is
 // looking at is not worth the frontend's memory.
-static void resolveProfileCar(const Config* cfg, const Profile* p) {
+static void resolveProfileCar(const Config* cfg, const NfsProfile* p) {
 	g_profileCarType = -1;
 	g_profileCarDir[0] = '\0';
 	g_profileCarChanged = true;
@@ -7102,11 +7102,11 @@ static void resolveProfileCar(const Config* cfg, const Profile* p) {
 
 static void careerResetUnsaved(void);
 static void careerLoadUnsaved(void);
-static bool bootLoadProfile(const Config* cfg, Profile* active,
+static bool bootLoadProfile(const Config* cfg, NfsProfile* active,
 		const ProfileEntry* entry) {
 	char b[PROFILE_PATH_MAX + 96];
 	// Static: a Profile is tens of KB, too big for the main thread's stack.
-	static Profile loaded;
+	static NfsProfile loaded;
 	if (!profile_load_file(entry->path, &loaded)) {
 		snprintf(b, sizeof(b), "profile: failed to load \"%s\" from %s -- keeping %s",
 			entry->name, entry->path, active->name);
@@ -28617,9 +28617,9 @@ static bool menuTextWantsBacking(u32 color) {
 // for the same C2D_Text, so a turned string is the size it would be flat.
 static void menuDrawTextTurned(const C2D_Text* t, const char* utf8, u32 align, float x,
 		float y, float topOff, float z, float scaleX, float scaleY, const float rotM[4], u32 color) {
-	// #529: helvetica.bcfnt is 13 sheets of one glyph line each now
-	// (tools/make_ui_font.py's relayout()), so room for 16.
-	static C3D_Tex sheets[16];
+	// #529: helvetica.bcfnt is one glyph line to a sheet (tools/make_ui_font.py's
+	// relayout()): 13 sheets, 19 since the Cyrillic was added, so room for 32.
+	static C3D_Tex sheets[32];
 	static int nSheets = -1;
 	if (!g_uiFont || !utf8)
 		return;
@@ -28628,7 +28628,7 @@ static void menuDrawTextTurned(const C2D_Text* t, const char* utf8, u32 align, f
 	if (!tglp)
 		return;
 	if (nSheets < 0) {
-		nSheets = tglp->nSheets < 16 ? tglp->nSheets : 16;
+		nSheets = tglp->nSheets < 32 ? tglp->nSheets : 32;
 		for (int i = 0; i < nSheets; i++) {
 			C3D_Tex* tex = &sheets[i];
 			memset(tex, 0, sizeof(*tex));
@@ -36996,7 +36996,7 @@ static void pileProbeCase(const char* label, const char* expect) {
 }
 
 static void careerPileProbe(void) {
-	static Profile saved;
+	static NfsProfile saved;
 	saved = gProfile;
 	const int savedStage = g_careerStage;
 	const EventPile savedPile = g_pile;

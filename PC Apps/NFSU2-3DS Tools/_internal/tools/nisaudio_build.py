@@ -58,7 +58,7 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SPEECH = os.path.join(os.environ.get("NFSU2_PC_ROOT") or os.path.join(ROOT, "PC Files"), "speech")
+SPEECH = os.path.join(os.environ.get("NFSU2_SDATA_ROOT") or os.environ.get("NFSU2_PC_ROOT") or os.path.join(ROOT, "PC Files"), "speech")
 BIG = os.path.join(SPEECH, "nisaudio.big")
 IDX = os.path.join(SPEECH, "nisaudio.idx")
 

@@ -27,7 +27,7 @@ static const StageMapInfo STAGE_MAP_INFO[] = {
 
 // HasCompletedEvent (Speed.elf 0x801271DC): the state record must exist and
 // read exactly 1.
-static bool eventCompleted(const Profile* p, u32 eventId) {
+static bool eventCompleted(const NfsProfile* p, u32 eventId) {
 	if (!p || !p->isLoaded)
 		return false;
 	for (u32 k = 0; k < p->stateRecCount && k < (u32)PROFILE_NUM_STATE_RECORDS; k++)
@@ -36,7 +36,7 @@ static bool eventCompleted(const Profile* p, u32 eventId) {
 	return false;
 }
 
-static bool stageCompleted(const Profile* p, int s) {
+static bool stageCompleted(const NfsProfile* p, int s) {
 	return p && p->isLoaded && s >= 0 && s < PROFILE_NUM_STAGES && p->stageCompleted[s];
 }
 
@@ -128,7 +128,7 @@ static bool scroll(CribMap* m, int dir) {
 
 // The region item and BuildEventList (PC 0x4B1360), in table order.
 static void buildNodes(CribMap* m, const EventDb* events, const TrackDb* tracks,
-	const Profile* p)
+	const NfsProfile* p)
 {
 	const int cap = m->poolCount < CRIBMAP_MAX_NODES ? m->poolCount : CRIBMAP_MAX_NODES;
 	m->nodeCount = 0;
@@ -189,7 +189,7 @@ static void buildNodes(CribMap* m, const EventDb* events, const TrackDb* tracks,
 
 // SetupRegionEvents (0x4E0CE0).
 static void setupRegionEvents(CribMap* m, const EventDb* events, const TrackDb* tracks,
-	const Profile* p, float dt)
+	const NfsProfile* p, float dt)
 {
 	buildNodes(m, events, tracks, p);
 	snapToHead(m);
@@ -245,7 +245,7 @@ static void trackMapUpdate(CribMap* m, float dt) {
 }
 
 void cribmap_init(CribMap* m, const EventDb* events, const TrackDb* tracks,
-	const Profile* p, int poolCount, u8 alpha, u64 nowMs)
+	const NfsProfile* p, int poolCount, u8 alpha, u64 nowMs)
 {
 	memset(m, 0, sizeof(*m));
 	m->poolCount = poolCount;
@@ -290,7 +290,7 @@ bool cribmap_select_node(CribMap* m, int k, u64 nowMs, float dt) {
 }
 
 bool cribmap_scroll_region(CribMap* m, const EventDb* events, const TrackDb* tracks,
-	const Profile* p, int dir, u64 nowMs, float dt)
+	const NfsProfile* p, int dir, u64 nowMs, float dt)
 {
 	const int next = m->region + dir;
 	if (m->regionCount <= 0 || next < 1 || next > m->regionCount)

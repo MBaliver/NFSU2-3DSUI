@@ -42,7 +42,7 @@ bool sms_can_display(const EventDb* db, const ProfileSmsSlot* m, int category) {
 	return (int)rec->category == category;
 }
 
-void sms_build_view(const Profile* p, const EventDb* db, int category, SmsView* out) {
+void sms_build_view(const NfsProfile* p, const EventDb* db, int category, SmsView* out) {
 	if (!out)
 		return;
 	out->category = category;
@@ -139,7 +139,7 @@ u32 sms_from_id(const EventDb* db, const ProfileSmsSlot* m) {
 	return rec ? rec->fromId : 0;
 }
 
-void sms_mark_read(Profile* p, int slotIndex) {
+void sms_mark_read(NfsProfile* p, int slotIndex) {
 	if (!p || slotIndex < 0 || slotIndex >= (int)p->smsCount || slotIndex >= PROFILE_MAX_SMS)
 		return;
 	ProfileSmsSlot* m = &p->sms[slotIndex];
@@ -152,7 +152,7 @@ void sms_mark_read(Profile* p, int slotIndex) {
 		p->smsUnread--;
 }
 
-int sms_add_external_message(Profile* p, const EventDb* db, u32 nameHash) {
+int sms_add_external_message(NfsProfile* p, const EventDb* db, u32 nameHash) {
 	// AddExternalMessage (0x8012BD30): GetSMSMessageDataByNameHash, and
 	// nothing at all for a name the career table does not carry or a message
 	// already queued -- IsMessageQueued (0x8012C150) walks every slot handed
@@ -180,7 +180,7 @@ int sms_add_external_message(Profile* p, const EventDb* db, u32 nameHash) {
 	return (int)p->smsCount - 1;
 }
 
-int sms_add_magazine_message(Profile* p, const EventDb* db, u32 nameHash,
+int sms_add_magazine_message(NfsProfile* p, const EventDb* db, u32 nameHash,
 		u32 bodyFrameId, u32 subjectFrameId, u32 argId) {
 	const int k = sms_add_external_message(p, db, nameHash);
 	if (k < 0)
@@ -206,7 +206,7 @@ static int smsRacesWon(const unsigned int* list, int n) {
 // either argument word. 9, 10 and 12 ignore the event: the first argument's
 // high half is a stage and its low half a count, and the message is due once
 // that stage has won that many sponsor (9), URL (10) or world (12) races.
-static bool smsTriggeredByCompletingEvent(const Profile* p, const SmsRec* r, u32 eventId) {
+static bool smsTriggeredByCompletingEvent(const NfsProfile* p, const SmsRec* r, u32 eventId) {
 	if (r->trigger == 1 && (r->arg0 == eventId || r->arg1 == eventId))
 		return true;
 	if (r->trigger != 9 && r->trigger != 10 && r->trigger != 12)
@@ -221,7 +221,7 @@ static bool smsTriggeredByCompletingEvent(const Profile* p, const SmsRec* r, u32
 	return (int)(r->arg0 & 0xFFFF) <= won;
 }
 
-int sms_notify_complete_event(Profile* p, const EventDb* db, u32 eventId) {
+int sms_notify_complete_event(NfsProfile* p, const EventDb* db, u32 eventId) {
 	if (!p || !db)
 		return 0;
 	int n = 0;
@@ -232,7 +232,7 @@ int sms_notify_complete_event(Profile* p, const EventDb* db, u32 eventId) {
 	return n;
 }
 
-int sms_notify_dvd_cover_eligible(Profile* p, const EventDb* db, u32 stars) {
+int sms_notify_dvd_cover_eligible(NfsProfile* p, const EventDb* db, u32 stars) {
 	if (!p || !db)
 		return 0;
 	int n = 0;
@@ -243,7 +243,7 @@ int sms_notify_dvd_cover_eligible(Profile* p, const EventDb* db, u32 stars) {
 	return n;
 }
 
-int sms_notify_trigger(Profile* p, const EventDb* db, int trigger) {
+int sms_notify_trigger(NfsProfile* p, const EventDb* db, int trigger) {
 	if (!p || !db)
 		return 0;
 	int n = 0;
@@ -264,14 +264,14 @@ static int smsAutoTriggerRec(const EventDb* db, u32 zoneParam) {
 	return -1;
 }
 
-static bool smsQueued(const Profile* p, u32 nameHash) {
+static bool smsQueued(const NfsProfile* p, u32 nameHash) {
 	for (unsigned int i = 0; i < p->smsCount && i < PROFILE_MAX_SMS; i++)
 		if (p->sms[i].id == nameHash)
 			return true;
 	return false;
 }
 
-int sms_notify_auto_trigger_zone(Profile* p, const EventDb* db, u32 zoneParam, u32* cash) {
+int sms_notify_auto_trigger_zone(NfsProfile* p, const EventDb* db, u32 zoneParam, u32* cash) {
 	if (!p)
 		return -1;
 	const int r = smsAutoTriggerRec(db, zoneParam);
@@ -283,12 +283,12 @@ int sms_notify_auto_trigger_zone(Profile* p, const EventDb* db, u32 zoneParam, u
 	return k;
 }
 
-bool sms_help_zone_can_activate(const Profile* p, const EventDb* db, u32 zoneParam) {
+bool sms_help_zone_can_activate(const NfsProfile* p, const EventDb* db, u32 zoneParam) {
 	const int r = smsAutoTriggerRec(db, zoneParam);
 	return p && r >= 0 && !smsQueued(p, db->sms[r].nameHash);
 }
 
-int sms_notify_career_time(Profile* p, const EventDb* db, float careerTime) {
+int sms_notify_career_time(NfsProfile* p, const EventDb* db, float careerTime) {
 	if (!p || !db)
 		return 0;
 	int n = 0;
@@ -300,7 +300,7 @@ int sms_notify_career_time(Profile* p, const EventDb* db, float careerTime) {
 	return n;
 }
 
-bool sms_any_unseen_autopopups(const Profile* p, const EventDb* db) {
+bool sms_any_unseen_autopopups(const NfsProfile* p, const EventDb* db) {
 	if (!p)
 		return false;
 	for (unsigned int i = 0; i < p->smsCount && i < PROFILE_MAX_SMS; i++) {
@@ -311,7 +311,7 @@ bool sms_any_unseen_autopopups(const Profile* p, const EventDb* db) {
 	return false;
 }
 
-void sms_mark_all_autopopups_seen(Profile* p, const EventDb* db) {
+void sms_mark_all_autopopups_seen(NfsProfile* p, const EventDb* db) {
 	if (!p)
 		return;
 	for (unsigned int i = 0; i < p->smsCount && i < PROFILE_MAX_SMS; i++) {
@@ -321,7 +321,7 @@ void sms_mark_all_autopopups_seen(Profile* p, const EventDb* db) {
 	}
 }
 
-void sms_mark_deleted(Profile* p, int slotIndex) {
+void sms_mark_deleted(NfsProfile* p, int slotIndex) {
 	if (!p || slotIndex < 0 || slotIndex >= (int)p->smsCount || slotIndex >= PROFILE_MAX_SMS)
 		return;
 	ProfileSmsSlot* m = &p->sms[slotIndex];
@@ -335,7 +335,7 @@ void sms_mark_deleted(Profile* p, int slotIndex) {
 		p->smsUnread--;
 }
 
-int sms_mark_all_read_sortable(Profile* p) {
+int sms_mark_all_read_sortable(NfsProfile* p) {
 	if (!p)
 		return 0;
 	// MarkAllReadMessagesSortable (0x8012C3F4): byte 4 == 1 -> byte 7 = 1,
@@ -377,7 +377,7 @@ u32 sms_envelope_color(const EventDb* db, const ProfileSmsSlot* m)
 	return (c >= 1 && c <= 7) ? kColor[c - 1] : kColor[7];
 }
 
-unsigned int sms_count_unread(const Profile* p) {
+unsigned int sms_count_unread(const NfsProfile* p) {
 	if (!p)
 		return 0;
 	unsigned int n = 0;

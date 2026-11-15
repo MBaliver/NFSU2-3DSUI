@@ -35,6 +35,95 @@ MKBCFNT = next((p for p in (
     r"C:\devkitPro\tools\bin\mkbcfnt.exe") if os.path.isfile(p)), "mkbcfnt")
 SIZE = "28"  # a 41x44 cell, the size conduit.bcfnt's was
 
+# The Helvetica .ttf is Latin only, so a Russian English.bin (the localised
+# PC releases replace that file) drew every letter as '?'. Its Cyrillic comes
+# from Liberation Sans Italic (SIL Open Font License 1.1), the copy every
+# devkitPro install has in its custom-font example: only U+0400..U+045F and
+# '№', narrowed and scaled to Helvetica 67's cap height and capital widths
+# (measured on the Latin capitals both fonts share), with Helvetica's own
+# ascent and descent so the cell and line feed stay as they were. mkbcfnt
+# takes the second font only for codepoints the first lacks.
+CYR_TTF = next((p for p in (
+    os.path.join(os.environ.get("DEVKITPRO", ""), "examples", "3ds", "graphics", "printing",
+                 "custom-font", "gfx", "liberationitalic.ttf"),
+    r"C:\devkitPro\examples\3ds\graphics\printing\custom-font\gfx\liberationitalic.ttf")
+    if os.path.isfile(p)), None)
+CYRILLIC = list(range(0x0400, 0x0460)) + [0x2116]
+MATCH = "ABCEHKMOPTX"   # Latin capitals drawn the same as Cyrillic ones
+
+
+def _cap_and_width(font):
+    gs, cm, upm = font.getGlyphSet(), font.getBestCmap(), font["head"].unitsPerEm
+    from fontTools.pens.boundsPen import BoundsPen
+    pen = BoundsPen(gs)
+    gs[cm[ord("H")]].draw(pen)
+    cap = pen.bounds[3] / upm
+    adv = sum(font["hmtx"][cm[ord(c)]][0] for c in MATCH) / len(MATCH) / upm
+    return cap, adv
+
+
+def cyrillic_font(ui, src, dst):
+    """Write `dst`: `src`'s Cyrillic only, in `ui`'s proportions."""
+    from fontTools import subset
+    from fontTools.ttLib.scaleUpem import scale_upem
+    f = TTFont(src)
+    cap_ui, adv_ui = _cap_and_width(ui)
+    cap_s, adv_s = _cap_and_width(f)
+    opts = subset.Options()
+    opts.hinting = False
+    opts.layout_features = []
+    opts.name_IDs = ["*"]
+    sub = subset.Subsetter(opts)
+    sub.populate(unicodes=CYRILLIC)
+    sub.subset(f)
+    upm = ui["head"].unitsPerEm
+    scale_upem(f, upm)
+    sy = cap_ui / cap_s
+    sx = adv_ui / adv_s
+    # Helvetica's own ink extent: a glyph past it (Й's breve, Щ's tail) would
+    # make mkbcfnt's cell taller than 44, so the part above the cap height or
+    # below the baseline is pressed into it instead.
+    ug, ucm = ui["glyf"], ui.getBestCmap()
+    hi = max(ug[n].yMax for n in ucm.values() if hasattr(ug[n], "yMax"))
+    lo = min(ug[n].yMin for n in ucm.values() if hasattr(ug[n], "yMin"))
+    cap = cap_ui * upm
+    glyf, hmtx = f["glyf"], f["hmtx"]
+    order = f.getGlyphOrder()
+    # Composites last: their bounds come from the simple glyphs they use.
+    for name in sorted(order, key=lambda n: glyf[n].isComposite()):
+        g = glyf[name]
+        if g.isComposite():
+            for c in g.components:
+                c.x, c.y = round(c.x * sx), round(c.y * sy)
+        elif g.numberOfContours > 0:
+            g.coordinates.scale((sx, sy))
+            g.recalcBounds(glyf)
+            top = hi / g.yMax if g.yMax > hi else 1.0
+            low = lo / g.yMin if g.yMin < lo else 1.0
+            if top != 1.0 or low != 1.0:
+                co = g.coordinates
+                for i, (x, y) in enumerate(co):
+                    if y > cap and top != 1.0:
+                        y = cap + (y - cap) * (hi - cap) / (g.yMax - cap)
+                    elif y < 0:
+                        y = y * low
+                    co[i] = (x, y)
+            g.coordinates.toInt()
+        g.recalcBounds(glyf)
+        adv, _lsb = hmtx[name]
+        hmtx[name] = (round(adv * sx), getattr(g, "xMin", 0))
+    for table, fields in (("hhea", ("ascent", "descent", "lineGap")),
+                          ("OS/2", ("sTypoAscender", "sTypoDescender", "sTypoLineGap",
+                                    "usWinAscent", "usWinDescent"))):
+        for fld in fields:
+            setattr(f[table], fld, getattr(ui[table], fld))
+    # A modified OFL font may not keep its Reserved Font Name.
+    for rec in f["name"].names:
+        if rec.nameID in (1, 3, 4, 6, 16, 17):
+            rec.string = "NFSU2-3DS UI Cyrillic"
+    f.save(dst)
+    return sx, sy
+
 
 def main():
     t = TTFont(TTF)
@@ -45,8 +134,24 @@ def main():
     with tempfile.TemporaryDirectory() as d:
         fixed = os.path.join(d, "ui.ttf")
         t.save(fixed)
+        inputs = [fixed]
+        args = []
+        cyr = sys.argv[1] if len(sys.argv) > 1 else CYR_TTF
+        if cyr:
+            cyr_out = os.path.join(d, "cyr.ttf")
+            sx, sy = cyrillic_font(t, cyr, cyr_out)
+            inputs.append(cyr_out)
+            # Helvetica's own codepoints plus the Cyrillic, nothing else.
+            wl = os.path.join(d, "whitelist.txt")
+            with open(wl, "w") as w:
+                w.write(" ".join(str(c) for c in sorted(set(t.getBestCmap()) | set(CYRILLIC))))
+            args = ["-w", wl]
+            print("Cyrillic from %s (x %.3f, y %.3f)" % (cyr, sx, sy))
+        else:
+            print("warning: no Liberation Sans Italic (devkitPro's custom-font example) -- "
+                  "Latin only; pass a Cyrillic .ttf as the argument", file=sys.stderr)
         tmp = OUT + ".tmp"
-        subprocess.run([MKBCFNT, "-s", SIZE, "-o", tmp, fixed], check=True)
+        subprocess.run([MKBCFNT, "-s", SIZE] + args + ["-o", tmp] + inputs, check=True)
         relayout(tmp)
         os.replace(tmp, OUT)
     b = open(OUT, "rb").read()

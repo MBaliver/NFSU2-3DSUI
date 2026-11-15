@@ -538,7 +538,7 @@ typedef struct {
 	// actually read off the SD card (see profile_default_player1).
 	bool isLoaded;
 	char sourcePath[PROFILE_PATH_MAX];
-} Profile;
+} NfsProfile;
 
 // One entry from profile_list(): the on-disk profile name and the path the
 // name was read from, ready to hand straight back to profile_load_file().
@@ -564,7 +564,7 @@ const char* profile_save_root(void);
 // FUN_006fd2f6 does (magic, file length, three CRCs) and decodes block B.
 // Returns false and logs the specific failure on any mismatch -- a save that
 // would be rejected by the real game is rejected here too.
-bool profile_load_file(const char* path, Profile* out);
+bool profile_load_file(const char* path, NfsProfile* out);
 
 // Enumerates saves. Scans the real `<root>/<Name>/<Name>` directory layout
 // first, then the legacy `sdmc:/nfsu2data/profiles/*.sav` files earlier
@@ -580,7 +580,7 @@ bool profile_delete(const ProfileEntry* e);
 // Fills `out` with the default profile used when nothing has been loaded.
 // Per the project directive this is "Player 1": a real, empty UserProfile
 // with no career progress -- not a fabricated save state.
-void profile_default_player1(Profile* out);
+void profile_default_player1(NfsProfile* out);
 
 // Creates a brand-new save at `<root>/<name>/<name>`: a 0xD692 payload
 // carrying the profile name, Default__11UserProfile's options, career
@@ -604,27 +604,27 @@ bool profile_save_create(const char* name, unsigned startCash);
 // replaces the save only once it is fully written. False, having logged why,
 // when the save on the card no longer validates or cannot be written.
 // The careerCarWrite bits are cleared once the file is written.
-bool profile_save_career(Profile* p);
+bool profile_save_career(NfsProfile* p);
 
 // FEPlayerCarDB's tuned cars (TASKS.md #379).
 // AbleToAddNewTunedCar: the first of the 20 FECarConfig slots whose +4 (the
 // name hash) is 0, or -1 when all are taken.
-int  profile_tuned_free_slot(const Profile* p);
+int  profile_tuned_free_slot(const NfsProfile* p);
 // AddNewTunedCar + FillFromStockCar: slot `slot` becomes TUNED_CAR_<slot>, in
 // use, filter MY_CARS, holding `parts` (the stock car's slot array) with a fresh
 // performance spec. False for a bad slot.
-bool profile_tuned_add(Profile* p, int slot, const unsigned int parts[PROFILE_CAR_SLOTS],
+bool profile_tuned_add(NfsProfile* p, int slot, const unsigned int parts[PROFILE_CAR_SLOTS],
 	float perf);
 // DeleteCurrentCar for a tuned slot: the record emptied.
-void profile_tuned_delete(Profile* p, int slot);
+void profile_tuned_delete(NfsProfile* p, int slot);
 // The garage's copies: a tuned slot into PROFILE_WORK_SLOT (owned nothing, spent
 // nothing) and back.
-void profile_tuned_to_work(Profile* p, int slot);
+void profile_tuned_to_work(NfsProfile* p, int slot);
 // A preset ride (presetcar.h, PresetCarSlot `parts`, [0] the car's name hash)
 // into PROFILE_WORK_SLOT as a stock-performance car: Quick Race's Sponsor view
 // (#445), whose presets all carry performance package 0.
-void profile_preset_to_work(Profile* p, const unsigned int parts[PROFILE_CAR_SLOTS]);
-void profile_work_to_tuned(Profile* p, int slot);
+void profile_preset_to_work(NfsProfile* p, const unsigned int parts[PROFILE_CAR_SLOTS]);
+void profile_work_to_tuned(NfsProfile* p, int slot);
 
 // MemoryCard's save of a kept magazine or DVD cover (mode 0xCB1, SPEED2.EXE
 // FUN_00523EF0 -> FUN_004D9C60): `<root>/<title>/<title>`, `title` being
@@ -649,18 +649,18 @@ unsigned char* profile_load_cover(const char* title);
 // Default ahead of it. The record's tuning and inventory resets are written
 // with the next profile_save_career(). Which slot is the current car is the
 // caller's: CommitChooseCar sets it, a trade leaves it.
-void profile_career_choose(Profile* p, int slot, const unsigned int parts[PROFILE_CAR_SLOTS],
+void profile_career_choose(NfsProfile* p, int slot, const unsigned int parts[PROFILE_CAR_SLOTS],
 	float perf, bool traded);
 
 // SPEED2.EXE 0x502AA0's scan: the smallest value over the high-score records
 // matching (trackId, kind). False when none match, which is where retail
 // drops to the track's par time (trackdb_best_time_ticks).
-bool profile_best_time(const Profile* p, int trackId, int kind, int* out);
+bool profile_best_time(const NfsProfile* p, int trackId, int kind, int* out);
 
 // SPEED2.EXE 0x502C50's scan: the largest value over the matching records,
 // starting from 0. Retail treats 0 as a miss and drops to the par score
 // (trackdb_best_score).
-int profile_best_score(const Profile* p, int trackId, int kind);
+int profile_best_score(const NfsProfile* p, int trackId, int kind);
 
 // eHighScoresRaceTypes -- what a track's race-type mask makes it, for the
 // high-score table. CalcRaceTypeForHighScores (Speed.elf 0x801322FC) reads
@@ -701,5 +701,5 @@ int profile_high_score_race_type(unsigned int raceTypeMask);
 // +0xA50, the career totals (races entered and won per type, winnings, the
 // drag counter at +0xA4C) -- is not here. Nothing in the port reads them yet;
 // they belong with UI_Status_Career (TASKS.md #259 item 7).
-int profile_commit_high_score(Profile* p, int raceType, int trackId, int kind,
+int profile_commit_high_score(NfsProfile* p, int raceType, int trackId, int kind,
 	int category, int bestLapTicks, int driftScore);

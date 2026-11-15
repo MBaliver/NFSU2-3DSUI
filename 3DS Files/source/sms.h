@@ -64,7 +64,7 @@ typedef struct {
 bool sms_can_display(const EventDb* db, const ProfileSmsSlot* m, int category);
 
 // The rows of one tab, in the order they are drawn.
-void sms_build_view(const Profile* p, const EventDb* db, int category, SmsView* out);
+void sms_build_view(const NfsProfile* p, const EventDb* db, int category, SmsView* out);
 
 // The tab's own heading, GetMailboxCategoryLanguageHash's return.
 u32 sms_category_label_id(int category);
@@ -89,8 +89,8 @@ u32 sms_envelope_color(const EventDb* db, const ProfileSmsSlot* m);
 // NotifyReadMessage (0x8012C588) and NotifyDeleteMessage (0x8012C610). Both
 // set their byte on the slot and leave the queue's order alone; the caller
 // writes the save back.
-void sms_mark_read(Profile* p, int slotIndex);
-void sms_mark_deleted(Profile* p, int slotIndex);
+void sms_mark_read(NfsProfile* p, int slotIndex);
+void sms_mark_deleted(NfsProfile* p, int slotIndex);
 
 // MarkAllReadMessagesSortable (0x8012C3F4): every queued message already read
 // gets its sortable byte, which is what moves it out of the Inbox into its
@@ -98,7 +98,7 @@ void sms_mark_deleted(Profile* p, int slotIndex);
 // goes back to driving (BackToExplore 0x800DC598) and on the reader's back
 // out to the mailbox it came from (SMSMessageViewer::NotificationMessage,
 // PAD_BACK). Returns how many bytes it changed; the caller writes the save.
-int sms_mark_all_read_sortable(Profile* p);
+int sms_mark_all_read_sortable(NfsProfile* p);
 
 // The mailbox category the message's record carries (SmsRec +0x03), -1 when
 // its record is not in the table. The reader's back to the mailbox opens on
@@ -111,7 +111,7 @@ int sms_record_category(const EventDb* db, const ProfileSmsSlot* m);
 // no such message, it is queued already, or the 256 slots are spent.
 // AddMessage's CareerSpeech::HandleSMS is empty in retail (SpeedPS.elf
 // 0x80189140); the prologue plays its own line for SMS_INSTRUCTION (Stage0SMS).
-int sms_add_external_message(Profile* p, const EventDb* db, u32 nameHash);
+int sms_add_external_message(NfsProfile* p, const EventDb* db, u32 nameHash);
 
 // AddMagazineMessage (0x8012C098): the same queueing, then MakeMagazineMessage
 // (0x8012B9F4) stores the body frame (+0x08), the argument (+0x0C) and the
@@ -119,26 +119,26 @@ int sms_add_external_message(Profile* p, const EventDb* db, u32 nameHash);
 // read a frame for it rather than a label built from its name. The world
 // challenges' SMS_MAG_* and SMS_UNIQUE_* messages are raised this way
 // (AddWorldChallengeMessage, 0x8012BD88). Returns the slot or -1, as above.
-int sms_add_magazine_message(Profile* p, const EventDb* db, u32 nameHash,
+int sms_add_magazine_message(NfsProfile* p, const EventDb* db, u32 nameHash,
 	u32 bodyFrameId, u32 subjectFrameId, u32 argId);
 
 // NotifyCompleteEvent (0x8012C6D4), which CommitWinEvent calls on every win:
 // each message IsTriggeredByCompletingEvent holds for and not queued yet goes
 // through AddMessage, in table order. Returns how many were queued.
-int sms_notify_complete_event(Profile* p, const EventDb* db, u32 eventId);
+int sms_notify_complete_event(NfsProfile* p, const EventDb* db, u32 eventId);
 
 // NotifyDVDCoverElegible (SpeedPS.elf 0x8012C754), which RecalcDVDUnlocks
 // calls as a DVD cover's star threshold is first reached: each message
 // IsTriggeredByHavingDVDCover (0x8012B91C: trigger 14, +0x08 == `stars`, the
 // threshold in whole stars) holds for and not queued yet goes through
 // AddMessage. Returns how many were queued.
-int sms_notify_dvd_cover_eligible(Profile* p, const EventDb* db, u32 stars);
+int sms_notify_dvd_cover_eligible(NfsProfile* p, const EventDb* db, u32 stars);
 
 // The getaway's notifiers (#268 H step 2): NotifyBeginGetAway (0x8012C87C)
 // queues every trigger 4 message, NotifyFinishGetaway (0x8012C8F4) every
 // trigger 5 one on a win or trigger 6 one on a loss -- each not queued yet,
 // through AddMessage, in table order. Returns how many were queued.
-int sms_notify_trigger(Profile* p, const EventDb* db, int trigger);
+int sms_notify_trigger(NfsProfile* p, const EventDb* db, int trigger);
 
 // The SMS auto-trigger zones (#344): TrackPathZone type 0x12 (TPZ_SMS_TRIGGER),
 // 56 of them in PathsFreeRoam.bin, each naming one of the 42 trigger 15
@@ -151,26 +151,26 @@ int sms_notify_trigger(Profile* p, const EventDb* db, int trigger);
 // else AddMessage. Returns the slot, or -1, and on a queue `*cash` gets the
 // record's +0x0C, which PlayerCareerState::NotifyInSMSAutoTriggerZone
 // (0x801260BC) deposits before RecalcHelpTriggers.
-int sms_notify_auto_trigger_zone(Profile* p, const EventDb* db, u32 zoneParam, u32* cash);
+int sms_notify_auto_trigger_zone(NfsProfile* p, const EventDb* db, u32 zoneParam, u32* cash);
 
 // CanHelpTriggerZoneBeActivated (0x8012CA54): the zone names a trigger 15
 // record that is not queued yet. RecalcHelpTriggers' (0x80128F3C) test.
-bool sms_help_zone_can_activate(const Profile* p, const EventDb* db, u32 zoneParam);
+bool sms_help_zone_can_activate(const NfsProfile* p, const EventDb* db, u32 zoneParam);
 
 // SMSMessageQueue::Tick's first half (SPEED2.EXE 0x529750, SpeedPS.elf
 // 0x8012C488): each trigger 3 message whose +0x08, in seconds, the career
 // clock has passed and not queued yet goes through AddMessage. Returns how
 // many were queued.
-int sms_notify_career_time(Profile* p, const EventDb* db, float careerTime);
+int sms_notify_career_time(NfsProfile* p, const EventDb* db, float careerTime);
 
 // AnyUnseenAutoPopups (0x8012BC38): a queued message whose record pops up by
 // itself (+0x04 == 1) and that has not popped up yet (slot +0x05 == 0).
-bool sms_any_unseen_autopopups(const Profile* p, const EventDb* db);
+bool sms_any_unseen_autopopups(const NfsProfile* p, const EventDb* db);
 
 // MarkAllAutoPopupsSeen (0x8012BCC4): popped set on every queued message whose
 // record pops up by itself.
-void sms_mark_all_autopopups_seen(Profile* p, const EventDb* db);
+void sms_mark_all_autopopups_seen(NfsProfile* p, const EventDb* db);
 
 // GetNumMessagesUnread (0x8012C36C) with its argument false: queued, not
 // deleted, not read.
-unsigned int sms_count_unread(const Profile* p);
+unsigned int sms_count_unread(const NfsProfile* p);
