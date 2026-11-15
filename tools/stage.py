@@ -205,6 +205,21 @@ def sdata_root(pc):
     return pc
 
 
+AUDIO_SOURCES = {"music": [("pfdata", "MusicSFx.mus")],
+                 "speech": [("speech", "UG2_Speech.big"), ("speech", "UG2_Speech.idx")],
+                 "nisaudio": [("speech", "nisaudio.big")]}
+
+
+def audio_absent(pc):
+    """The audio steps (music, speech, nisaudio) this install has no source
+    for: not loose under pfdata/ and speech/, and no SDATA/sdat.viv to
+    unpack them from (which always holds all of them)."""
+    if sdata_root(pc) != pc:
+        return []
+    return [k for k, files in AUDIO_SOURCES.items()
+            if not all(os.path.isfile(pcp(pc, *f)) for f in files)]
+
+
 def ensure_sdata(pc, log=print):
     """Unpack SDATA/sdat.viv when the install has no loose pfdata/speech; a
     later run finds the files already there and only checks their sizes."""
@@ -364,18 +379,24 @@ def build_plan(pc, gd, tracks=ALL_TRACKS):
     # means the source or the builder changed, so it rebuilds everything.
     # pfdata/ and speech/ come from the install, or from its SDATA/sdat.viv
     # unpacked into a cache (sdata_root).
+    # An install with neither (audio_absent) skips the step instead of
+    # stopping on "input missing"; the game then runs without that audio.
     sr = sdata_root(pc)
-    pack("music", "eatrax_build (EA Trax)", ["eatrax_build.py"], [pcp(sr, "pfdata", "MusicSFx.mus")],
-         [J(gd, "eatrax", "*.dspm"), J(gd, "eatrax", "tracks.txt")], 28,
-         [py("eatrax_build.py", "--out", J(gd, "eatrax"), "--force")])
-    pack("speech", "speech_build (career speech)", ["speech_build.py"],
-         [pcp(sr, "speech", "UG2_Speech.big"), pcp(sr, "speech", "UG2_Speech.idx")],
-         [J(gd, "speech", "g*.dspm"), J(gd, "speech", "UG2_Speech.idx")], 858,
-         [py("speech_build.py", "--out", J(gd, "speech"), "--force")])
-    pack("speech", "nisaudio_build (NIS streams)", ["nisaudio_build.py"], [pcp(sr, "speech", "nisaudio.big")],
-         [J(gd, "speech", "colstream*.dspm"), J(gd, "speech", "thunder*.dspm"),
-          J(gd, "speech", "nisend_*.dspm"), J(gd, "speech", "nisstart_*.dspm")], 128,
-         [py("nisaudio_build.py", "--out", J(gd, "speech"), "--force")])
+    gone = audio_absent(pc)
+    if "music" not in gone:
+        pack("music", "eatrax_build (EA Trax)", ["eatrax_build.py"], [pcp(sr, "pfdata", "MusicSFx.mus")],
+             [J(gd, "eatrax", "*.dspm"), J(gd, "eatrax", "tracks.txt")], 28,
+             [py("eatrax_build.py", "--out", J(gd, "eatrax"), "--force")])
+    if "speech" not in gone:
+        pack("speech", "speech_build (career speech)", ["speech_build.py"],
+             [pcp(sr, "speech", "UG2_Speech.big"), pcp(sr, "speech", "UG2_Speech.idx")],
+             [J(gd, "speech", "g*.dspm"), J(gd, "speech", "UG2_Speech.idx")], 858,
+             [py("speech_build.py", "--out", J(gd, "speech"), "--force")])
+    if "nisaudio" not in gone:
+        pack("speech", "nisaudio_build (NIS streams)", ["nisaudio_build.py"], [pcp(sr, "speech", "nisaudio.big")],
+             [J(gd, "speech", "colstream*.dspm"), J(gd, "speech", "thunder*.dspm"),
+              J(gd, "speech", "nisend_*.dspm"), J(gd, "speech", "nisstart_*.dspm")], 128,
+             [py("nisaudio_build.py", "--out", J(gd, "speech"), "--force")])
 
     crowd_out = [J(gd, "NIS", ("EndingNis%s" % c if c.isdigit() else c) + ".crowd") for c in CROWDS]
     pack("nis", "crowd_pack (%d scenes)" % len(CROWDS), ["crowd_pack.py"], [pcp(pc, "NIS")], crowd_out,
@@ -596,6 +617,13 @@ def stage(pc, gd, only=(), tracks=ALL_TRACKS, force=False, list_only=False, log=
     os.environ["NFSU2_PC_ROOT"] = os.path.abspath(pc)
     # ... and eatrax_build / speech_build / nisaudio_build this one.
     os.environ["NFSU2_SDATA_ROOT"] = os.path.abspath(ensure_sdata(pc, log))
+    gone = audio_absent(pc)
+    if gone:
+        log("stage: WARNING -- this install has no %s and no SDATA/sdat.viv, so the %s step(s) are "
+            "skipped and the game will be without that audio. Copy SDATA/sdat.viv (or pfdata/ and "
+            "speech/) from the game disc or another install into the game folder and run Data "
+            "Setup again." % (" / ".join("/".join(f) for k in gone for f in AUDIO_SOURCES[k]),
+                              ", ".join(gone)))
     absent = regional_absent(pc)
     eu = [c for c in absent if c in EU_ONLY_CARS]
     us = [c for c in absent if c in US_ONLY_CARS]

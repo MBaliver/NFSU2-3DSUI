@@ -87,7 +87,9 @@ them), or copy both folders from a US copy to keep `Region=US`.
 Some installs keep the music and speech in one archive, `SDATA\sdat.viv`,
 instead of the `pfdata` and `speech` folders. Data Setup unpacks it by itself
 (into a cache under `%LOCALAPPDATA%\NFSU2-3DS`, never into the game's folder),
-so there is nothing to do by hand.
+so there is nothing to do by hand. An install with neither still packs
+everything else and says so; the game then runs without music and speech
+until you copy `SDATA\sdat.viv` from the disc and run Data Setup again.
 
 ### "Download ZIP" and ffmpeg
 
