@@ -24809,13 +24809,23 @@ static int feFrontEndClip(int idx) {
 // pitch 0x1000. The NDSP channel, -1 for none.
 // PORT: index 0x32 (trigger 0x49) is retail's one loop, kept at +0xC until
 // Stop; no screen the port has plays it, so it is dropped here.
+// PORT (#547, the user 2026-11-23: "The sound that's made when you're over a
+// point is louder than the music, needs to be equalized as well"): what the
+// next frontend one-shot is played at, 1 everywhere but the world's own
+// chimes (worldChimeCell()). In the world the music sits at the mix map's
+// SFXObj_Music level, 0x2D41 of 0x7FFF (-9 dB) under the sliders (#491), while
+// these played at the SFX slider's full level, so a marker's chime stood about
+// 9 dB over the music. The world's chimes take that same level.
+#define WORLD_CHIME_LEVEL (0x2D41 / 32767.0f)
+static float g_feSfxGain = 1.0f;
+
 static int feSoundPlayFrontEnd(int idx) {
 	if (idx == 0x32)
 		return -1;
 	idx = idx < 0 ? 0 : idx > 0x4B ? 0x4B : idx;
 	const int clip = feFrontEndClip(idx);
 	const int ch = clip < 0 ? -1
-		: audioSfxBankPlay(AUDIO_FEBANK_FRONTEND, clip, AUDIO_BUS_SFX, 1.0f, 0.0f);
+		: audioSfxBankPlay(AUDIO_FEBANK_FRONTEND, clip, AUDIO_BUS_SFX, g_feSfxGain, 0.0f);
 	char b[112];
 	snprintf(b, sizeof(b), "fe sfx: EAXFrontEnd trigger 0x%02X (index 0x%02X) clip %d -> ndsp ch %d",
 		idx + FE_SND_LAST_COMMON + 1, idx, clip, ch);
@@ -24834,7 +24844,7 @@ static int feSoundPlayTrigger(int trig) {
 	const int clip = feSoundClip(trig);
 	if (clip < 0)
 		return -1;
-	const int ch = audioSfxBankPlay(AUDIO_FEBANK_COMMON, clip, AUDIO_BUS_SFX, 1.0f, 0.0f);
+	const int ch = audioSfxBankPlay(AUDIO_FEBANK_COMMON, clip, AUDIO_BUS_SFX, g_feSfxGain, 0.0f);
 
 	// Once, so a silent build on hardware can be told apart from a bank
 	// that never loaded: this says a click really reached the DSP.
@@ -24862,6 +24872,16 @@ static int feSoundPlayCell(int ev, int trig) {
 	if (ev <= 0 || ev >= FE_SND_EVENTS || trig < 0 || trig >= FE_SND_TRIGGERS)
 		return -1;
 	return feSoundPlayTrigger(g_feSoundMap[ev][trig]);
+}
+
+// PORT (#547): feSoundPlayCell for a chime the world itself plays over the
+// music -- the Engage widget's (a marker entered, an event or shop offered)
+// and the SMS autopopup's -- at the music's own level (WORLD_CHIME_LEVEL).
+static int worldChimeCell(int ev, int trig) {
+	g_feSfxGain = WORLD_CHIME_LEVEL;
+	const int ch = feSoundPlayCell(ev, trig);
+	g_feSfxGain = 1.0f;
+	return ch;
 }
 
 // FilterSoundForHorizontalMenu (0x80152488), which every carousel screen's
@@ -49278,7 +49298,7 @@ static bool gameMapInput(const Config* cfg, MenuState* m, MenuState* dlg, u32 kD
 // EngageEvent::playSound's MakeFrontendSound(0xB, trigger) (engage.h).
 static void engageSound(int trig)
 {
-	const int ch = feSoundPlayCell(ENGAGE_SND_EVENT, trig);
+	const int ch = worldChimeCell(ENGAGE_SND_EVENT, trig);   // #547
 	char b[128];
 	snprintf(b, sizeof(b), "engage: sound, trigger %#x -> PlayUISoundFX(%#x), clip %d, ndsp ch %d",
 		trig, g_feSoundMap[ENGAGE_SND_EVENT][trig],
@@ -49416,7 +49436,7 @@ static void smsQueueTick(float dt) {
 static bool smsAutopopup(void) {
 	if (!g_smsDb || g_raceRun.on || g_qr.on || !sms_any_unseen_autopopups(&gProfile, g_smsDb))
 		return false;
-	const int ch = feSoundPlayCell(ENGAGE_SND_EVENT, 0x10);
+	const int ch = worldChimeCell(ENGAGE_SND_EVENT, 0x10);   // #547
 	sms_mark_all_autopopups_seen(&gProfile, g_smsDb);
 	char b[160];
 	snprintf(b, sizeof(b), "sms: DoAutopopup at career clock %.1f s -- MakeFrontendSound(0xB, 0x10) "
