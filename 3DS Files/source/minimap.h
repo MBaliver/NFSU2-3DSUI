@@ -393,7 +393,8 @@ bool minimap_satellite(const Minimap* m, C2D_Image* out);
 // player has panned), `zoomMul` multiplies the track record's own zoom (2 is
 // twice as close), and `rect` fills the caller's rectangle edge to edge --
 // no disc mask, no ring, no north indicator. Off-panel icons are culled
-// there, except the GPS's (target, rings) and the car, which pin to the edge.
+// there, the GPS target too (#544, the user 2026-11-23); only the car pins
+// to the edge.
 typedef struct {
 	float centreX, centreY;
 	float zoomMul;

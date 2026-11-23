@@ -262,8 +262,10 @@ static bool mmPlace(float u, float v, float windowPx, float limit, float radius,
 // PORT (#544): the "3DS bottom screen"'s placement -- the panel is a plain
 // rectangle there, not retail's disc. An icon inside it is drawn where it is;
 // one outside it is pinned to the edge (`pad` in from it) only when `pin`,
-// which is the GPS's own (the target, the rings, the car itself). Past
-// `limit` windows nothing is drawn, as retail's.
+// which only the car is: the GPS target is not (the user 2026-11-23: "the
+// place you set the GPS to shows up always on the corner of the new minimap,
+// it shouldn't do that") -- the GPS bar's arrow and distance point to it.
+// Past `limit` windows nothing is drawn, as retail's.
 static bool mmPlaceRect(float u, float v, float windowPx, float limit, float hw, float hh,
 		float pad, bool pin, float* du, float* dv) {
 	if (sqrtf(u * u + v * v) >= limit * windowPx)
@@ -707,7 +709,7 @@ void minimap_draw_view(Minimap* m, float worldX, float worldY, float headingRad,
 			// same transform the map quad above gets.
 			float du, dv;
 			if (rect ? !mmPlaceRect(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
-					w * 0.5f, h * 0.5f, MM_MARKER_W * 0.5f + 2.0f, limit == MM_LIMIT_GPS,
+					w * 0.5f, h * 0.5f, MM_MARKER_W * 0.5f + 2.0f, false,
 					&du, &dv)
 				: !mmPlace(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
 					MM_PIN * shortAxis, 0.0f, &du, &dv))
@@ -745,7 +747,7 @@ void minimap_draw_view(Minimap* m, float worldX, float worldY, float headingRad,
 		const float v = ((viewY - gps->iconY) / m->span) * perArt;
 		float du, dv;
 		if (rect ? mmPlaceRect(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
-				w * 0.5f, h * 0.5f, 12.0f, true, &du, &dv)
+				w * 0.5f, h * 0.5f, 12.0f, false, &du, &dv)
 			: mmPlace(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
 				MM_PIN * shortAxis, 0.0f, &du, &dv)) {
 			const float ms = (float)(gps->ms % MM_GPS_LOOP_MS);

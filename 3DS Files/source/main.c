@@ -862,6 +862,7 @@ typedef struct {
 	int   dbgEndNis;         // 1..4: EndingNis0N when it complies, in place of bRandom's pick (#354); 0 = retail
 	int   dbgIntroNis;       // 1..28: IntroNisNN when it complies, in place of bRandom's pick (#244); 0 = retail
 	int   dbgGrid;           // 1..8: the player's career grid position, in place of DetermineStartingPositions' (#497); 0 = retail
+	int   dbgBottom3ds;      // #544 test hook: 0/1 forces Gameplay > Bottom Screen; -1 = the profile's
 	int   dbgHydLevel;       // 0..3: DebugForceHydraulicsLevel, the car's hydraulics level (#313); -1 = the part's
 	int   hydButton;         // the hydraulics button (#313): 0 the C-stick itself, else a KEY_ mask
 	float dbgFreeRoamPilot;  // m/s: the player's car carried along the racing line in free roam, 0 = off
@@ -1034,6 +1035,7 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 	out->dbgIntroNis = 0;
 	out->dbgGrid = 0;
 	out->dbgHydLevel = -1;
+	out->dbgBottom3ds = -1;
 	out->hydButton = 0;
 	out->region = 0;
 	out->dbgFreeRoamPilot = 0.0f;
@@ -1341,6 +1343,9 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 		} else if (strcmp(key, "DbgHydLevel") == 0) {
 			const int v = atoi(val);
 			out->dbgHydLevel = v >= 0 && v <= 3 ? v : -1;
+		} else if (strcmp(key, "DbgBottom3ds") == 0) {
+			const int v = atoi(val);
+			out->dbgBottom3ds = v == 0 || v == 1 ? v : -1;
 		} else if (strcmp(key, "HydButton") == 0) {
 			// #313: retail's 3DS table has no hydraulics row. CSTICK (the
 			// default): the C-stick is the button and the stick; a key name:
@@ -1573,7 +1578,7 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 	    out->dbgStereo > 0.0f || out->dbgStereoSwap || out->dbgDisplayLevel >= 0 ||
 	    out->dbgDisplaySet[0] || out->dbgEncounterSec >= 0.0f || out->dbgEncounterPlaceM > 0.0f ||
 	    out->dbgFreeRoamPilot > 0.0f || out->dbgOutrunAccept || out->dbgEndNis || out->dbgIntroNis ||
-	    out->dbgHydLevel >= 0 ||
+	    out->dbgHydLevel >= 0 || out->dbgBottom3ds >= 0 ||
 	    out->dbgRain >= 0.0f) {
 		snprintf(b, sizeof(b),
 			"config: DIAGNOSTICS ON -- DbgSpawn %s (%.1f,%.1f,%.1f yaw %.0f roll %.0f) "
@@ -56236,6 +56241,8 @@ static struct {
 static bool g_b3Live;
 
 static bool b3On(void) {
+	if (g_cfgMain && g_cfgMain->dbgBottom3ds >= 0)
+		return g_cfgMain->dbgBottom3ds != 0;
 	return gProfile.options.gameplay.bottom3ds != 0;
 }
 
