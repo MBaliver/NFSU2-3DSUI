@@ -44,7 +44,13 @@ typedef struct {
 	// block's padding, which retail leaves 0 and the save copies whole, so a
 	// save from before keeps the blue and the choice is per profile.
 	u8 gpsColour;
-	u8 pad[2];
+	// +0x6 PORT (#544, the user's own): Bottom Screen, 0 Classic (the port's
+	// layout until now) / 1 3DS (a full-screen map with zoom, panning, a
+	// compass and the GPS bar in free roam; the race panel with the stats on
+	// the left and the map on the right). In the padding as gpsColour is, so
+	// an older save reads Classic.
+	u8 bottom3ds;
+	u8 pad[1];
 	float jumpCam;    // +0x8  Jump Camera, 0 = Off
 	float f0C;
 } OptGameplay;
@@ -252,6 +258,8 @@ typedef enum {
 	OPT_CAR_DAMAGE,
 	// PORT (#471, the user's own): GPS Color, after Car Damage.
 	OPT_GPS_COLOUR,
+	// PORT (#544, the user's own): Bottom Screen, Classic / 3DS.
+	OPT_BOTTOM_SCREEN,
 	// PORT (#447): the Controls page's rows, one per rebindable action in
 	// controls.h's order (controls_action_hash), then Default Settings, then
 	// (#527, the user's) Delete All Controls.

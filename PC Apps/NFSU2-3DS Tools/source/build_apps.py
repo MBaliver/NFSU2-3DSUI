@@ -11,8 +11,8 @@ The folder (default: <repo>/PC Apps/NFSU2-3DS Tools):
     NFSU2-3DS Mod Packer(.exe)   the Mod Packer window
     nfsu2-3ds(.exe)              the command line (`nfsu2-3ds --help`); the
                                  window apps run the packers through it too
-    bin/                         dspenc, vgmstream-cli and ffmpeg (Windows),
-                                 each with its licence
+    bin/                         dspenc, vgmstream-cli, ffmpeg and tex3ds
+                                 (Windows), each with its licence
     _internal/                   Python, its libraries, and _internal/tools:
                                  the packers' own sources, run from there
     source/                      what it is all built from: the apps' and
@@ -167,6 +167,26 @@ def copy_bins(dst):
                  "Source and build scripts: https://www.gyan.dev/ffmpeg/builds/ and\n"
                  "https://ffmpeg.org/download.html (its licence is LICENSE beside this file).\n"
                  % (ver[0] if ver else "ffmpeg"))
+    # tex3ds: the tracks' ETC1 textures (etc1_tex.py). devkitPro's Windows
+    # build links ImageMagick in, so the one .exe is all it needs.
+    tx = toolbin.find_tex3ds()
+    if not tx:
+        raise SystemExit("tex3ds.exe not found: install devkitPro with 3DS Development (3dstools)")
+    td = os.path.join(b, "tex3ds")
+    os.makedirs(td, exist_ok=True)
+    shutil.copy2(tx, os.path.join(td, "tex3ds.exe"))
+    lic = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(tx)))),
+                       "licenses", "tex3ds", "COPYING")
+    if not os.path.isfile(lic):
+        raise SystemExit("tex3ds's licence (devkitPro licenses/tex3ds/COPYING) not found beside " + tx)
+    shutil.copy2(lic, os.path.join(td, "COPYING"))
+    tver = subprocess.run([tx, "--version"], capture_output=True, text=True)
+    tver = (tver.stdout or tver.stderr).strip().splitlines()
+    with open(os.path.join(td, "SOURCE.txt"), "w", encoding="utf-8") as fh:
+        fh.write("This tex3ds.exe is devkitPro's unmodified Windows build (GPLv3, see COPYING\n"
+                 "beside this file), used by Data Setup and the Mod Packer to make the tracks'\n"
+                 "ETC1 textures.\n\n%s\n\nSource: https://github.com/devkitPro/tex3ds\n"
+                 % (tver[0] if tver else "tex3ds"))
 
 
 SOURCE_README = """NFSU2-3DS PC apps -- source
@@ -238,7 +258,9 @@ Command line (Windows, Linux, macOS) -- the same work without a window:
   nfsu2-3ds setup --help     every option
 
 bin/ holds the outside programs the packers use: dspenc (the 3DS's ADPCM),
-vgmstream-cli (EA audio) and ffmpeg (sound and video), each with its licence.
+vgmstream-cli (EA audio), ffmpeg (sound and video) and tex3ds (the tracks'
+textures), each with its licence. If tex3ds is ever missing, Data Setup and
+the Mod Packer say so and offer to install devkitPro for you.
 Without these programs the same tools run from Python: see tools/stage.py and
 MODDING.md in the NFSU2-3DS source.
 """

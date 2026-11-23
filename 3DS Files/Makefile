@@ -53,8 +53,10 @@ APP_VERSION_MINOR	:= 0
 # 0.11.0: the 11-11 evening tester build (the user: "increment the version by one").
 # 1.0.0: the 11-11 night tester build (the user: "I do want the version number changed
 #   to 1.0.0 as this may be the final build").
+# 1.0.1: the trunk audio fix (a fitted layout hid the audio slots) and the
+#   PC tools fixes since 1.0.0 (the user: "The bug fix will be a new version").
 # MINOR has 6 bits (0..63), MICRO 4 (0..15).
-APP_VERSION_MICRO	:= 0
+APP_VERSION_MICRO	:= 1
 
 # The HOME Menu banner (a spinning 3D logo, CGFX), its stereo sound and the
 # icon, made from the PC data by tools/make_banner.py (build_cia.ps1 runs it

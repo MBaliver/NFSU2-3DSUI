@@ -25,6 +25,8 @@ Command line (Windows, Linux, macOS) -- the same work without a window:
   nfsu2-3ds setup --help     every option
 
 bin/ holds the outside programs the packers use: dspenc (the 3DS's ADPCM),
-vgmstream-cli (EA audio) and ffmpeg (sound and video), each with its licence.
+vgmstream-cli (EA audio), ffmpeg (sound and video) and tex3ds (the tracks'
+textures), each with its licence. If tex3ds is ever missing, Data Setup and
+the Mod Packer say so and offer to install devkitPro for you.
 Without these programs the same tools run from Python: see tools/stage.py and
 MODDING.md in the NFSU2-3DS source.

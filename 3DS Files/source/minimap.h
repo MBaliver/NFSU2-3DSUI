@@ -387,3 +387,28 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 // ICON_SATELLITE (GPS_Search_Group's icon, guid 924606), for the caller that
 // draws the group. False when InGameFreeRoam.bun did not give it.
 bool minimap_satellite(const Minimap* m, C2D_Image* out);
+
+// PORT (#544, the "3DS bottom screen" Gameplay option): a view of the panel.
+// `centreX/Y` is the world point at the panel's centre (the car, unless the
+// player has panned), `zoomMul` multiplies the track record's own zoom (2 is
+// twice as close), and `rect` fills the caller's rectangle edge to edge --
+// no disc mask, no ring, no north indicator. Off-panel icons are culled
+// there, except the GPS's (target, rings) and the car, which pin to the edge.
+typedef struct {
+	float centreX, centreY;
+	float zoomMul;
+	bool  rect;
+} MinimapView;
+
+void minimap_draw_view(Minimap* m, float worldX, float worldY, float headingRad,
+	float x, float y, float w, float h, MinimapMode mode,
+	const MinimapMarker* markers, int markerCount, const MinimapGps* gps,
+	const MinimapView* view);
+
+// The player-car arrow (MINIMAP_ICON_CAR, points up), for the compass.
+bool minimap_car_art(const Minimap* m, C2D_Image* out);
+// The loaded track record's zoom (the window is 0.3 / zoom of the art).
+float minimap_track_zoom(const Minimap* m);
+// World metres per screen pixel for a panel whose short axis is `shortAxisPx`
+// at `zoomMul` (0 when nothing is loaded) -- what a drag or the C-stick pans.
+float minimap_world_per_px(const Minimap* m, float shortAxisPx, float zoomMul);

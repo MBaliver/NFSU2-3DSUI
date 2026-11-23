@@ -12454,10 +12454,10 @@ static int  g_carbonSnap = 9;      // its SnapToItem slot
 static int  g_iceLastSlot;         // UI_ICEMAIN's FEngGetLastButton: the row a sub-screen left from
 // IceSelectionScreen's mode (0x803D84EC) for the trunk audio screens, each
 // UI_ICEMAIN again (CalcNextScreenFromChooseIceCategory leaves every mode but
-// 7 and 8 on it): 0 the shop, 2 the layouts with one fitted (StartBrowsing at
-// once), 3 a stock trunk's Audio Components / Trunk Layout, 4 and 5 the
+// 7 and 8 on it): 0 the shop, 2 a stock trunk's layouts (StartBrowsing at
+// once), 3 a fitted layout's Audio Components / Trunk Layout, 4 and 5 the
 // audio slots (from 3 and from a new layout). Kept across the screen loads.
-enum { ICE_MODE_MAIN = 0, ICE_MODE_TRUNK_LAYOUT = 2, ICE_MODE_TRUNK_STOCK = 3,
+enum { ICE_MODE_MAIN = 0, ICE_MODE_TRUNK_LAYOUT = 2, ICE_MODE_TRUNK_MENU = 3,
 	ICE_MODE_TRUNK_SLOTS = 4, ICE_MODE_TRUNK_SLOTS_NEW = 5 };
 static int  g_iceMode;
 static void bodyShopStartBrowsing(MenuState* m);
@@ -14149,12 +14149,12 @@ static void bodyShopItems(const Config* cfg, MenuState* out, const LangTable* la
 			bodyShopAddCategory(it->modeValue, it->iconHash, it->labelHash, it->fallbackLabel,
 				BODYSHOP_KIND_PARTS);
 		}
-	} else if (g_bodyShop.iceMode && (g_iceMode == ICE_MODE_TRUNK_STOCK ||
+	} else if (g_bodyShop.iceMode && (g_iceMode == ICE_MODE_TRUNK_MENU ||
 			g_iceMode == ICE_MODE_TRUNK_LAYOUT)) {
 		// Setup's mode 3: Audio Components (an IceCategoryThing on 0x23,
 		// +0x6C 4) and Trunk Layout (0x22); mode 2 the layouts alone, browsed
 		// at once (below).
-		if (g_iceMode == ICE_MODE_TRUNK_STOCK)
+		if (g_iceMode == ICE_MODE_TRUNK_MENU)
 			bodyShopAddCategory(0x23, 0x76167B7Eu, 0x28BF66F6u, "AUDIO COMPONENTS", BODYSHOP_KIND_ICE);
 		bodyShopAddCategory(0x22, 0xF7E5B04Au, 0xC8D23393u, "TRUNK LAYOUT", BODYSHOP_KIND_PARTS);
 	} else if (g_bodyShop.iceMode && g_iceMode != ICE_MODE_MAIN) {
@@ -22994,12 +22994,13 @@ static void bodyShopAcceptCategory(const Config* cfg, MenuState* m, MenuState* d
 			bodyShopStartBrowsing(m);
 			return;
 		}
-		// Trunk Audio (IceCategoryTrunkThing::React, 0x8030E590): mode 3 over
-		// a stock trunk (IsStockPartInstalled(0x22)), else 2, then
+		// Trunk Audio (IceCategoryTrunkThing::React, 0x8030E590): mode 3 when
+		// a layout is fitted (IsStockPartInstalled(0x22) == 0), mode 2 on a
+		// stock trunk (was inverted, so a fitted layout hid the slots), then
 		// ChangeToNextScreen -- UI_ICEMAIN again. Audio Components (mode 3's
 		// IceCategoryThing, +0x6C 4): mode 4.
 		if (c->slot == 0x22 && c->kind == BODYSHOP_KIND_ICE && g_iceMode == ICE_MODE_MAIN) {
-			g_iceMode = g_bodyShop.trunkLevel <= 0 ? ICE_MODE_TRUNK_STOCK : ICE_MODE_TRUNK_LAYOUT;
+			g_iceMode = g_bodyShop.trunkLevel <= 0 ? ICE_MODE_TRUNK_LAYOUT : ICE_MODE_TRUNK_MENU;
 			g_iceLastSlot = 0x22;
 			feNavPush(ICEMAIN_SCREEN);
 			snprintf(b, sizeof(b), "ice: A on Trunk Audio (layout level %d) -> mode %d, "
@@ -23007,7 +23008,7 @@ static void bodyShopAcceptCategory(const Config* cfg, MenuState* m, MenuState* d
 			dlog(b);
 			return;
 		}
-		if (c->slot == 0x23 && c->kind == BODYSHOP_KIND_ICE && g_iceMode == ICE_MODE_TRUNK_STOCK) {
+		if (c->slot == 0x23 && c->kind == BODYSHOP_KIND_ICE && g_iceMode == ICE_MODE_TRUNK_MENU) {
 			g_iceMode = ICE_MODE_TRUNK_SLOTS;
 			feNavPush(ICEMAIN_SCREEN);
 			dlog("ice: A on Audio Components -> mode 4, ChangeToNextScreen UI_ICEMAIN");
@@ -24011,8 +24012,8 @@ static void bodyShopInput(const Config* cfg, MenuState* m, MenuState* dlg, u32* 
 			// PAD_BACK with a mode set is the plain back, no question:
 			// CalcPrevScreenFromChooseIceCategory takes 4 to 3, the rest to 0.
 			const int from = g_iceMode;
-			g_iceMode = from == ICE_MODE_TRUNK_SLOTS ? ICE_MODE_TRUNK_STOCK : ICE_MODE_MAIN;
-			g_iceLastSlot = g_iceMode == ICE_MODE_TRUNK_STOCK ? 0x23 : 0x22;
+			g_iceMode = from == ICE_MODE_TRUNK_SLOTS ? ICE_MODE_TRUNK_MENU : ICE_MODE_MAIN;
+			g_iceLastSlot = g_iceMode == ICE_MODE_TRUNK_MENU ? 0x23 : 0x22;
 			snprintf(b, sizeof(b), "ice: B in trunk audio mode %d -> mode %d, ChangeToPrevScreen",
 				from, g_iceMode);
 			dlog(b);
@@ -24167,7 +24168,7 @@ static void bodyShopMessage(const Config* cfg, MenuState* m, u32 msg) {
 		g_iceMode = ICE_MODE_TRUNK_SLOTS_NEW;
 		feNavReload();
 		dlog("ice: MaybeChangeAudioScreens 0x495DC3F0 -> mode 5 (the audio slots)");
-	} else if (g_bodyShop.iceMode && g_iceMode == ICE_MODE_TRUNK_STOCK) {
+	} else if (g_bodyShop.iceMode && g_iceMode == ICE_MODE_TRUNK_MENU) {
 		g_iceMode = ICE_MODE_MAIN;
 		g_iceLastSlot = 0x22;
 		feNavPop();
@@ -38848,6 +38849,9 @@ static void worldOpenEngage(const Config* cfg) {
 #define MM_GPS_SEARCH_TEXT_HASH 0x96D596BCu // GPS_SEARCH_Text's own key
 #define MM_GPS_LOST_TEXT_HASH   0x155409E8u
 #define MM_GPS_NO_PATH_HASH     0x31139B65u
+// PORT (#544): GetTriggerZoneHash's legend text by zone type (the world
+// map's GMS_ZONE0 strings), for the 3DS bottom screen's GPS bar.
+static char g_b3ZoneName[GAMEMAP_FILTERS][48];
 static char g_mmGpsSearch[64] = "Searching\nConnection";
 static char g_mmGpsLost[64] = "Unable to contact satellite";
 static char g_mmGpsNoPath[64] = "Unable to find a path";
@@ -38872,6 +38876,12 @@ static void worldOpenMinimap(const Config* cfg) {
 				const char* s = langbin_lookup(&lang, key[i]);
 				if (s)
 					langTextToUtf8(s, out[i], sizeof(g_mmGpsSearch));
+			}
+			for (int t = 0; t < GAMEMAP_FILTERS; t++) {
+				const char* s = langbin_lookup(&lang, GM_STRING_IDS[GMS_ZONE0 + t]);
+				g_b3ZoneName[t][0] = '\0';
+				if (s)
+					langTextToUtf8(s, g_b3ZoneName[t], sizeof(g_b3ZoneName[t]));
 			}
 			langbin_free(&lang);
 		}
@@ -55923,8 +55933,12 @@ static void drawFeSweepStatus(C2D_TextBuf buf, const Config* cfg) {
 // GPS_Search_Group (minimap.h, "The GPS"). Retail authors it just above its
 // inset: icon_Satellite, 54 units square, centred (-17, -0.5) from the group;
 // 'Searching^Connection' bottom-aligned (Sj 8) at (13, -12); the error
-// top-aligned at (13, 8); both ConduitMdITC_TT14i at 0.9, all in
-// (230,190,130). The port's panel has no "above the map"; the user
+// top-aligned at (13, 8); both ConduitMdITC_TT14i at 0.9, all authored
+// (230,190,130) -- bytes the engine reads the other way round, as the GPS
+// rings' (minimap.c MM_GPS_COLOR, #286), so retail's colour is (130,190,230),
+// the light blue the PC shows. #487 drew them orange (the user 2026-11-22:
+// "The 'lost satellite communication' text is orange, not blue like its
+// supposed to be", #546). The port's panel has no "above the map"; the user
 // (2026-11-10, #487): "Move the satellite messages to bottom left on top
 // screen" -- on the bottom panel they ran over the minimap. So the group sits
 // in the top screen's bottom-left corner (the speedometer has the right, the
@@ -55934,9 +55948,25 @@ static void drawFeSweepStatus(C2D_TextBuf buf, const Config* cfg) {
 // satellite" comes and goes.
 #define WBOT_GPS_SCALE 0.75f
 #define WBOT_GPS_PAD   6.0f
-#define WBOT_GPS_COLOR C2D_Color32(230, 190, 130, 255)
+#define WBOT_GPS_COLOR C2D_Color32(130, 190, 230, 255)
+
+// PORT (#546, the user's own): the group follows the GPS Color option (#471).
+// Blue, the default, is retail's own light blue above; any other choice is
+// that colour lifted 45% towards white, the same lift retail's blue has over
+// the rings' (0,128,255), so a dark pick (Purple, Green) still reads over the
+// night city.
+static u32 wbotGpsColour(void) {
+	const u8 idx = gProfile.options.gameplay.gpsColour;
+	if (idx == 0 || idx >= OPTIONS_GPS_COLOURS)
+		return WBOT_GPS_COLOR;
+	const u32 rgb = options_gps_colour_rgb(idx);
+	const int r = (int)((rgb >> 16) & 0xFF), g = (int)((rgb >> 8) & 0xFF), bl = (int)(rgb & 0xFF);
+	return C2D_Color32((u8)(r + (255 - r) * 45 / 100), (u8)(g + (255 - g) * 45 / 100),
+		(u8)(bl + (255 - bl) * 45 / 100), 255);
+}
 
 static void drawWorldGpsSearch(C2D_TextBuf buf, int status) {
+	const u32 gpsCol = wbotGpsColour();
 	const bool lost = status == GPS_STATUS_LOST;
 	const bool noPath = status == GPS_STATUS_NO_PATH;
 	const float s = WBOT_GPS_SCALE;
@@ -55959,17 +55989,17 @@ static void drawWorldGpsSearch(C2D_TextBuf buf, int status) {
 	C2D_Image sat;
 	if (minimap_satellite(g_minimap, &sat)) {
 		C2D_ImageTint tint;
-		C2D_PlainImageTint(&tint, WBOT_GPS_COLOR, 1.0f);
+		C2D_PlainImageTint(&tint, gpsCol, 1.0f);
 		C2D_SetTintMode(C2D_TintMult);
 		C2D_DrawImageAt(sat, gx - 17.0f * s - half, gy - 0.5f * s - half, 0.6f, &tint,
 			2.0f * half / (float)sat.subtex->width, 2.0f * half / (float)sat.subtex->height);
 		C2D_SetTintMode(C2D_TintSolid);
 	}
 	C2D_DrawText(&search, C2D_WithColor, gx + 13.0f * s, gy - 12.0f * s - sh, 0.6f, ts, ts,
-		WBOT_GPS_COLOR);
+		gpsCol);
 	if (lost || noPath) {
 		C2D_DrawText(&err, C2D_WithColor, gx + 13.0f * s, gy + 8.0f * s, 0.6f, ts, ts,
-			WBOT_GPS_COLOR);
+			gpsCol);
 	}
 }
 
@@ -56152,6 +56182,344 @@ static void drawWorldBankReward(C2D_TextBuf buf) {
 // sizes it in steps of 8) and leaves the stats 136.
 #define WBOT_RACE_MAP_W 184.0f
 
+// ------------------------------------------------ the 3DS bottom screen (#544)
+//
+// PORT, the user's own (2026-11-22), the Gameplay page's Bottom Screen = 3DS.
+// Free roam: the map fills the touch screen; the bank sits on a plate in the
+// top-left corner, a compass (the heading, the minimap's own car arrow) in
+// the top centre, + and - on the right edge zoom, a drag or the C-stick pans
+// and driving off eases the view back onto the car. While the GPS is engaged
+// a bar along the bottom names the destination with an arrow and the
+// distance to it, and its X stops the GPS. Races: the position, lap, times
+// and the field (hud_draw_race_stats, the HUD's own art) on the left, the
+// course on the right, the whole route fitted to the panel. Off, Classic,
+// is the layout above unchanged.
+//
+// The plates take the HUD's look -- dark glass, a thin steel edge, the UI
+// font -- not a button kit's.
+#define B3_PLATE      C2D_Color32(8, 12, 20, 196)
+#define B3_PLATE_LIT  C2D_Color32(24, 44, 68, 220)
+#define B3_EDGE       C2D_Color32(104, 132, 160, 230)
+#define B3_LABEL      C2D_Color32(150, 170, 192, 255)
+#define B3_VALUE      C2D_Color32(236, 240, 246, 255)
+#define B3_PAD        4.0f
+#define B3_ROW_H      26.0f
+#define B3_BTN        30.0f
+#define B3_BTN_GAP    6.0f
+#define B3_BTN_X      (BOTTOM_W - B3_PAD - B3_BTN)
+#define B3_ZOOM_IN_Y  ((BOTTOM_H - B3_BTN * 2.0f - B3_BTN_GAP) * 0.5f - 8.0f)
+#define B3_ZOOM_OUT_Y (B3_ZOOM_IN_Y + B3_BTN + B3_BTN_GAP)
+#define B3_GPS_H      28.0f
+#define B3_GPS_Y      (BOTTOM_H - B3_PAD - B3_GPS_H)
+#define B3_COMPASS_W  58.0f
+#define B3_ZOOM_STEP  1.5f
+#define B3_ZOOM_MAX   4.0f
+#define B3_PAN_MAX    4000.0f   // metres either way
+#define B3_CSTICK_PX  260.0f    // pixels a second at full deflection
+#define B3_RESET_MPS  4.0f      // driving faster than this ...
+#define B3_RESET_IDLE 0.6f      // ... this long after the last pan eases back
+#define B3_STATS_W    (BOTTOM_W - WBOT_RACE_MAP_W)
+
+static struct {
+	float zoomMul;
+	float panX, panY;
+	float idle;
+	u64   lastMs;
+	bool  dragging;
+	int   lastX, lastY;
+	const void* fitRoute;
+	bool  fitOk;
+	float fitCx, fitCy, fitW, fitH;
+} g_b3 = { .zoomMul = 1.0f };
+// Set by the frame loop: the world is up with no menu over it, so the panel's
+// taps and the C-stick are the map's.
+static bool g_b3Live;
+
+static bool b3On(void) {
+	return gProfile.options.gameplay.bottom3ds != 0;
+}
+
+static void b3Plate(float x, float y, float w, float h, bool lit) {
+	C2D_DrawRectSolid(x, y, 0.7f, w, h, lit ? B3_PLATE_LIT : B3_PLATE);
+	C2D_DrawRectSolid(x, y, 0.72f, w, 1.0f, B3_EDGE);
+	C2D_DrawRectSolid(x, y + h - 1.0f, 0.72f, w, 1.0f, B3_EDGE);
+	C2D_DrawRectSolid(x, y, 0.72f, 1.0f, h, B3_EDGE);
+	C2D_DrawRectSolid(x + w - 1.0f, y, 0.72f, 1.0f, h, B3_EDGE);
+}
+
+// `s` at `px` with its left (align 0), centre (1) or right (2) at x and its
+// middle at y; the width. Nothing is drawn when `draw` is false.
+static float b3Text(C2D_TextBuf buf, const char* s, float px, float x, float y, u32 col,
+		int align, bool draw) {
+	C2D_Text t;
+	C2D_TextFontParse(&t, g_uiFont, buf, s);
+	C2D_TextOptimize(&t);
+	const float sc = px / g_fontUnitPx;
+	float w = 0.0f, h = 0.0f;
+	textDims(&t, sc, sc, &w, &h);
+	if (draw) {
+		const float dx = align == 0 ? x : align == 1 ? x - w * 0.5f : x - w;
+		C2D_DrawText(&t, C2D_WithColor, dx, y - h * 0.5f, 0.8f, sc, sc, col);
+	}
+	return w;
+}
+
+static bool b3Hit(int px, int py, float x, float y, float w, float h) {
+	return (float)px >= x - 4.0f && (float)px < x + w + 4.0f &&
+		(float)py >= y - 4.0f && (float)py < y + h + 4.0f;
+}
+
+// The heading, clockwise from north (world +Y, the map's up).
+static float b3Bearing(float yaw) {
+	return atan2f(cosf(yaw), sinf(yaw));
+}
+
+// A filled arrowhead at (x, y) pointing `ang` clockwise from up.
+static void b3Arrow(float x, float y, float r, float ang, u32 col) {
+	const float a1 = ang + 2.5f, a2 = ang - 2.5f;
+	C2D_DrawTriangle(x + sinf(ang) * r, y - cosf(ang) * r, col,
+		x + sinf(a1) * r * 0.8f, y - cosf(a1) * r * 0.8f, col,
+		x + sinf(a2) * r * 0.8f, y - cosf(a2) * r * 0.8f, col, 0.8f);
+}
+
+static float b3ZoomMin(void) {
+	const float z = minimap_track_zoom(g_minimap);
+	return z > 0.0f ? 0.34f / z : 0.34f;
+}
+
+// Pans the view by a screen-space move of the map's content (dx, dy pixels),
+// turned back through the map's own rotation into the world.
+static void b3PanBy(float dx, float dy, float wpp, float mapAngle) {
+	const float ca = cosf(mapAngle), sa = sinf(mapAngle);
+	const float u = dx * ca + dy * sa;
+	const float v = -dx * sa + dy * ca;
+	g_b3.panX -= u * wpp;
+	g_b3.panY += v * wpp;
+	if (g_b3.panX > B3_PAN_MAX) g_b3.panX = B3_PAN_MAX;
+	if (g_b3.panX < -B3_PAN_MAX) g_b3.panX = -B3_PAN_MAX;
+	if (g_b3.panY > B3_PAN_MAX) g_b3.panY = B3_PAN_MAX;
+	if (g_b3.panY < -B3_PAN_MAX) g_b3.panY = -B3_PAN_MAX;
+}
+
+// The free-roam panel's input: + and -, the GPS bar's X, a drag, the C-stick
+// (when hydraulics do not have it), then the ease back onto the car.
+static void b3FreeRoamInput(bool gpsBar, float mapAngle) {
+	const u64 now = osGetTime();
+	float dt = g_b3.lastMs ? (float)(now - g_b3.lastMs) * 0.001f : 0.0f;
+	if (dt > 0.1f)
+		dt = 0.1f;
+	g_b3.lastMs = now;
+	if (g_b3.zoomMul < b3ZoomMin())
+		g_b3.zoomMul = b3ZoomMin();
+	if (g_b3.zoomMul > B3_ZOOM_MAX)
+		g_b3.zoomMul = B3_ZOOM_MAX;
+	const float wpp = minimap_world_per_px(g_minimap, BOTTOM_H, g_b3.zoomMul);
+	bool panned = false;
+	if (g_b3Live) {
+		const float xBtnX = BOTTOM_W - B3_PAD - B3_GPS_H;
+		int tx, ty;
+		if (touchTapAt(&tx, &ty)) {
+			if (b3Hit(tx, ty, B3_BTN_X, B3_ZOOM_IN_Y, B3_BTN, B3_BTN))
+				g_b3.zoomMul *= B3_ZOOM_STEP;
+			else if (b3Hit(tx, ty, B3_BTN_X, B3_ZOOM_OUT_Y, B3_BTN, B3_BTN))
+				g_b3.zoomMul /= B3_ZOOM_STEP;
+			else if (gpsBar && b3Hit(tx, ty, xBtnX, B3_GPS_Y, B3_GPS_H, B3_GPS_H))
+				gps_stop();
+			if (g_b3.zoomMul < b3ZoomMin())
+				g_b3.zoomMul = b3ZoomMin();
+			if (g_b3.zoomMul > B3_ZOOM_MAX)
+				g_b3.zoomMul = B3_ZOOM_MAX;
+		}
+		// A drag that landed on the map, not on a button.
+		const bool onButton =
+			b3Hit(g_touch.x0, g_touch.y0, B3_BTN_X, B3_ZOOM_IN_Y, B3_BTN, B3_BTN * 2.0f + B3_BTN_GAP) ||
+			(gpsBar && b3Hit(g_touch.x0, g_touch.y0, xBtnX, B3_GPS_Y, B3_GPS_H, B3_GPS_H));
+		if (g_touch.held && g_touch.drag && !onButton && wpp > 0.0f) {
+			if (!g_b3.dragging) {
+				g_b3.dragging = true;
+				g_b3.lastX = g_touch.x0;
+				g_b3.lastY = g_touch.y0;
+			}
+			b3PanBy((float)(g_touch.x - g_b3.lastX), (float)(g_touch.y - g_b3.lastY), wpp, mapAngle);
+			g_b3.lastX = g_touch.x;
+			g_b3.lastY = g_touch.y;
+			panned = true;
+		} else
+			g_b3.dragging = false;
+		// The C-stick, unless it is the hydraulics' (#313) right now.
+		const bool hydHasStick = hydLevel() != 0 && g_hyd.allowed &&
+			(!g_cfgMain || g_cfgMain->hydButton == 0);
+		if (!hydHasStick && wpp > 0.0f && dt > 0.0f) {
+			circlePosition cs;
+			hidCstickRead(&cs);
+			const float sx = clamp1((float)cs.dx / HYD_CSTICK_FULL);
+			const float sy = clamp1((float)cs.dy / HYD_CSTICK_FULL);
+			if (fabsf(sx) > 0.15f || fabsf(sy) > 0.15f) {
+				// The stick moves the view, so the content goes the other way.
+				b3PanBy(-sx * B3_CSTICK_PX * dt, sy * B3_CSTICK_PX * dt, wpp, mapAngle);
+				panned = true;
+			}
+		}
+	}
+	g_b3.idle = panned ? 0.0f : g_b3.idle + dt;
+	// "resets position to where you are when you drive"
+	if (g_b3.idle > B3_RESET_IDLE && fabsf(g_sim.speed) > B3_RESET_MPS) {
+		const float k = 1.0f - expf(-dt * 5.0f);
+		g_b3.panX -= g_b3.panX * k;
+		g_b3.panY -= g_b3.panY * k;
+		if (fabsf(g_b3.panX) < 0.5f && fabsf(g_b3.panY) < 0.5f)
+			g_b3.panX = g_b3.panY = 0.0f;
+	}
+}
+
+static void b3DrawBank(C2D_TextBuf buf) {
+	char cash[32];
+	formatCashGrouped(gProfile.cash, cash, sizeof(cash));
+	const float lw = b3Text(buf, "BANK", 11.0f, 0, 0, 0, 0, false);
+	const float vw = b3Text(buf, cash, 16.0f, 0, 0, 0, 0, false);
+	const float w = 8.0f + lw + 7.0f + vw + 8.0f;
+	const float cy = B3_PAD + B3_ROW_H * 0.5f;
+	b3Plate(B3_PAD, B3_PAD, w, B3_ROW_H, false);
+	b3Text(buf, "BANK", 11.0f, B3_PAD + 8.0f, cy + 1.0f, B3_LABEL, 0, true);
+	b3Text(buf, cash, 16.0f, B3_PAD + 8.0f + lw + 7.0f, cy, B3_VALUE, 0, true);
+}
+
+static void b3DrawCompass(C2D_TextBuf buf, bool rotate) {
+	static const char* const kDir[8] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+	const float bearing = b3Bearing(g_worldYaw);
+	float deg = bearing * (180.0f / (float)M_PI);
+	if (deg < 0.0f)
+		deg += 360.0f;
+	const int d = ((int)floorf((deg + 22.5f) / 45.0f)) & 7;
+	const float x = (BOTTOM_W - B3_COMPASS_W) * 0.5f;
+	const float cy = B3_PAD + B3_ROW_H * 0.5f;
+	b3Plate(x, B3_PAD, B3_COMPASS_W, B3_ROW_H, false);
+	// The arrow is the car in the map's frame: its heading on a north-up map,
+	// straight up on one that turns with the car.
+	const float ax = x + 15.0f;
+	C2D_Image car;
+	if (minimap_car_art(g_minimap, &car) && car.subtex && car.subtex->width > 0) {
+		const float sc = 18.0f / (float)car.subtex->width;
+		C2D_ImageTint tint;
+		C2D_PlainImageTint(&tint, wbotGpsColour(), 1.0f);
+		C2D_SetTintMode(C2D_TintMult);
+		C2D_DrawImageAtRotated(car, ax, cy, 0.8f, rotate ? 0.0f : bearing, &tint, sc, sc);
+		C2D_SetTintMode(C2D_TintSolid);
+	} else
+		b3Arrow(ax, cy, 8.0f, rotate ? 0.0f : bearing, wbotGpsColour());
+	b3Text(buf, kDir[d], 15.0f, x + 41.0f, cy, B3_VALUE, 1, true);
+}
+
+static void b3DrawZoom(void) {
+	for (int k = 0; k < 2; k++) {
+		const float y = k ? B3_ZOOM_OUT_Y : B3_ZOOM_IN_Y;
+		const bool lit = g_touch.held && b3Hit(g_touch.x, g_touch.y, B3_BTN_X, y, B3_BTN, B3_BTN);
+		b3Plate(B3_BTN_X, y, B3_BTN, B3_BTN, lit);
+		const float cx = B3_BTN_X + B3_BTN * 0.5f, cy = y + B3_BTN * 0.5f;
+		C2D_DrawRectSolid(cx - 7.0f, cy - 1.0f, 0.8f, 14.0f, 2.0f, B3_VALUE);
+		if (!k)
+			C2D_DrawRectSolid(cx - 1.0f, cy - 7.0f, 0.8f, 2.0f, 14.0f, B3_VALUE);
+	}
+}
+
+static void b3DrawGpsBar(C2D_TextBuf buf, const char* name, const float target[2]) {
+	const u32 gpsCol = wbotGpsColour();
+	const float x = B3_PAD, w = BOTTOM_W - B3_PAD * 2.0f;
+	const float cy = B3_GPS_Y + B3_GPS_H * 0.5f;
+	b3Plate(x, B3_GPS_Y, w, B3_GPS_H, false);
+	const float gw = b3Text(buf, "GPS", 12.0f, x + 8.0f, cy + 1.0f, gpsCol, 0, true);
+	C2D_DrawRectSolid(x + 8.0f + gw + 7.0f, B3_GPS_Y + 6.0f, 0.75f, 1.0f, B3_GPS_H - 12.0f, B3_EDGE);
+	// The distance, as the crow flies, in the HUD's units.
+	const float dxw = target[0] - g_worldPos[0], dyw = target[1] - g_worldPos[1];
+	const float metres = sqrtf(dxw * dxw + dyw * dyw);
+	char dist[24];
+	if (unitsMetric()) {
+		if (metres < 1000.0f)
+			snprintf(dist, sizeof(dist), "%d m", ((int)(metres + 5.0f) / 10) * 10);
+		else
+			snprintf(dist, sizeof(dist), "%.1f km", metres * TRACK_METRES_TO_KM);
+	} else {
+		const float mi = metres * TRACK_METRES_TO_KM * TRACK_KM_TO_MI;
+		if (mi < 0.1f)
+			snprintf(dist, sizeof(dist), "%d ft", ((int)(metres * 3.28084f + 5.0f) / 10) * 10);
+		else
+			snprintf(dist, sizeof(dist), "%.1f mi", mi);
+	}
+	// The X, on its own lit square at the right end.
+	const float bx = BOTTOM_W - B3_PAD - B3_GPS_H;
+	const bool lit = g_touch.held && b3Hit(g_touch.x, g_touch.y, bx, B3_GPS_Y, B3_GPS_H, B3_GPS_H);
+	b3Plate(bx, B3_GPS_Y, B3_GPS_H, B3_GPS_H, lit);
+	const float xc = bx + B3_GPS_H * 0.5f;
+	C2D_DrawLine(xc - 5.0f, cy - 5.0f, B3_VALUE, xc + 5.0f, cy + 5.0f, B3_VALUE, 2.0f, 0.8f);
+	C2D_DrawLine(xc + 5.0f, cy - 5.0f, B3_VALUE, xc - 5.0f, cy + 5.0f, B3_VALUE, 2.0f, 0.8f);
+	const float dw = b3Text(buf, dist, 15.0f, bx - 8.0f, cy, B3_VALUE, 2, true);
+	// The arrow: where the destination lies from the car's nose.
+	const float rel = atan2f(dxw, dyw) - b3Bearing(g_worldYaw);
+	const float ax = bx - 8.0f - dw - 12.0f;
+	b3Arrow(ax, cy, 9.0f, rel, gpsCol);
+	// The name, left, in what room the rest leaves.
+	const float nx = x + 8.0f + gw + 15.0f;
+	const float room = ax - 14.0f - nx;
+	char shown[48];
+	snprintf(shown, sizeof(shown), "%s", name);
+	for (int n = (int)strlen(shown); n > 1 && b3Text(buf, shown, 15.0f, 0, 0, 0, 0, false) > room; ) {
+		n--;
+		shown[n] = '\0';
+		if (n > 3)
+			memcpy(shown + n - 3, "...", 3);
+	}
+	b3Text(buf, shown, 15.0f, nx, cy, B3_VALUE, 0, true);
+}
+
+// The race route's bounds, once a route: 64 samples along its spline.
+static bool b3RaceFit(void) {
+	const RaceRoute* r = g_raceRun.race.route;
+	if (!r)
+		return false;
+	if (g_b3.fitRoute != (const void*)r) {
+		g_b3.fitRoute = r;
+		g_b3.fitOk = false;
+		const float len = race_route_length(r);
+		float mn[2] = { 1e30f, 1e30f }, mx[2] = { -1e30f, -1e30f };
+		int n = 0;
+		for (int i = 0; i <= 64 && len > 0.0f; i++) {
+			float p[2];
+			if (!race_route_sample(r, len * (float)i / 64.0f * 0.9999f, 0.0f, p, NULL))
+				continue;
+			for (int a = 0; a < 2; a++) {
+				if (p[a] < mn[a]) mn[a] = p[a];
+				if (p[a] > mx[a]) mx[a] = p[a];
+			}
+			n++;
+		}
+		if (n > 1) {
+			g_b3.fitCx = (mn[0] + mx[0]) * 0.5f;
+			g_b3.fitCy = (mn[1] + mx[1]) * 0.5f;
+			g_b3.fitW = mx[0] - mn[0];
+			g_b3.fitH = mx[1] - mn[1];
+			g_b3.fitOk = true;
+		}
+	}
+	return g_b3.fitOk;
+}
+
+// The zoom that puts the whole route inside a w x h panel, a margin inside.
+static float b3RaceFitZoom(float w, float h) {
+	const float m = 16.0f;
+	const float need = fmaxf(g_b3.fitW / fmaxf(w - m * 2.0f, 1.0f),
+		g_b3.fitH / fmaxf(h - m * 2.0f, 1.0f));
+	const float wpp1 = minimap_world_per_px(g_minimap, w < h ? w : h, 1.0f);
+	if (need <= 0.0f || wpp1 <= 0.0f)
+		return 1.0f;
+	float z = wpp1 / need;
+	if (z > B3_ZOOM_MAX)
+		z = B3_ZOOM_MAX;
+	if (z < 0.05f)
+		z = 0.05f;
+	return z;
+}
+
+
 static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	C2D_TextBufClear(buf);
 
@@ -56161,9 +56529,10 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	// only from ShowMinimap, state 6 on (#274).
 	const bool stage0 = stage0HasControl();
 	const bool showMap = !stage0 || stage0ShowMinimap();
+	const bool b3 = b3On();   // #544
 
 	// ---- the bank readout, or a world challenge's clock in its place ----
-	if (!g_raceRun.on && !stage0) {
+	if (!b3 && !g_raceRun.on && !stage0) {
 		if (g_wc.active && g_wc.state == WC_STATE_COUNTING)
 			drawWorldCountdown(buf);
 		else
@@ -56171,9 +56540,11 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	}
 
 	// ---- the minimap ----
-	const float mapY = g_raceRun.on ? 0.0f : WBOT_BANK_H;
+	const float mapY = (g_raceRun.on || b3) ? 0.0f : WBOT_BANK_H;
 	const float mapW = g_raceRun.on ? WBOT_RACE_MAP_W : BOTTOM_W;
 	const float mapH = BOTTOM_H - mapY;
+	// #544: the race map is on the right there, the stats on the left.
+	const float mapX = (b3 && g_raceRun.on) ? B3_STATS_W : 0.0f;
 	// In a race the radar carries the field and not the city: retail's
 	// RaceCoordinator puts an AIRACER element (minimap.h element 3, the orange
 	// car icon) on every opponent and leaves the shops and event starts off,
@@ -56213,9 +56584,13 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	gps.iconY = gpsIcon[1];
 	gps.ms = (u32)osGetTime();
 	// IsRenderable: with the GPS engaged in a stage, a zone's marker shows
-	// only while it is the GPS's own.
+	// only while it is the GPS's own. PORT (#543, the user 2026-11-22: "when
+	// GPS is activated in free roam ... hides all other minimap icons ...
+	// Only icon that should show is the place you activated GPS for"): in
+	// stage 0 as well, where retail kept every zone.
 	static MinimapMarker gpsMarks[8];
-	if (!g_raceRun.on && gps.engaged && !gps.stageZero) {
+	const char* gpsName = NULL;   // #544's GPS bar
+	if (!g_raceRun.on && gps.engaged) {
 		int n = 0;
 		for (int i = 0; i < g_markerCount && n < 8; i++) {
 			if (!g_markerZone[i])
@@ -56227,6 +56602,9 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 		}
 		marks = gpsMarks;
 		markCount = n;
+		const int zt = n > 0 ? gmZoneTypeForElement(gpsMarks[0].element) : -1;
+		if (zt >= 0 && zt < GAMEMAP_FILTERS && g_b3ZoneName[zt][0])
+			gpsName = g_b3ZoneName[zt];
 	}
 	// Free roam's racers (#268 H). Minimap::Minimap (0x80115CBC) adds an
 	// AIRACER element for every AI car in the World's list whatever the mode,
@@ -56237,8 +56615,11 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	// while the GPS thins the zones out. GetWorldTelemetry reads the car's own
 	// position and heading; Tick pins them at the edge like any other element
 	// (their flags are 0).
+	// PORT (#543): not while the GPS is engaged -- the target is then the
+	// map's only icon. A getaway in progress keeps its racer: that is a race
+	// the player is in, not a map icon.
 	static MinimapMarker freeMarks[WORLD_MAX_MARKERS + ENCOUNTER_CARS];
-	if (!g_raceRun.on && g_enc.on && !(g_wc.active)) {
+	if (!g_raceRun.on && g_enc.on && !(g_wc.active) && (!gps.engaged || g_enc.ga.on)) {
 		int n = 0;
 		for (int i = 0; i < markCount && n < WORLD_MAX_MARKERS; i++)
 			freeMarks[n++] = marks[i];
@@ -56267,11 +56648,49 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	const OptGameplay* gp = &gProfile.options.gameplay;
 	const u8 mapMode = g_raceRun.on ? gp->raceMap : gp->exploreMap;
 	minimap_set_gps_colour(options_gps_colour_rgb(gp->gpsColour));   // #471
-	if (g_minimap && showMap)
+	const MinimapMode mmMode =
+		mapMode <= MINIMAP_MODE_ROTATE ? (MinimapMode)mapMode : MINIMAP_MODE_DEFAULT;
+	if (b3 && !g_raceRun.on) {
+		// #544 free roam: the input first, so this frame's pan is drawn.
+		const bool rotate = mmMode == MINIMAP_MODE_ROTATE;
+		const float mapAngle = rotate ? g_worldYaw - (float)M_PI * 0.5f : 0.0f;
+		if (g_minimap && showMap)
+			b3FreeRoamInput(gps.engaged, mapAngle);
+		MinimapView view = { g_worldPos[0] + g_b3.panX, g_worldPos[1] + g_b3.panY,
+			g_b3.zoomMul, true };
+		if (g_minimap && showMap && mmMode != MINIMAP_MODE_OFF)
+			minimap_draw_view(g_minimap, g_worldPos[0], g_worldPos[1], g_worldYaw,
+				0.0f, 0.0f, BOTTOM_W, BOTTOM_H, mmMode, marks, markCount, &gps, &view);
+		if (!stage0) {
+			if (g_wc.active && g_wc.state == WC_STATE_COUNTING) {
+				b3Plate(0.0f, 0.0f, BOTTOM_W, WBOT_BANK_H, false);
+				drawWorldCountdown(buf);
+			} else
+				b3DrawBank(buf);
+		}
+		if (g_minimap && showMap) {
+			if (!(g_wc.active && g_wc.state == WC_STATE_COUNTING))
+				b3DrawCompass(buf, rotate);
+			b3DrawZoom();
+			if (gps.engaged && gps.icon)
+				b3DrawGpsBar(buf, gpsName ? gpsName : "Destination", gpsIcon);
+		}
+	} else if (b3 && g_raceRun.on) {
+		// #544 races: the whole course, north up, fitted to the right panel.
+		if (g_minimap && showMap && mmMode != MINIMAP_MODE_OFF) {
+			MinimapView view = { g_worldPos[0], g_worldPos[1], 1.0f, true };
+			if (b3RaceFit()) {
+				view.centreX = g_b3.fitCx;
+				view.centreY = g_b3.fitCy;
+				view.zoomMul = b3RaceFitZoom(mapW, mapH);
+			}
+			minimap_draw_view(g_minimap, g_worldPos[0], g_worldPos[1], g_worldYaw,
+				mapX, mapY, mapW, mapH, MINIMAP_MODE_STATIC, marks, markCount, &gps, &view);
+		}
+		C2D_DrawRectSolid(mapX, 0.0f, 0.72f, 1.0f, BOTTOM_H, B3_EDGE);
+	} else if (g_minimap && showMap)
 		minimap_draw(g_minimap, g_worldPos[0], g_worldPos[1], g_worldYaw,
-			0.0f, mapY, mapW, mapH,
-			mapMode <= MINIMAP_MODE_ROTATE ? (MinimapMode)mapMode : MINIMAP_MODE_DEFAULT,
-			marks, markCount, &gps);
+			0.0f, mapY, mapW, mapH, mmMode, marks, markCount, &gps);
 	// GPS_Search_Group: on the top screen since #487 (drawWorldGpsSearch).
 	if (showMap && !minimap_have_map(g_minimap)) {
 		// Name the file instead of leaving the panel empty -- buildSetupMessage()'s
@@ -56286,7 +56705,7 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 		C2D_TextOptimize(&t);
 		// Below the top corner brackets (128 px of art at MM_BORDER_SCALE), not
 		// across them -- white text over the arc is legible but looks like a bug.
-		C2D_DrawText(&t, C2D_WithColor | C2D_WordWrap, 12.0f, mapY + 72.0f, 0.5f,
+		C2D_DrawText(&t, C2D_WithColor | C2D_WordWrap, mapX + 12.0f, mapY + 72.0f, 0.5f,
 			0.5f, 0.5f, C2D_Color32(255, 255, 255, 255), mapW - 24.0f);
 	}
 
@@ -56325,7 +56744,8 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 				st.driftRows = k + 1;
 			}
 		}
-		hud_draw_race_stats(g_hud, &st, g_uiFont, g_fontUnitPx, mapW, 0.0f,
+		// #544: on the left in the 3DS layout, the same width.
+		hud_draw_race_stats(g_hud, &st, g_uiFont, g_fontUnitPx, b3 ? 0.0f : mapW, 0.0f,
 			BOTTOM_W - mapW);
 	}
 
@@ -64727,6 +65147,7 @@ int main(int argc, char* argv[])
 			C2D_TextBufClear(worldTextBuf);
 			drawBottomLogo();
 		} else if (bootState == BOOT_WORLD) {
+			g_b3Live = worldUi == WORLD_UI_NONE;   // #544
 			if (!(g_sweepSkip & SW_BOTTOM))
 				drawWorldBottom(worldTextBuf, &cfg);
 			else

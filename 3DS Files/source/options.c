@@ -310,6 +310,8 @@ static void buildGameplay(const OptTarget* t, RowSink* sink) {
 	// PORT (#471, the user's own): the GPS arrow's and the minimap rings'
 	// colour, per profile. English.bin has no key for it.
 	addTextRow(sink, OPT_GPS_COLOUR, "GPS Color", false);
+	// PORT (#544, the user's own): the touch screen's layout in the world.
+	addTextRow(sink, OPT_BOTTOM_SCREEN, "Bottom Screen", false);
 }
 
 // SPEED2.EXE:0x4B7CD0 -- twelve rows for player [0x836364], none of them gated
@@ -612,6 +614,10 @@ void options_row_value(const OptTarget* t, OptKind kind, OptValue* out) {
 		out->text = options_gps_colour_name(g->gpsColour);
 		break;
 
+	case OPT_BOTTOM_SCREEN: // PORT (#544)
+		out->text = g->bottom3ds ? "3DS" : "Classic";
+		break;
+
 	case OPT_SPEEDO_UNITS: // 0x49AEE0
 		out->valueHash = g->speedoUnits ? VAL_KMH : VAL_MPH;
 		break;
@@ -826,6 +832,10 @@ bool options_adjust(const OptTarget* t, OptKind kind, bool right) {
 			OPTIONS_GPS_COLOURS - 1, right);
 		break;
 
+	case OPT_BOTTOM_SCREEN: // PORT (#544): two values, either way flips it
+		g->bottom3ds = g->bottom3ds ? 0 : 1;
+		break;
+
 	case OPT_SPEEDO_UNITS: // 0x49AE80
 		g->speedoUnits = swap01(g->speedoUnits);
 		break;
@@ -962,6 +972,7 @@ OptAccept options_accept(const OptTarget* t, OptKind kind) {
 	case OPT_STEREO:
 	case OPT_STEREO_STYLE:
 	case OPT_GPS_COLOUR: // PORT (#471)
+	case OPT_BOTTOM_SCREEN: // PORT (#544)
 		options_adjust(t, kind, true);
 		return OPTACCEPT_CHANGED;
 	default:
