@@ -21,6 +21,7 @@ typedef enum {
 	OP_WAIT,    // `ms` with nothing pressed
 	OP_SHOT,
 	OP_LOG,
+	OP_TEXT,   // the next keyboard's text
 } OpKind;
 
 typedef struct {
@@ -41,6 +42,8 @@ static u64 s_opStartMs;       // OP_WAIT's start
 static int s_gapFrames;       // released frames between two inputs
 static u64 s_nextPollMs, s_scriptStartMs;
 static char s_errors[512];
+static char s_text[64];
+static bool s_textSet;
 
 // This scan's injection.
 static bool s_inj;
@@ -154,8 +157,9 @@ static bool parseLine(char* line, int lineNo, Op* op) {
 		}
 		op->kind = OP_WAIT;
 		op->ms = (u32)n[0];
-	} else if (strcasecmp(cmd, "shot") == 0 || strcasecmp(cmd, "log") == 0) {
-		op->kind = cmd[0] == 's' || cmd[0] == 'S' ? OP_SHOT : OP_LOG;
+	} else if (strcasecmp(cmd, "shot") == 0 || strcasecmp(cmd, "log") == 0 ||
+			strcasecmp(cmd, "text") == 0) {
+		op->kind = (cmd[0] == 's' || cmd[0] == 'S') ? OP_SHOT : (cmd[0] == 't' || cmd[0] == 'T') ? OP_TEXT : OP_LOG;
 		snprintf(op->text, sizeof(op->text), "%s", rest);
 		// trailing whitespace / CR
 		for (int i = (int)strlen(op->text) - 1; i >= 0 && (u8)op->text[i] <= ' '; i--)
@@ -296,6 +300,13 @@ static void step(void) {
 			s_opIdx++;
 			continue;
 		}
+		if (op->kind == OP_TEXT) {
+			snprintf(s_text, sizeof(s_text), "%s", op->text);
+			s_textSet = true;
+			logf_("devcmd: next keyboard -> %s", op->text);
+			s_opIdx++;
+			continue;
+		}
 		if (op->kind == OP_LOG) {
 			logf_("devcmd: %s", op->text);
 			s_opIdx++;
@@ -369,6 +380,14 @@ void devcmd_hidScanInput(void) {
 	s_up = s_heldWas & ~s_held;
 	s_heldWas = s_held;
 	s_inj = s_held || s_touch || s_stick || s_cstick || s_up;
+}
+
+bool devcmd_take_text(char* out, size_t cap) {
+	if (!s_on || !s_textSet)
+		return false;
+	snprintf(out, cap, "%s", s_text);
+	s_textSet = false;
+	return true;
 }
 
 u32 devcmd_hidKeysDown(void) { return hidKeysDown() | s_down; }

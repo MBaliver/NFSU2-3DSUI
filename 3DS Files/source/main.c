@@ -112,6 +112,7 @@
 extern gxCmdQueue_s __C3D_Context;
 #define GX_QUEUE_ENTRIES 128
 #include "bleach.h"
+#include "portprefs.h"
 #include <3ds/applets/swkbd.h>
 // Last: its macros route this file's hid* calls through the dev command file.
 #define DEVCMD_WRAP_HID
@@ -1670,6 +1671,21 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 	return out->status == CONFIG_OK;
 }
 
+// PORT: the string table in use -- LANGUAGES/<g_langFile>.bin in place of
+// English.bin, "" for English itself. Config's Language= sets it first, then
+// the last profile's settings (port_last.txt) and each profile's own as it
+// loads (portprefs.h, portPrefsLoadFor()). Screens resolve their text as they
+// load, so a change shows from the next screen on.
+static char g_langFile[16];
+static PortPrefs g_portPrefs;
+static char g_portPrefsPath[320];   // the active profile's port.txt, "" with none loaded
+
+static void portPrefsApply(void) {
+	const int li = g_portPrefs.language >= 0 && g_portPrefs.language < PORT_LANG_COUNT
+		? g_portPrefs.language : 0;
+	snprintf(g_langFile, sizeof(g_langFile), "%s", li == 0 ? "" : kPortLangs[li].file);
+}
+
 // Resolves a game-relative path (e.g. "audio/ealogo.wav") against the
 // configured GameDir into a real sdmc: path.
 static bool buildGamePath(const Config* cfg, const char* relPath, char* out, size_t outSize) {
@@ -1677,14 +1693,14 @@ static bool buildGamePath(const Config* cfg, const char* relPath, char* out, siz
 	size_t len = strlen(cfg->gameDir);
 	bool needsSlash = (len > 0 && cfg->gameDir[len - 1] != '/');
 	// Language=: the chosen table in English.bin's place, when it is on the card.
-	if (cfg->language[0] != '\0' && strcmp(relPath, "LANGUAGES/English.bin") == 0) {
+	if (g_langFile[0] != '\0' && strcmp(relPath, "LANGUAGES/English.bin") == 0) {
 		struct stat st;
 		snprintf(out, outSize, "sdmc:%s%sLANGUAGES/%s.bin", cfg->gameDir, needsSlash ? "/" : "",
-			cfg->language);
+			g_langFile);
 		const bool ok = stat(out, &st) == 0 && S_ISREG(st.st_mode);
-		static bool logged;
-		if (!logged) {
-			logged = true;
+		static char logged[16];
+		if (strcmp(logged, g_langFile) != 0) {
+			snprintf(logged, sizeof(logged), "%s", g_langFile);
 			char b[640];
 			snprintf(b, sizeof(b), "language: %s%s", out, ok ? "" : " not on the card -- English");
 			dlog(b);
@@ -7158,6 +7174,35 @@ static void resolveProfileCar(const Config* cfg, const NfsProfile* p) {
 	// here put the profile's colour on whatever car was still showing.
 }
 
+// PORT: the active profile's port settings to its port.txt and to
+// port_last.txt, the boot's settings before a profile loads (portprefs.h).
+static void portPrefsSave(void) {
+	char last[320];
+	portprefs_last_path(profile_save_root(), last, sizeof(last));
+	if (!portprefs_write(last, &g_portPrefs))
+		dlog("port prefs: could not write port_last.txt");
+	if (g_portPrefsPath[0] && !portprefs_write(g_portPrefsPath, &g_portPrefs)) {
+		char b[360];
+		snprintf(b, sizeof(b), "port prefs: could not write %s", g_portPrefsPath);
+		dlog(b);
+	}
+}
+
+// A profile's own settings, read over the ones in use: a profile with no
+// port.txt yet (a new one, or one from before the file existed) keeps what
+// the player has been using, and gets the file.
+static void portPrefsLoadFor(const ProfileEntry* entry) {
+	portprefs_path_for(entry->path, entry->legacy, g_portPrefsPath, sizeof(g_portPrefsPath));
+	const bool had = portprefs_read(g_portPrefsPath, &g_portPrefs);
+	portPrefsApply();
+	portPrefsSave();
+	char b[400];
+	snprintf(b, sizeof(b), "port prefs: %s %s -- language %s, large text %d, high contrast %d",
+		had ? "read" : "created", g_portPrefsPath, kPortLangs[g_portPrefs.language].code,
+		g_portPrefs.largeText, g_portPrefs.highContrast);
+	dlog(b);
+}
+
 static void careerResetUnsaved(void);
 static void careerLoadUnsaved(void);
 static bool bootLoadProfile(const Config* cfg, NfsProfile* active,
@@ -7172,6 +7217,8 @@ static bool bootLoadProfile(const Config* cfg, NfsProfile* active,
 		return false;
 	}
 	*active = loaded;
+	if (active == &gProfile)
+		portPrefsLoadFor(entry);
 	// The event pile is not in the save and starts empty; CareerSpeech is,
 	// and comes from it.
 	careerLoadUnsaved();
@@ -7297,7 +7344,15 @@ static int profileNameInput(const char* who, const char* caption, const char* in
 			musicHeld[k] = true;
 		}
 	}
-	SwkbdButton button = swkbdInputText(&swkbd, nameUtf8, sizeof(nameUtf8));
+	// The dev command file's `text` (devcmd.h) types the name for the PC.
+	SwkbdButton button;
+	if (devcmd_take_text(nameUtf8, sizeof(nameUtf8))) {
+		button = SWKBD_BUTTON_CONFIRM;
+		snprintf(b, sizeof(b), "%s: name from the dev command file -> \"%s\"", who, nameUtf8);
+		dlog(b);
+	} else {
+		button = swkbdInputText(&swkbd, nameUtf8, sizeof(nameUtf8));
+	}
 	for (int k = 0; k < AUDIO_MUSIC_SLOTS; k++)
 		if (musicHeld[k])
 			audioMusicPause((AudioMusicSlot)k, false);
@@ -63322,6 +63377,23 @@ int main(int argc, char* argv[])
 		char saveRoot[300];
 		if (buildGamePath(&cfg, "SAVE/NFS Underground 2", saveRoot, sizeof(saveRoot)))
 			profile_set_save_root(saveRoot);
+	}
+	// The port's settings with no profile yet (portprefs.h): Language= from
+	// the config, then the last profile's, so the title screen and the
+	// new-profile question already use the player's language and text size.
+	portprefs_defaults(&g_portPrefs);
+	{
+		const int li = portprefs_lang_index(cfg.language);
+		if (li >= 0)
+			g_portPrefs.language = li;
+		char lp[320], b[400];
+		portprefs_last_path(profile_save_root(), lp, sizeof(lp));
+		const bool had = haveConfig && portprefs_read(lp, &g_portPrefs);
+		portPrefsApply();
+		snprintf(b, sizeof(b), "port prefs: boot -- language %s (%s), large text %d, high contrast %d",
+			kPortLangs[g_portPrefs.language].code, had ? "the last profile's" : "the config's",
+			g_portPrefs.largeText, g_portPrefs.highContrast);
+		dlog(b);
 	}
 
 	profile_default_player1(&gProfile);

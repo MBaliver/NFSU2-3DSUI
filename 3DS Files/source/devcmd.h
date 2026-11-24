@@ -27,6 +27,8 @@
 //                                <name>_bottom.bmp, as the screens show them
 //                                (the back buffer: one frame old)
 //   log   text                   a line in the debug log
+//   text  string                 the next system keyboard (a profile's name)
+//                                takes this instead of opening
 //
 // KEY names: A B X Y L R ZL ZR START SELECT UP DOWN LEFT RIGHT.
 //
@@ -35,12 +37,15 @@
 
 #include <3ds.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 void devcmd_init(bool enabled, void (*log)(const char*));
 bool devcmd_enabled(void);
 // Injecting this frame: main.c's own direct pad read (worldSimPad) stands
 // down so the injected buttons and stick are what the sim sees.
 bool devcmd_active(void);
+// The pending `text`, taken (true) once; false with none.
+bool devcmd_take_text(char* out, size_t cap);
 
 void devcmd_hidScanInput(void);
 u32  devcmd_hidKeysDown(void);
