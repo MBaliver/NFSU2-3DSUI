@@ -45631,12 +45631,23 @@ static bool postRaceSponsorInput(const Config* cfg, MenuState* menu, MenuState* 
 	dlog(b);
 	const u32 label[3] = { LANG_YES_ID, LANG_NO_ID, 0u };
 	const u32 post[3] = { PSPMSG_YES, PSPMSG_NO, 0u };
-	if (cfg && feDialogShow(cfg, dlg, "IG_GenericDialog_SMALL.fng", 2, label, post, PSPMSG_NO,
-			0u, text))
+	// PORT: on the lower screen with the page's pills (drawUiPostRace()).
+	g_feDialogToBottom = true;
+	const bool shown = cfg && feDialogShow(cfg, dlg, "IG_GenericDialog_SMALL.fng", 2, label, post,
+		PSPMSG_NO, 0u, text);
+	g_feDialogToBottom = false;
+	if (shown) {
+		dlg->screenW = SCREEN_BOT_W;
+		dlg->touchBottomWhole = true;
 		return false;
+	}
 	dlog("post race sponsors: the confirm would not load -- taking its Yes");
 	return postRaceInput(cfg, menu, dlg, 0, PSPMSG_YES, dt, leaveTo);
 }
+
+// PORT: the post-race menu's pills on the lower screen: two to a row once
+// there are more than four (drawUiPostRace()).
+#define PR_MENU_COLS(n) ((n) > 4 ? 2 : 1)
 
 // The post-race list's pad while it is up (WORLD_UI_POSTRACE). True closes the
 // overlay back to driving; `*leaveTo` is a way out of the world.
@@ -45722,6 +45733,19 @@ static bool postRaceInput(const Config* cfg, MenuState* menu, MenuState* dlg, u3
 		return false;
 	}
 
+	// PORT: the lower screen's pills stand in one column, or two to a row
+	// past four (drawUiPostRace()): UP / DOWN step a row there, as LEFT /
+	// RIGHT step the strip.
+	if ((kDown & (KEY_UP | KEY_DOWN)) && menu->itemCount > 0) {
+		const int n = menu->itemCount, cols = PR_MENU_COLS(n), s = menu->selected;
+		int t = s + ((kDown & KEY_UP) ? -cols : cols);
+		if (t >= n && s / cols < (n - 1) / cols)
+			t = n - 1;
+		if (t >= 0 && t < n && t != s) {
+			menu->selected = t;
+			feNoteLastButton(menu);
+		}
+	}
 	pr->lastButton = menu->selected;
 	if (kDown & KEY_B) {
 		// Back (0x800F2ED4): NeedToRemoveTheSponsorScreens -- career, and the
@@ -45795,9 +45819,16 @@ static bool postRaceInput(const Config* cfg, MenuState* menu, MenuState* dlg, u3
 	snprintf(b, sizeof(b), "post race: \"%s\" -- UI_InGameDialog, text 0x%08X",
 		item->fallbackLabel, (unsigned)text);
 	dlog(b);
-	if (cfg && feDialogShowTwoButtons(cfg, dlg, "UI_InGameDialog.fng", LANG_OK_ID,
-			LANG_CANCEL_ID, yes, PRMSG_CANCEL, PRMSG_CANCEL, text))
+	// PORT: on the lower screen with the page's pills (drawUiPostRace()).
+	g_feDialogToBottom = true;
+	const bool shown = cfg && feDialogShowTwoButtons(cfg, dlg, "UI_InGameDialog.fng", LANG_OK_ID,
+		LANG_CANCEL_ID, yes, PRMSG_CANCEL, PRMSG_CANCEL, text);
+	g_feDialogToBottom = false;
+	if (shown) {
+		dlg->screenW = SCREEN_BOT_W;
+		dlg->touchBottomWhole = true;
 		return false;
+	}
 	dlog("post race: the confirm would not load -- taking its OK");
 	return postRaceInput(cfg, menu, dlg, 0, yes, dt, leaveTo);
 }
@@ -60412,6 +60443,318 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// PORT: the post-race list on both screens. The .fng screens -- Results, the
+// tournament pair, the reward, the sponsor pair, the stats -- stay on the top
+// screen as the presentation; every action they take is on the lower screen
+// as the kit's pills, each with the console button it is, and a tap on one
+// is that button at once. A tap becomes the very keys postRaceInput() already
+// answers, so retail's flow is untouched. The targets are this page's own
+// (g_prHit), armed only by the lower screen's draw: the list's MenuState is
+// drawn on the top screen in the same frame, and the fsk skin targets (one
+// MenuState's, cleared by drawMenu()) would not survive that.
+typedef struct {
+	float x, y, w, h;
+	u32 keys;   // what the tap sends
+	int sel;    // >= 0: the menu item / sponsor this target is
+	bool pick;  // on an item that is not the current one, only make it current
+} PrHit;
+#define PR_HIT_MAX 16
+static PrHit g_prHit[PR_HIT_MAX];
+static int g_prHitN;
+static u64 g_prHitMs;
+static char g_prHitScreen[64];
+static bool g_prHitStats;
+
+static void prHit(float x, float y, float w, float h, u32 keys, int sel, bool pick) {
+	if (g_prHitN < PR_HIT_MAX)
+		g_prHit[g_prHitN++] = (PrHit){ x, y, w, h, keys, sel, pick };
+}
+
+// The UI_postrace menu is up (not the stats screen standing in for it).
+static bool postRaceMenuUp(const MenuState* m) {
+	return g_postRace.up && !g_postRace.inStats && m->loaded &&
+		strcasecmp(m->screenName, POSTRACE_MENU_FNG) == 0;
+}
+
+// A page pill: uiButton when the label fits on its line; otherwise the same
+// pill with the label in two lines at 13 px (a half-width menu tile's
+// "Return to Explore Mode"), so no action is ever cut to "..".
+static void prPill(C2D_TextBuf buf, float x, float y, float w, float h, char key, const char* text,
+		bool lit) {
+	const float px = h >= 34.0f ? 16.0f : 14.0f;
+	const float gh = key ? (h >= 34.0f ? 15.0f : 13.0f) : 0.0f, gap = key ? 6.0f : 0.0f;
+	const float room = w - gh - gap - h * 0.5f;
+	if (h < 38.0f || uiMeasure(buf, text, px) <= room) {
+		uiButton(buf, x, y, w, h, key, text, false, lit);
+		return;
+	}
+	uiPill(x, y, w, h, lit, UI_Z + 0.015f);
+	const float tx0 = x + h * 0.3f + gh + gap, tw = x + w - h * 0.3f - tx0, lh = 15.0f;
+	char wr[192];
+	int lines = uiWrap(buf, text, 13.0f, tw, wr, sizeof(wr));
+	if (lines > 2)
+		lines = 2;
+	if (key)
+		drawPadGlyph(key, x + h * 0.3f + gh * 0.5f, y + h * 0.5f, gh, UI_Z + 0.04f);
+	uiTextBlock(buf, text, 13.0f, tx0 + tw * 0.5f, y + h * 0.5f - (float)(lines - 1) * lh * 0.5f, lh, tw,
+		1, lit ? UI_ACCENT : UI_WHITE, 2);
+}
+
+// The lower screen while the post-race list is up: a header naming the
+// screen (B's Back pill on its left where the screen has a Back, the list's
+// place as dots on its right) and the screen's actions, exactly retail's:
+//   Results                  Continue (A), Race Stats (X)
+//   Reward, TournResults,    Continue (A) -- Standings' reads Next Race with
+//   Standings, SponsorPopup  a track to come, as its NEXT does
+//   Race Stats               Previous / Next racer (D-Pad)
+//   Select Sponsor           the sponsors as rows (a tap picks one, a tap on
+//                            the picked one signs), the terms' scroll and Sign (A)
+//   UI_postrace              one pill per item, the current one lit with A
+// The current / default action is lit and wears A.
+static void drawUiPostRace(MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(3072);
+	g_prHitN = 0;
+	if (!buf || !g_uiFont) {
+		drawBottomLogo();
+		return;
+	}
+	const PostRace* pr = &g_postRace;
+	C2D_TextBufClear(buf);
+	g_prHitMs = osGetTime();
+	snprintf(g_prHitScreen, sizeof(g_prHitScreen), "%s", m->screenName);
+	g_prHitStats = pr->inStats;
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	const bool onMenu = postRaceMenuUp(m);
+	const int scr = pr->inStats ? 3 : postRaceScreenOf(m->screenName);
+	// B: every screen but Results (retail gives it none) and the list's first.
+	const bool back = scr == 3 || (scr != 1 && pr->at > 0);
+	PortStr title = PS_PR_POST_RACE;
+	switch (scr) {
+		case 1: case 4: title = PS_PR_RACE_RESULTS; break;
+		case 2: title = PS_PR_RACE_REWARD; break;
+		case 3: title = PS_PR_RACE_STATS; break;
+		case 5: title = PS_PR_STANDINGS; break;
+		case 6: title = PS_PR_SPONSOR; break;
+		case 7: title = PS_PR_SELECT_SPONSOR; break;
+		default: break;
+	}
+
+	// The header band.
+	uiBand2(0.0f, UI_HEAD_H, true);
+	float tx = 10.0f, right = W - 8.0f;
+	if (back) {
+		const char* bl = portstr(PS_PR_BACK);
+		const float bw = uiMeasure(buf, bl, 14.0f) + 13.0f + 6.0f + 28.0f;
+		uiButton(buf, 6.0f, 5.0f, bw, 26.0f, 'B', bl, false, false);
+		prHit(0.0f, 0.0f, 6.0f + bw + 4.0f, UI_HEAD_H, KEY_B, -1, false);
+		tx = 6.0f + bw + 10.0f;
+	}
+	// Where this screen is in the list: the current dot larger and lime.
+	if (!pr->inStats && pr->count > 1) {
+		const float dx = 10.0f, x0 = right - (float)(pr->count - 1) * dx - 3.0f;
+		for (int i = 0; i < pr->count; i++)
+			C2D_DrawCircleSolid(x0 + dx * (float)i, 18.0f, UI_Z + 0.03f, i == pr->at ? 3.2f : 2.0f,
+				i == pr->at ? UI_ACCENT : C2D_Color32(255, 255, 255, 90));
+		right = x0 - 12.0f;
+	}
+	uiText(buf, portstr(title), 18.0f, tx, 18.0f, 0, UI_ACCENT, right - tx);
+
+	const float top = UI_HEAD_H, mx = 12.0f;
+	if (onMenu) {
+		// PostRaceMenu's items: one column of pills, two once they would not
+		// fit at 40 px (the last of an odd count spans both).
+		const int n = m->itemCount;
+		const int cols = PR_MENU_COLS(n), rows = (n + cols - 1) / cols;
+		const float gap = cols == 2 ? 6.0f : 8.0f, th = cols == 2 ? 42.0f : 40.0f;
+		const float tw = (W - 2.0f * mx - gap * (float)(cols - 1)) / (float)cols;
+		const float y0 = floorf((top + H - ((float)rows * th + (float)(rows - 1) * gap)) * 0.5f);
+		for (int i = 0; i < n && i < MENU_MAX_ITEMS; i++) {
+			const int r = i / cols, c = i % cols;
+			const bool span = cols == 2 && (n & 1) && i == n - 1;
+			const float x = span ? mx : mx + (float)c * (tw + gap), w = span ? W - 2.0f * mx : tw;
+			const float y = y0 + (float)r * (th + gap);
+			const bool lit = i == m->selected;
+			const char* s = m->itemStr[i][0] ? m->itemStr[i] : menuItemName(m, i);
+			prPill(buf, x, y, w, th, lit ? 'A' : 0, s, lit);
+			// A tap on any item is that item's A at once.
+			prHit(x - 2.0f, y - gap * 0.5f, w + 4.0f, th + gap, KEY_A, i, false);
+		}
+	} else if (scr == 3) {
+		// The entry up, as "n / count", the driver and the car.
+		const int at = pr->statAt;
+		if (at >= 0 && at < pr->statCount) {
+			char line[32];
+			snprintf(line, sizeof(line), "%d / %d", at + 1, pr->statCount);
+			uiText(buf, line, 14.0f, W * 0.5f, top + 22.0f, 1, UI_DIM, 0.0f);
+			uiText(buf, pr->statName[at], 18.0f, W * 0.5f, top + 46.0f, 1, UI_WHITE, W - 40.0f);
+			uiText(buf, pr->statCarStr[at], 14.0f, W * 0.5f, top + 68.0f, 1, UI_DIM, W - 40.0f);
+		}
+		const float gap = 12.0f, pw = (W - 2.0f * 24.0f - gap) * 0.5f, ph = 44.0f, y = top + 100.0f;
+		prPill(buf, 24.0f, y, pw, ph, 'd', portstr(PS_PR_PREVIOUS), false);
+		uiArrow(24.0f + 13.0f, y + ph * 0.5f, (float)M_PI, 5.0f, at > 0 ? UI_ACCENT : UI_DIM);
+		prHit(24.0f - 3.0f, y - 4.0f, pw + 6.0f, ph + 8.0f, KEY_LEFT, -1, false);
+		const float nx = 24.0f + pw + gap;
+		prPill(buf, nx, y, pw, ph, 'd', portstr(PS_PR_NEXT), false);
+		uiArrow(nx + pw - 13.0f, y + ph * 0.5f, 0.0f, 5.0f,
+			at < pr->statCount - 1 ? UI_ACCENT : UI_DIM);
+		prHit(nx - 3.0f, y - 4.0f, pw + 6.0f, ph + 8.0f, KEY_RIGHT, -1, false);
+	} else if (scr == 7) {
+		// The sponsors as rows (two columns past three), the picked one
+		// highlighted; the signed one tagged in words, not colour alone.
+		const int n = pr->spCount < EVENTDB_STAGE_SPONSORS ? pr->spCount : EVENTDB_STAGE_SPONSORS;
+		const u32 chosen = careerChosenSponsor();
+		const int cols = n > 3 ? 2 : 1;
+		const float rh = 36.0f, rg = 6.0f, cg = 8.0f;
+		const float rw = (W - 2.0f * mx - cg * (float)(cols - 1)) / (float)cols;
+		const char* signedWord = portstr(PS_PR_SIGNED);
+		const float tagW = uiMeasure(buf, signedWord, UI_LABEL_PX) + 8.0f;
+		for (int i = 0; i < n; i++) {
+			const int r = i / cols, c = i % cols;
+			const float x = mx + (float)c * (rw + cg), y = top + 8.0f + (float)r * (rh + rg);
+			const bool sel = i == m->selected, isSigned = chosen != 0 && chosen == pr->spHash[i];
+			uiRowBar(x, y, rw, rh, sel);
+			uiText(buf, pr->spName[i], 16.0f, x + 10.0f, y + rh * 0.5f, 0, sel ? UI_ACCENT : UI_WHITE,
+				rw - 20.0f - (isSigned ? tagW : 0.0f));
+			if (isSigned)
+				uiLabel(buf, signedWord, x + rw - 8.0f, y + rh * 0.5f, 2, UI_ACCENT);
+			// Another row: pick it (its terms come up on the top screen); the
+			// picked one: A, Sign.
+			prHit(x - 2.0f, y - rg * 0.5f, rw + 4.0f, rh + rg, chosen ? 0u : KEY_A, i, true);
+		}
+		const float ah = 44.0f, ay = H - 10.0f - ah;
+		float ax = mx;
+		if (m->pspLines > PSP_TERMS_LINES) {
+			// The terms' CTextScroller, UP / DOWN.
+			const float bw = 48.0f;
+			uiLabel(buf, portstr(PS_PR_TERMS), ax + bw + 4.0f, ay - 9.0f, 1, UI_DIM);
+			uiPill(ax, ay, bw, ah, false, UI_Z + 0.015f);
+			uiArrow(ax + bw * 0.5f, ay + ah * 0.5f, -(float)M_PI * 0.5f, 7.0f, UI_WHITE);
+			prHit(ax - 3.0f, ay - 4.0f, bw + 6.0f, ah + 8.0f, KEY_UP, -1, false);
+			uiPill(ax + bw + 8.0f, ay, bw, ah, false, UI_Z + 0.015f);
+			uiArrow(ax + bw * 1.5f + 8.0f, ay + ah * 0.5f, (float)M_PI * 0.5f, 7.0f, UI_WHITE);
+			prHit(ax + bw + 5.0f, ay - 4.0f, bw + 6.0f, ah + 8.0f, KEY_DOWN, -1, false);
+			ax += 2.0f * bw + 8.0f + 12.0f;
+		}
+		// Sign, only while the stage has no sponsor (SponsorOption::React).
+		if (!chosen && n > 0) {
+			prPill(buf, ax, ay, W - mx - ax, ah, 'A', portstr(PS_PR_SIGN), true);
+			prHit(ax - 3.0f, ay - 4.0f, W - mx - ax + 6.0f, ah + 8.0f, KEY_A, -1, false);
+		}
+	} else {
+		// Results, the reward, the tournament pair and the sponsor popup.
+		const char* lab[2];
+		char key[2];
+		u32 keys[2];
+		int n = 0;
+		lab[n] = portstr(scr == 5 && pr->thereIsNext ? PS_PR_NEXT_RACE : PS_PR_CONTINUE);
+		key[n] = 'A';
+		keys[n++] = KEY_A;
+		if (scr == 1 && pr->statCount > 0) {
+			lab[n] = portstr(PS_PR_RACE_STATS);
+			key[n] = 'X';
+			keys[n++] = KEY_X;
+		}
+		const float ph = 44.0f, gap = 14.0f, pw = W - 2.0f * 24.0f;
+		float y = floorf((top + H - ((float)n * ph + (float)(n - 1) * gap)) * 0.5f);
+		for (int i = 0; i < n; i++) {
+			prPill(buf, 24.0f, y, pw, ph, key[i], lab[i], i == 0);
+			prHit(24.0f - 3.0f, y - 4.0f, pw + 6.0f, ph + 8.0f, keys[i], -1, false);
+			y += ph + gap;
+		}
+	}
+}
+
+// A tap on the post-race page: the keys its target stands for. While a
+// confirm is up it is the dialog's (drawUiDialog()'s buttons via
+// feTouchKeys()), and the page under it takes nothing.
+static u32 postRaceTouchKeys(MenuState* m, MenuState* dlg, u32 kDown) {
+	if (g_feDialog.up)
+		return dlg && dlg->loaded ? feTouchKeys(m, dlg, kDown) : 0u;
+	if (!touchTapped() || g_prHitN <= 0 || osGetTime() - g_prHitMs > FSK_LIVE_MS ||
+			g_prHitStats != g_postRace.inStats || strcmp(g_prHitScreen, m->screenName) != 0)
+		return 0u;
+	const float x = (float)g_touch.x, y = (float)g_touch.y;
+	for (int k = g_prHitN - 1; k >= 0; k--) {
+		const PrHit* h = &g_prHit[k];
+		if (x < h->x || x >= h->x + h->w || y < h->y || y >= h->y + h->h)
+			continue;
+		u32 keys = h->keys;
+		if (h->sel >= 0) {
+			if (h->sel >= m->itemCount)
+				return 0u;
+			if (h->sel != m->selected) {
+				if (h->pick)
+					feSoundPlay(h->sel < m->selected ? FE_EV_LEFT : FE_EV_RIGHT);
+				m->selected = h->sel;
+				feNoteLastButton(m);   // FEngSetLastButton, as the strip's own step
+				if (h->pick)
+					keys = 0u;
+			}
+		}
+		char b[160];
+		snprintf(b, sizeof(b), "post race touch: %s target %d (item %d) -> keys %08lX", m->screenName,
+			k, h->sel, (unsigned long)keys);
+		dlog(b);
+		return keys;
+	}
+	return 0u;
+}
+
+// PORT: the top screen over the post-race menu. Its icon strip only repeated
+// the lower screen's pills, so the race's outcome stands there instead, as a
+// kit card: the player's place, the time (a drift's score), and in a career
+// win the purse and the points.
+static void drawPostRaceSummaryTop(void) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(1024);
+	const PostRace* pr = &g_postRace;
+	if (!buf || !g_uiFont || pr->playerRow < 0 || pr->playerRow >= pr->rowCount)
+		return;
+	C2D_TextBufClear(buf);
+	const PostRaceRow* me = &pr->rows[pr->playerRow];
+	const char* label[4];
+	char value[4][32];
+	int n = 0;
+	const int place = pr->playerRow + 1;
+	label[n] = portstr(PS_PR_POSITION);
+	snprintf(value[n++], sizeof(value[0]), "%d / %d", place, pr->rowCount);
+	if (pr->drift) {
+		label[n] = portstr(PS_PR_SCORE);
+		snprintf(value[n++], sizeof(value[0]), "%d", me->score);
+	} else {
+		label[n] = portstr(PS_PR_TIME);
+		char t[16] = "--:--.--";
+		if (me->time > 0)
+			race_print_time(me->time, 0, t);
+		snprintf(value[n++], sizeof(value[0]), "%s", t);
+	}
+	if (pr->won && pr->purse > 0) {
+		label[n] = portstr(PS_PR_PURSE);
+		snprintf(value[n++], sizeof(value[0]), "$%lu", (unsigned long)pr->purse);
+	}
+	if (pr->points > 0) {
+		label[n] = portstr(PS_PR_POINTS);
+		snprintf(value[n++], sizeof(value[0]), "+%d", pr->points);
+	}
+	const float pw = 260.0f, px = (SCREEN_TOP_W - pw) * 0.5f, rowH = 28.0f;
+	const float ph = 44.0f + (float)n * rowH + 8.0f, py = floorf((SCREEN_TOP_H - ph) * 0.5f);
+	uiRoundRect(px, py, pw, ph, 6.0f, UI_Z, UI_DEEP);
+	uiRing(px, py, pw, ph, 6.0f, 1.0f, UI_Z + 0.005f, UI_RIM);
+	uiText(buf, portstr(PS_PR_RACE_RESULTS), 18.0f, px + 14.0f, py + 21.0f, 0, UI_ACCENT, pw - 28.0f);
+	C2D_DrawRectSolid(px + 10.0f, py + 38.0f, UI_Z + 0.01f, pw - 20.0f, 1.0f, C2D_Color32(255, 255, 255, 36));
+	for (int i = 0; i < n; i++) {
+		const float cy = py + 44.0f + rowH * ((float)i + 0.5f);
+		const float vw = uiText(buf, value[i], 16.0f, px + pw - 14.0f, cy, 2,
+			i == 0 && place == 1 ? UI_ACCENT : UI_WHITE, 0.0f);
+		uiText(buf, label[i], 14.0f, px + 14.0f, cy, 0, UI_DIM, pw - 40.0f - vw);
+	}
+}
+
 // The race panel down the left: position, lap and time with the lap's
 // progress, then the standings with name and gap together.
 #define RACE_PANEL_W 122.0f
@@ -66754,6 +67097,11 @@ int main(int argc, char* argv[])
 						dlog(tb);
 					kDown = 0;
 				}
+				// PORT: the list's actions are pills on the touch screen
+				// (drawUiPostRace()), its confirms too: a tap is the key the
+				// screen already answers.
+				if (worldUi == WORLD_UI_POSTRACE && !g_postRace.saveAsk)
+					kDown |= postRaceTouchKeys(&menu, &dlgMenu, kDown);
 
 				// The world map's dialogs are on the lower panel with it, and
 				// their buttons take a tap the way the frontend's do.
@@ -69350,9 +69698,19 @@ int main(int argc, char* argv[])
 			bodyShopStripTick(&menu, frameDt);
 			modeRowsTick(&menu);
 			creditsTick(&menu, frameDt);
-			drawMenu(&menu, fngStageFrames);
-			drawCredits(&menu);
-			drawScreenTitle(&menu);
+			// PORT: the post-race menu's icon strip is the lower screen's
+			// pills (drawUiPostRace()); the race's outcome stands in its place.
+			const bool prSummary = bootState == BOOT_WORLD && worldUi == WORLD_UI_POSTRACE &&
+				postRaceMenuUp(&menu);
+			if (prSummary) {
+				scissorReset();
+				drawPostRaceSummaryTop();
+				menuClipBegin(&menu);
+			} else {
+				drawMenu(&menu, fngStageFrames);
+				drawCredits(&menu);
+				drawScreenTitle(&menu);
+			}
 			if (bootState == BOOT_MENU) {
 				drawCarousel(&menu);
 				drawCarSelect(&menu);
@@ -69388,10 +69746,13 @@ int main(int argc, char* argv[])
 				// rings, so it needs the same icon row and option-title bar
 				// drawn into it. The map and the mailbox are not, and
 				// drawCarousel() is a no-op on a screen with no items.
-				drawCarousel(&menu);
+				if (!prSummary)
+					drawCarousel(&menu);
 				// Its confirm (UI_InGameDialog), over it on the same screen;
-				// the photo shoot's save question is on the lower panel.
-				if (g_feDialog.up && dlgMenu.loaded && worldUi != WORLD_UI_SHOOT) {
+				// the photo shoot's save question is on the lower panel, and
+				// so are the post-race list's confirms (drawUiPostRace()).
+				if (g_feDialog.up && dlgMenu.loaded && worldUi != WORLD_UI_SHOOT &&
+						worldUi != WORLD_UI_POSTRACE) {
 					menuClipBegin(&dlgMenu);
 					drawMenu(&dlgMenu, fngStageFrames);
 				}
@@ -69571,12 +69932,24 @@ int main(int argc, char* argv[])
 			C2D_TextBufClear(worldTextBuf);
 			drawBottomLogo();
 		} else if (bootState == BOOT_WORLD && worldUi == WORLD_UI_POSTRACE) {
-			// #423, the user 2026-11-07: "On post-race screens, kill the
-			// bottom screen and have just the NFSU2 logo on it (kill it when
-			// you're in loading screen so transition it then)". The end NIS's
-			// Loading.fng already shows the logo here, so it simply stays.
+			// PORT: the list's actions as the kit's pills (drawUiPostRace()),
+			// its confirms over them; the screens themselves stay on the top
+			// one. This replaces #423's NFSU2 logo (the user 2026-11-07),
+			// which is left only for a frame with no screen loaded.
 			C2D_TextBufClear(worldTextBuf);
-			drawBottomLogo();
+			if (menu.loaded) {
+				profBegin(PROF_MENU2D);
+				drawUiPostRace(&menu);
+				if (g_feDialog.up && dlgMenu.loaded) {
+					dlgMenu.screenW = SCREEN_BOT_W;
+					menuClipBegin(&dlgMenu);
+					drawMenu(&dlgMenu, fngStageFrames);
+					scissorReset();
+				}
+				profEnd(PROF_MENU2D);
+			} else {
+				drawBottomLogo();
+			}
 		} else if (bootState == BOOT_WORLD) {
 			if (!(g_sweepSkip & SW_BOTTOM))
 				drawWorldBottom(worldTextBuf, &cfg);
