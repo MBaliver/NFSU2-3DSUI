@@ -9,6 +9,7 @@
 
 #include "dbglog.h"
 #include "options.h"
+#include "portstr.h"
 
 _Static_assert(CONTROLS_SLOTS == OPTIONS_CONTROL_BUTTONS, "one slot per CButton");
 
@@ -148,8 +149,19 @@ u32 controls_slot_keys(int slot) {
 	return (slot >= 0 && slot < CONTROLS_SLOTS) ? kSlot[slot].keys : 0;
 }
 
+// What the player reads: the stick and the D-pad by their names in the
+// player's language (portstr.h); the lettered buttons are printed on the
+// console and stay as they are. The .controls file keeps kSlot's English
+// (fileName()), so a file reads the same whatever the language.
 const char* controls_slot_name(int slot) {
-	return (slot >= 0 && slot < CONTROLS_SLOTS) ? kSlot[slot].name : "";
+	static const PortStr kSpoken[CONTROLS_SLOTS] = {
+		[2] = PS_BTN_CPAD, [3] = PS_BTN_DPAD_UP, [4] = PS_BTN_DPAD_DOWN,
+		[5] = PS_BTN_DPAD_LEFT, [6] = PS_BTN_DPAD_RIGHT,
+	};
+	if (slot < 0 || slot >= CONTROLS_SLOTS)
+		return "";
+	// 0 (PS_ACCESSIBILITY, never a button's) is "no translation".
+	return kSpoken[slot] ? portstr(kSpoken[slot]) : kSlot[slot].name;
 }
 
 // The .controls file's and the log's name for slot `slot`, "None" for none.

@@ -163,21 +163,23 @@ static void defaultPlayer(OptPlayer* p) {
 	p->f24 = 1.0f;       // +0x84
 }
 
-// PORT (#471). Blue first: retail's.
+// PORT (#471). Blue first: retail's. The names are the port's (portstr.h):
+// retail's paint names exist only in capitals, and the row's other values
+// are not.
 static const struct {
-	const char* name;
+	PortStr name;
 	u32 rgb;
 } kGpsColours[OPTIONS_GPS_COLOURS] = {
-	{ "Blue",   0x0080FFu },
-	{ "Cyan",   0x00E0FFu },
-	{ "Green",  0x00C040u },
-	{ "Lime",   0x9CFF00u },
-	{ "Yellow", 0xFFE000u },
-	{ "Orange", 0xFF8000u },
-	{ "Red",    0xFF2020u },
-	{ "Pink",   0xFF40C0u },
-	{ "Purple", 0x9040FFu },
-	{ "White",  0xFFFFFFu },
+	{ PS_COL_BLUE,   0x0080FFu },
+	{ PS_COL_CYAN,   0x00E0FFu },
+	{ PS_COL_GREEN,  0x00C040u },
+	{ PS_COL_LIME,   0x9CFF00u },
+	{ PS_COL_YELLOW, 0xFFE000u },
+	{ PS_COL_ORANGE, 0xFF8000u },
+	{ PS_COL_RED,    0xFF2020u },
+	{ PS_COL_PINK,   0xFF40C0u },
+	{ PS_COL_PURPLE, 0x9040FFu },
+	{ PS_COL_WHITE,  0xFFFFFFu },
 };
 
 u32 options_gps_colour_rgb(int index) {
@@ -185,7 +187,7 @@ u32 options_gps_colour_rgb(int index) {
 }
 
 const char* options_gps_colour_name(int index) {
-	return kGpsColours[(index >= 0 && index < OPTIONS_GPS_COLOURS) ? index : 0].name;
+	return portstr(kGpsColours[(index >= 0 && index < OPTIONS_GPS_COLOURS) ? index : 0].name);
 }
 
 void options_default(ProfileOptions* o, int language) {
@@ -310,9 +312,9 @@ static void buildGameplay(const OptTarget* t, RowSink* sink) {
 		addRow(sink, OPT_CAR_DAMAGE, LBL_CAR_DAMAGE, false, false);
 	// PORT (#471, the user's own): the GPS arrow's and the minimap rings'
 	// colour, per profile. English.bin has no key for it.
-	addTextRow(sink, OPT_GPS_COLOUR, "GPS Color", false);
+	addTextRow(sink, OPT_GPS_COLOUR, portstr(PS_OPT_GPS_COLOR), false);
 	// PORT (the user's): shifting on the shoulder triggers in a drag.
-	addTextRow(sink, OPT_DRAG_TRIGGER_SHIFT, "Drag Shift: ZL/ZR", false);
+	addTextRow(sink, OPT_DRAG_TRIGGER_SHIFT, portstr(PS_OPT_DRAG_SHIFT), false);
 }
 
 // SPEED2.EXE:0x4B7CD0 -- twelve rows for player [0x836364], none of them gated
@@ -348,14 +350,14 @@ static void buildControls(const OptTarget* t, RowSink* sink) {
 	for (int i = 0; i < CONTROLS_ACTIONS; i++) {
 		const u32 h = controls_action_hash(i);
 		if (h == OPT_ACT_ENTER_SHOP)
-			addTextRow(sink, (OptKind)(OPT_BIND_FIRST + i), "Enter Shop / Challenge", false);
+			addTextRow(sink, (OptKind)(OPT_BIND_FIRST + i), portstr(PS_OPT_ENTER_SHOP), false);
 		else
 			addRow(sink, (OptKind)(OPT_BIND_FIRST + i), h, false, false);
 	}
 	addRow(sink, OPT_BIND_DEFAULT, LBL_DEFAULT, false, true);
 	// #527 (the user: "add something at the bottom that says Delete All
 	// Controls that just removes all controls for you"): a button, no question.
-	addTextRow(sink, OPT_BIND_CLEAR, "Delete All Controls", false);
+	addTextRow(sink, OPT_BIND_CLEAR, portstr(PS_OPT_DELETE_ALL), false);
 	sink->rows[sink->n - 1].button = true;   // a button, as Default Settings is
 }
 
@@ -377,10 +379,10 @@ static void buildDisplay(const OptTarget* t, RowSink* sink) {
 	addRow(sink, OPT_CUSTOMIZE_DISPLAY, LBL_CUSTOMIZE, false, true); // 0x792060
 	addRow(sink, OPT_DEFAULT_DISPLAY, LBL_DEFAULT, false, true); // 0x7920A0
 	addRow(sink, OPT_STEREO, LBL_STEREO, false, false);
-	addTextRow(sink, OPT_STEREO_STYLE, "3-D Style", false);
-	addTextRow(sink, OPT_STEREO_DEPTH, "3-D Depth", true);
-	addTextRow(sink, OPT_STEREO_FOCUS, "3-D Focus", true);
-	addTextRow(sink, OPT_STEREO_HUD, "3-D HUD Depth", true);
+	addTextRow(sink, OPT_STEREO_STYLE, portstr(PS_OPT_3D_STYLE), false);
+	addTextRow(sink, OPT_STEREO_DEPTH, portstr(PS_OPT_3D_DEPTH), true);
+	addTextRow(sink, OPT_STEREO_FOCUS, portstr(PS_OPT_3D_FOCUS), true);
+	addTextRow(sink, OPT_STEREO_HUD, portstr(PS_OPT_3D_HUD), true);
 }
 
 // The Customize page's rows: the display-block value each one edits (an index
@@ -558,7 +560,7 @@ void options_row_value(const OptTarget* t, OptKind kind, OptValue* out) {
 	// PORT (#447): the button the action is on.
 	if (OPT_IS_BIND(kind)) {
 		const int s = controls_slot_of((int)(kind - OPT_BIND_FIRST));
-		out->text = s >= 0 ? controls_slot_name(s) : "Not Used";   // #527: none
+		out->text = s >= 0 ? controls_slot_name(s) : portstr(PS_NOT_USED);   // #527: none
 		return;
 	}
 	// PORT: the Accessibility page's values.
@@ -726,7 +728,7 @@ void options_row_value(const OptTarget* t, OptKind kind, OptValue* out) {
 
 	case OPT_STEREO_STYLE:
 		if (t->display)
-			out->text = t->display->stereoStyle == DISPLAY_STEREO_POP ? "Pop Out" : "Into Screen";
+			out->text = portstr(t->display->stereoStyle == DISPLAY_STEREO_POP ? PS_3D_POP : PS_3D_INTO);
 		break;
 
 	// 0x49B8E0 prints On for a set g_VSyncOn; the 3DS is always in step with
