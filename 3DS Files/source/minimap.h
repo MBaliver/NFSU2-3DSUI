@@ -367,6 +367,11 @@ typedef struct {
 	bool  icon;      // the GPS is started: draw the rings at iconX/iconY
 	float iconX, iconY;
 	u32   ms;        // a free-running millisecond clock for the rings' loop
+	// PORT: the path to the goal (gps_route_polyline), world (x, y), drawn
+	// under the markers in `routeRgba` (C2D_Color32 order). NULL/0 for none.
+	const float (*route)[2];
+	int   routeN;
+	u32   routeRgba;
 } MinimapGps;
 
 // Draws the circle inscribed in the rectangle (x, y, w, h) of the current
@@ -379,6 +384,31 @@ typedef struct {
 // hand over the whole list every frame. `gps` NULL is the GPS idle.
 // PORT (#471): the GPS rings' colour, 0xRRGGBB (retail 0x0080FF, the default).
 void minimap_set_gps_colour(u32 rgb);
+
+// PORT: the panel's shape. Round (false, the default) is retail's disc,
+// inscribed in the rect; square fills the whole rect with the map, with a
+// thin frame instead of the ring, icons pinned to its edges and the north
+// indicator riding the frame. The scale stays the round panel's, so the extra
+// area shows more of the city rather than zooming in.
+void minimap_set_square(bool square);
+
+// PORT: touch panning, like a GPS. The view's centre is the car plus a world
+// offset; minimap_pan_px() moves it by a finger's drag in panel pixels (the
+// map follows the finger, rotation included), clamped to the city art.
+// minimap_pan_ease() pulls it back toward the car by `k` (0..1) of the way.
+// While panned the car icon is drawn where it is, pinned to the edge if off
+// the panel. minimap_panned() says whether the view is off the car.
+void minimap_pan_px(Minimap* m, float dxPx, float dyPx);
+void minimap_pan_reset(Minimap* m);
+void minimap_pan_ease(Minimap* m, float k);
+bool minimap_panned(const Minimap* m);
+
+// PORT: the view's zoom on top of retail's aperture (1 = retail's; >1 shows
+// less ground bigger), and where a world point landed in the last draw, in
+// panel pixels -- false if it was outside the panel or nothing has been drawn.
+void minimap_set_view_zoom(Minimap* m, float z);
+float minimap_view_zoom(const Minimap* m);
+bool minimap_world_to_panel(const Minimap* m, float wx, float wy, float* sx, float* sy);
 
 void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 	float x, float y, float w, float h, MinimapMode mode,

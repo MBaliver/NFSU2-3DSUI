@@ -167,6 +167,32 @@ static const u32 kElementColor[MINIMAP_ELEM_COUNT] = {
 // PORT (#471): the profile's GPS colour in its place, minimap_set_gps_colour().
 static u32 s_gpsColor = MM_GPS_COLOR;
 
+static bool s_square = false;
+
+void minimap_set_square(bool square) {
+	s_square = square;
+}
+
+// The square panel's frame colour and how far in a pinned icon sits.
+#define MM_SQ_PIN_PAD   9.0f
+
+// Pulls (u, v) in along its own line until it lies inside the half-extents
+// (hw, hh) -- the square panel's stand-in for mmPlace()'s pin circle. False
+// past `limit` windows, the same rule.
+static bool mmPlaceRect(float u, float v, float windowPx, float limit, float hw, float hh,
+		float* du, float* dv) {
+	if (sqrtf(u * u + v * v) >= limit * windowPx)
+		return false;
+	float k = 1.0f;
+	if (fabsf(u) > hw && hw > 0.0f)
+		k = hw / fabsf(u);
+	if (fabsf(v) * k > hh && hh > 0.0f)
+		k = hh / fabsf(v);
+	*du = u * k;
+	*dv = v * k;
+	return true;
+}
+
 void minimap_set_gps_colour(u32 rgb) {
 	s_gpsColor = MM_RGBA((rgb >> 16) & 0xFFu, (rgb >> 8) & 0xFFu, rgb & 0xFFu, 0);
 }
@@ -190,7 +216,76 @@ struct Minimap {
 	C2D_Image windowImg;
 
 	float originX, originY, span, zoom;
+
+	// Touch panning (minimap_pan_px): the view's offset from the car in world
+	// units, and what the last draw used to turn pixels into world units.
+	float panX, panY;
+	float lastAngle, lastPerArt;
+	float lastCarX, lastCarY;
+	float viewZoom;                  // minimap_set_view_zoom, 0 = 1
+	float lastCx, lastCy, lastViewX, lastViewY;
+	float lastX0, lastY0, lastX1, lastY1;
+	bool  drawn;
 };
+
+void minimap_set_view_zoom(Minimap* m, float z) {
+	if (m)
+		m->viewZoom = z;
+}
+
+float minimap_view_zoom(const Minimap* m) {
+	return m && m->viewZoom > 0.0f ? m->viewZoom : 1.0f;
+}
+
+bool minimap_world_to_panel(const Minimap* m, float wx, float wy, float* sx, float* sy) {
+	if (!m || !m->drawn || m->span <= 0.0f)
+		return false;
+	const float u = ((wx - m->lastViewX) / m->span) * m->lastPerArt;
+	const float v = ((m->lastViewY - wy) / m->span) * m->lastPerArt;
+	const float c = cosf(m->lastAngle), sn = sinf(m->lastAngle);
+	*sx = m->lastCx + u * c - v * sn;
+	*sy = m->lastCy + u * sn + v * c;
+	return *sx >= m->lastX0 && *sx < m->lastX1 && *sy >= m->lastY0 && *sy < m->lastY1;
+}
+
+void minimap_pan_px(Minimap* m, float dxPx, float dyPx) {
+	if (!m || m->lastPerArt <= 0.0f || m->span <= 0.0f)
+		return;
+	// The content is turned by lastAngle: screen = R(a) (u, v). Moving the
+	// view by the finger's opposite and turning it back gives (u, v), and
+	// (u, v) is world (dX, -dY) over span times perArt.
+	const float c = cosf(m->lastAngle), sn = sinf(m->lastAngle);
+	const float u = c * (-dxPx) + sn * (-dyPx);
+	const float v = -sn * (-dxPx) + c * (-dyPx);
+	m->panX += u * m->span / m->lastPerArt;
+	m->panY -= v * m->span / m->lastPerArt;
+	// Keep the view's centre on the city art.
+	const float vx = m->lastCarX + m->panX, vy = m->lastCarY + m->panY;
+	const float x0 = m->originX, x1 = m->originX + m->span;
+	const float y0 = m->originY - m->span, y1 = m->originY;
+	if (vx < x0) m->panX += x0 - vx;
+	if (vx > x1) m->panX -= vx - x1;
+	if (vy < y0) m->panY += y0 - vy;
+	if (vy > y1) m->panY -= vy - y1;
+}
+
+void minimap_pan_reset(Minimap* m) {
+	if (m)
+		m->panX = m->panY = 0.0f;
+}
+
+void minimap_pan_ease(Minimap* m, float k) {
+	if (!m)
+		return;
+	m->panX -= m->panX * k;
+	m->panY -= m->panY * k;
+	if (fabsf(m->panX) + fabsf(m->panY) < 0.5f)
+		m->panX = m->panY = 0.0f;
+}
+
+bool minimap_panned(const Minimap* m) {
+	return m && (m->panX != 0.0f || m->panY != 0.0f);
+}
 
 // main.c's scissorLogical(), which is static there. Same contract: logical
 // screen coordinates with the origin top-left, converted to the GPU's rotated
@@ -432,6 +527,13 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 {
 	if (!m || mode == MINIMAP_MODE_OFF || w <= 0.0f || h <= 0.0f)
 		return;
+	// The car, kept for the panning maths, and the view's centre: the car
+	// plus the touch pan. Everything below works about the view's centre.
+	m->lastCarX = worldX;
+	m->lastCarY = worldY;
+	const float carWX = worldX, carWY = worldY;
+	worldX += m->panX;
+	worldY += m->panY;
 
 	// Tick's own rotation decision: rotate only on option value 2.
 	//
@@ -483,10 +585,21 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 	// each quarter covers its own quadrant exactly, so a half-pixel offset puts
 	// a visible step in the ring where two of them meet.
 	const float d = floorf(panel * 0.5f / MM_BORDER_ARC_R / 8.0f) * 8.0f;
-	x = floorf(panelX + (panelW - d) * 0.5f);
-	y = floorf(panelY + (panelH - d) * 0.5f);
-	w = d;
-	h = d;
+	// PORT: one window across the round panel's diameter, whichever shape is
+	// drawn, so the square shows the same scale over more ground.
+	const float winPx = d;
+	const bool square = s_square;
+	if (square) {
+		x = floorf(panelX);
+		y = floorf(panelY);
+		w = floorf(panelX + panelW) - x;
+		h = floorf(panelY + panelH) - y;
+	} else {
+		x = floorf(panelX + (panelW - d) * 0.5f);
+		y = floorf(panelY + (panelH - d) * 0.5f);
+		w = d;
+		h = d;
+	}
 
 	const float cx = x + w * 0.5f;
 	const float cy = y + h * 0.5f;
@@ -510,9 +623,9 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 	// The markers below need the same aperture, and it does not depend on the
 	// map art having loaded -- only on the track record's placement fields --
 	// so it is worked out here rather than inside the map's own block.
-	const float window = 0.3f / m->zoom;
+	const float window = 0.3f / m->zoom / minimap_view_zoom(m);
 	const float side = sqrtf(w * w + h * h);
-	const float shortAxis = (w < h) ? w : h;
+	const float shortAxis = winPx > 0.0f ? winPx : ((w < h) ? w : h);
 	const float half = (side * 0.5f / shortAxis) * window;
 
 	if (m->map.valid) {
@@ -540,7 +653,7 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 		// at load (texpack.h), so inside the disc the art keeps its full
 		// brightness. citro2d only issues a quad on a flush and reads the
 		// blend then, so both sides are flushed.
-		if (m->texValid[MM_MASK]) {
+		if (m->texValid[MM_MASK] && !square) {
 			C2D_Flush();
 			C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ZERO, GPU_SRC_ALPHA,
 				GPU_ZERO, GPU_SRC_ALPHA);
@@ -575,7 +688,9 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 	// at four corners (which is what a rectangular panel asked for) is what
 	// made the brackets the user saw. Scaled by the tile, the ring lands
 	// exactly on the mask's rim, which is inscribed in the same square.
-	if (m->texValid[MM_BORDER]) {
+	if (square) {
+		// No frame: the map runs to the screen's edges (the user's mockup).
+	} else if (m->texValid[MM_BORDER]) {
 		const float bs = w / (float)m->sub[MM_BORDER].width;
 		const float bsy = h / (float)m->sub[MM_BORDER].height;
 		C2D_ImageTint rim;
@@ -621,7 +736,38 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 	const float perArt = (m->span > 0.0f && half > 0.0f) ? side / (2.0f * half) : 0.0f;
 	const float ca = cosf(mapAngle);
 	const float sa = sinf(mapAngle);
+	m->lastAngle = mapAngle;
+	m->lastPerArt = perArt;
+	m->lastCx = cx;
+	m->lastCy = cy;
+	m->lastViewX = worldX;
+	m->lastViewY = worldY;
+	m->lastX0 = x;
+	m->lastY0 = y;
+	m->lastX1 = x + w;
+	m->lastY1 = y + h;
+	m->drawn = true;
 	const float limit = (gps && (gps->engaged || gps->stageZero)) ? MM_LIMIT_GPS : MM_LIMIT_IDLE;
+	// PORT: the GPS's path, under every icon: a dark casing, then the line,
+	// with round joints, all opaque so the overlaps blend nothing.
+	if (gps && gps->route && gps->routeN >= 2 && perArt > 0.0f) {
+		float px = 0.0f, py = 0.0f;
+		for (int pass = 0; pass < 2; pass++) {
+			const float th = pass == 0 ? 7.0f : 3.5f;
+			const u32 c = pass == 0 ? MM_RGBA(14, 16, 20, 255) : (gps->routeRgba | 0xFF000000u);
+			const float z = pass == 0 ? 0.16f : 0.17f;
+			for (int k = 0; k < gps->routeN; k++) {
+				const float u = ((gps->route[k][0] - worldX) / m->span) * perArt;
+				const float v = ((worldY - gps->route[k][1]) / m->span) * perArt;
+				const float sx = cx + u * ca - v * sa, sy = cy + u * sa + v * ca;
+				if (k > 0)
+					C2D_DrawLine(px, py, c, sx, sy, c, th, z);
+				C2D_DrawCircleSolid(sx, sy, z, th * 0.5f, c);
+				px = sx;
+				py = sy;
+			}
+		}
+	}
 	if (markers && markerCount > 0 && perArt > 0.0f) {
 		// The widget colour multiplies the texels, as the engine's vertex
 		// colour does -- C2D_TintSolid would replace them instead.
@@ -644,7 +790,9 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 			// citro2d rotates content by (x cos - y sin, x sin + y cos), the
 			// same transform the map quad above gets.
 			float du, dv;
-			if (!mmPlace(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
+			if (square ? !mmPlaceRect(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
+					w * 0.5f - MM_SQ_PIN_PAD, h * 0.5f - MM_SQ_PIN_PAD, &du, &dv)
+				: !mmPlace(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
 					MM_PIN * shortAxis, 0.0f, &du, &dv))
 				continue;
 			const float sx = cx + du;
@@ -679,7 +827,9 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 		const float u = ((gps->iconX - worldX) / m->span) * perArt;
 		const float v = ((worldY - gps->iconY) / m->span) * perArt;
 		float du, dv;
-		if (mmPlace(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
+		if (square ? mmPlaceRect(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
+				w * 0.5f - MM_SQ_PIN_PAD, h * 0.5f - MM_SQ_PIN_PAD, &du, &dv)
+			: mmPlace(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
 				MM_PIN * shortAxis, 0.0f, &du, &dv)) {
 			const float ms = (float)(gps->ms % MM_GPS_LOOP_MS);
 			const float alpha[2] = { mmKeys(kRingAMs, kRingAAlpha, 5, ms),
@@ -710,11 +860,19 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 	// (sin, -cos) -- and the art, which points up, is turned to match.
 	if (m->texValid[MM_NORTH]) {
 		const float nr = MM_NORTH_R * w;
+		float nx = nr * sinf(mapAngle), ny = -nr * cosf(mapAngle);
+		if (square) {
+			// On the frame along north's line, kept just inside it.
+			const float big = w + h;
+			mmPlaceRect(big * sinf(mapAngle), -big * cosf(mapAngle), 1.0f, 1e9f,
+				w * 0.5f - MM_NORTH_W * 0.5f - 2.0f, h * 0.5f - MM_NORTH_W * 0.5f - 2.0f,
+				&nx, &ny);
+		}
 		C2D_ImageTint tint;
 		C2D_PlainImageTint(&tint, MM_NORTH_COLOR, 1.0f);
 		C2D_SetTintMode(C2D_TintMult);
 		C2D_DrawImageAtRotated(m->img[MM_NORTH],
-			cx + nr * sinf(mapAngle), cy - nr * cosf(mapAngle), 0.4f, mapAngle,
+			cx + nx, cy + ny, 0.4f, mapAngle,
 			&tint,
 			MM_NORTH_W / (float)m->sub[MM_NORTH].width,
 			MM_NORTH_H / (float)m->sub[MM_NORTH].height);
@@ -729,9 +887,24 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 		C2D_ImageTint tint;
 		C2D_PlainImageTint(&tint, kElementColor[MINIMAP_ELEM_PLAYERCAR], 1.0f);
 		C2D_SetTintMode(C2D_TintMult);
-		C2D_DrawImageAtRotated(m->img[MM_CAR], cx, cy, 0.5f, carAngle, &tint,
-			MM_CAR_W / (float)m->sub[MM_CAR].width,
-			MM_CAR_H / (float)m->sub[MM_CAR].height);
+		// At the centre unless the view is panned off it.
+		float px = 0.0f, py = 0.0f;
+		if (minimap_panned(m) && perArt > 0.0f) {
+			const float u = ((carWX - worldX) / m->span) * perArt;
+			const float v = ((worldY - carWY) / m->span) * perArt;
+			if (square)
+				mmPlaceRect(u * ca - v * sa, u * sa + v * ca, 1.0f, 1e9f,
+					w * 0.5f - MM_SQ_PIN_PAD, h * 0.5f - MM_SQ_PIN_PAD, &px, &py);
+			else
+				mmPlace(u * ca - v * sa, u * sa + v * ca, 1.0f, 1e9f,
+					MM_PIN * shortAxis, 0.0f, &px, &py);
+		}
+		// PORT: half again as big on the full-bleed panel, where the
+		// authored 12x16 got lost in the city art.
+		const float cs = square ? 1.5f : 1.0f;
+		C2D_DrawImageAtRotated(m->img[MM_CAR], cx + px, cy + py, 0.5f, carAngle, &tint,
+			cs * MM_CAR_W / (float)m->sub[MM_CAR].width,
+			cs * MM_CAR_H / (float)m->sub[MM_CAR].height);
 		C2D_SetTintMode(C2D_TintSolid);
 	}
 

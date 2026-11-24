@@ -44,7 +44,10 @@ typedef struct {
 	// block's padding, which retail leaves 0 and the save copies whole, so a
 	// save from before keeps the blue and the choice is per profile.
 	u8 gpsColour;
-	u8 pad[2];
+	// +0x6 PORT (the user's, 2026-11-13): ZL / ZR shift down / up in a drag
+	// race, 0 Off. Padding before, so an older save reads Off.
+	u8 dragTriggerShift;
+	u8 pad[1];
 	float jumpCam;    // +0x8  Jump Camera, 0 = Off
 	float f0C;
 } OptGameplay;
@@ -252,6 +255,8 @@ typedef enum {
 	OPT_CAR_DAMAGE,
 	// PORT (#471, the user's own): GPS Color, after Car Damage.
 	OPT_GPS_COLOUR,
+	// PORT: Drag Shift: ZL/ZR, after GPS Color.
+	OPT_DRAG_TRIGGER_SHIFT,
 	// PORT (#447): the Controls page's rows, one per rebindable action in
 	// controls.h's order (controls_action_hash), then Default Settings, then
 	// (#527, the user's) Delete All Controls.

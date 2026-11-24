@@ -322,6 +322,19 @@ typedef struct {
 // Draws them onto the current citro2d target in the column x..x+w from y
 // down: the block retail puts in the canvas's top-right corner, scaled up
 // to the column's width.
+// PORT: the standings as rows, for the lower screen's own race panel: race
+// order (a drift's board, most points first), each row's place, name and a
+// short trailing figure -- the gap to the player as DrawTimes prints it, the
+// finish reason for a car that is home, a drift's points. `me` is the
+// player's row. Returns how many it wrote, at most `max`.
+typedef struct {
+	int place;
+	const char* name;
+	char figure[24];
+	bool me;
+} HudStandingRow;
+int hud_race_standings(Hud* h, const HudRaceStats* s, HudStandingRow* rows, int max);
+
 void hud_draw_race_stats(Hud* h, const HudRaceStats* s, C2D_Font font, float fontUnitPx,
 	float x, float y, float w);
 

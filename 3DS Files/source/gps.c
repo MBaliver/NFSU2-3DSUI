@@ -2460,3 +2460,78 @@ float gps_intersection_length(int i, int side, bool fwd) {
 	const float b = (ex + r * o[1]) * d[0] + (ey - r * o[0]) * d[1];
 	return -(a < b ? a : b);
 }
+
+int gps_route_polyline(const float carPos[2], float (*out)[2], int max, float stepM) {
+	if (!mgr.started || ctl.state != 1 || gn != &g_net[GPS_NET_FREEROAM] || !gn->loaded ||
+			max < 2)
+		return 0;
+	const GpsNode* n = &ctlPath;
+	int p = n->start;
+	bool fwd = n->startFwd;
+	int decIdx = 0;
+	int count = 0, carAt = -1;
+	float lx = 0.0f, ly = 0.0f;
+	// The whole path is walked; output restarts where the car is found on it,
+	// so a car part-way along gets only the road still ahead.
+	for (int guard = 0; p >= 0 && guard < 40000; guard++) {
+		if (carAt < 0 && ptOutLateral(p, carPos[0], carPos[1]) < 5.0f &&
+				ptOutAlong(p, carPos[0], carPos[1]) < 5.0f) {
+			carAt = p;
+			count = 0;
+			out[count][0] = carPos[0];
+			out[count][1] = carPos[1];
+			lx = carPos[0];
+			ly = carPos[1];
+			count++;
+		}
+		const float x = ptX(p), y = ptY(p);
+		if (count == 0 || hypotf(x - lx, y - ly) >= stepM) {
+			if (count < max - 1) {
+				out[count][0] = x;
+				out[count][1] = y;
+				count++;
+			}
+			lx = x;
+			ly = y;
+		}
+		if (ptOutLateral(p, n->goal[0], n->goal[1]) < 0.0f &&
+				ptOutAlong(p, n->goal[0], n->goal[1]) < 0.0f)
+			break;
+		int taken = -1;
+		bool plain = false;
+		const int ns = ptNumSigns(p);
+		for (int i = 0; i < ns && taken < 0; i++) {
+			const int sg = ptSign(p, i);
+			if (!spApplies(sg, fwd)) {
+				if (spType(sg) == SIGN_DEAD_END) {
+					plain = true;
+					break;
+				}
+				continue;
+			}
+			if (spIgnore(sg) || spDontTake(sg))
+				continue;
+			if (spAlways(sg)) {
+				taken = sg;
+			} else if (decIdx < n->nDec) {
+				if ((n->dec[decIdx] & 0x1FFF) == (u16)sg) {
+					if (n->dec[decIdx] & 0x2000)
+						taken = sg;
+					decIdx++;
+				}
+			}
+		}
+		if (taken >= 0 && !plain && gn->signs[taken].to >= 0) {
+			p = gn->signs[taken].to;
+			fwd ^= spBit(taken, 23);
+		} else {
+			p = ptRelative(p, fwd);
+		}
+	}
+	if (count > 0 && count < max) {
+		out[count][0] = n->goal[0];
+		out[count][1] = n->goal[1];
+		count++;
+	}
+	return count;
+}

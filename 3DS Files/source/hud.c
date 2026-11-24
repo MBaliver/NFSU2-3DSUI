@@ -1046,19 +1046,66 @@ bool hud_gauge_rect(const Hud* h, float* x0, float* y0, float* x1, float* y1) {
 	return true;
 }
 
+// PORT (the user on hardware, 2026-11-13: the lap and time text on the top
+// screen are too small): LapCounter's whole group -- both boxes and every
+// string in them -- is drawn this much bigger about the group's top-left
+// corner, so boxes and text grow together and keep retail's layout, growing
+// away from the screen's corner into the road.
+#define HUD_LAP_GROUP 1.4f
+static bool lapGroupAnchor(const Hud* h, float* ax, float* ay) {
+	bool any = false;
+	float x = 1e9f, y = 1e9f;
+	const int bk[2] = { HE_LAP_BACKING, HE_TIME_BACKING };
+	for (int k = 0; k < 2; k++) {
+		const HudWidget* w = &h->w[bk[k]];
+		if (!w->found)
+			continue;
+		x = fminf(x, w->x - w->w * 0.5f);
+		y = fminf(y, w->y - w->h * 0.5f);
+		any = true;
+	}
+	if (!any)
+		for (int e = HE_LAP_TEXT; e <= HE_LAP_TITLE_TIME; e++) {
+			const HudWidget* w = &h->w[e];
+			if (!w->found)
+				continue;
+			x = fminf(x, w->x);
+			y = fminf(y, w->y);
+			any = true;
+		}
+	*ax = x;
+	*ay = y;
+	return any;
+}
+// The widget as drawn: a lap-group member moved out from the anchor by
+// HUD_LAP_GROUP (sizes are the caller's to scale). *k gets the factor.
+static const HudWidget* lapGroupWidget(const Hud* h, int e, HudWidget* tmp, float* k) {
+	*k = 1.0f;
+	float ax, ay;
+	if (!isLapElem(e) || !lapGroupAnchor(h, &ax, &ay))
+		return &h->w[e];
+	*tmp = h->w[e];
+	*k = HUD_LAP_GROUP;
+	tmp->x = ax + (tmp->x - ax) * *k;
+	tmp->y = ay + (tmp->y - ay) * *k;
+	return tmp;
+}
+
 // One Image widget, centred on its authored position.
 static void drawImage(Hud* h, int e, float angleDeg) {
 	if (!h->texValid[e])
 		return;
-	const HudWidget* w = &h->w[e];
+	HudWidget lg;
+	float lk;
+	const HudWidget* w = lapGroupWidget(h, e, &lg, &lk);
 	const Tex3DS_SubTexture* sub = &h->sub[e];
 	C2D_Image img = { &h->tex[e], sub };
 	C2D_ImageTint tint;
 	C2D_PlainImageTint(&tint, w->color, 1.0f);
 	C2D_DrawImageAtRotated(img, screenX(e, w->x), screenY(w->y), 0.5f,
 		angleDeg * (float)M_PI / 180.0f, &tint,
-		w->w * HUD_SCALE / (float)sub->width,
-		w->h * HUD_SCALE / (float)sub->height);
+		w->w * lk * HUD_SCALE / (float)sub->width,
+		w->h * lk * HUD_SCALE / (float)sub->height);
 }
 
 // One String widget: authored point size times its SA scale, justified the way
@@ -1067,6 +1114,13 @@ static void drawImage(Hud* h, int e, float angleDeg) {
 // centre put back (the Countdown's growth); `dx`/`dy` move it in canvas units.
 // The same for any package's widget, canvas (0, 0) at screen (`originX`,
 // `originY`) and `px` screen pixels to the canvas unit, into `buf`.
+// PORT: the screen a string may not leave. HUD_MIN_TEXT_PX lifts small text
+// and the panel is narrower than retail's canvas, so a string authored near an
+// edge (TRAFFIC HIT's popup by the speedometer) ran off it. Clamped to this
+// many pixels: the top screen's 400, the race stats column's 320.
+#define HUD_EDGE_PAD 3.0f
+static float s_hudClipW = 400.0f;
+
 static void drawTextIn(C2D_TextBuf buf, const HudWidget* w, float originX, float originY,
 	float px, const char* str, u32 color, C2D_Font font, float fontUnitPx, float scale,
 	float dx, float dy)
@@ -1091,7 +1145,26 @@ static void drawTextIn(C2D_TextBuf buf, const HudWidget* w, float originX, float
 		y -= th * 0.5f;
 	else if (w->justify & 0x8)
 		y -= th;
-	C2D_DrawText(&t, C2D_WithColor, x, y, 0.5f, sc, sc, color);
+	// Keep it on the screen: narrow it first (to 80%), then slide it in.
+	float scx = sc;
+	const float room = s_hudClipW - 2.0f * HUD_EDGE_PAD;
+	if (tw > room && tw > 0.0f) {
+		float k = room / tw;
+		if (k < 0.8f)
+			k = 0.8f;
+		const float shrink = tw * (1.0f - k);
+		if (w->justify & 0x1)
+			x += shrink * 0.5f;
+		else if (w->justify & 0x2)
+			x += shrink;
+		scx *= k;
+		tw *= k;
+	}
+	if (x + tw > s_hudClipW - HUD_EDGE_PAD)
+		x = s_hudClipW - HUD_EDGE_PAD - tw;
+	if (x < HUD_EDGE_PAD)
+		x = HUD_EDGE_PAD;
+	C2D_DrawText(&t, C2D_WithColor, x, y, 0.5f, scx, sc, color);
 }
 
 // The top screen's: canvas x = 0 at screen x `originX`, at the cluster's scale.
@@ -1105,7 +1178,10 @@ static void drawText(Hud* h, const HudWidget* w, float originX, const char* str,
 static void drawStringAt(Hud* h, int e, const char* str, u32 color, C2D_Font font,
 	float fontUnitPx, float scale, float dx, float dy)
 {
-	drawText(h, &h->w[e], originX(e), str, color, font, fontUnitPx, scale, dx, dy);
+	HudWidget lg;
+	float lk;
+	const HudWidget* w = lapGroupWidget(h, e, &lg, &lk);
+	drawText(h, w, originX(e), str, color, font, fontUnitPx, scale * lk, dx * lk, dy * lk);
 }
 
 static void drawString(Hud* h, int e, const char* str, u32 color, C2D_Font font,
@@ -3533,9 +3609,12 @@ static void statImage(const HudStatMap* m, const HudWidget* w, C3D_Tex* tex,
 static void statText(Hud* h, const HudStatMap* m, const HudWidget* w, const char* str,
 	u32 color, C2D_Font font, float fontUnitPx)
 {
-	if (w->found)
+	if (w->found) {
+		s_hudClipW = 320.0f;
 		drawTextIn(h->stBuf, w, m->x0, m->y0, m->px, str, color, font, fontUnitPx, 1.0f,
 			0.0f, 0.0f);
+		s_hudClipW = 400.0f;
+	}
 }
 
 // RacePosition::Update's three strings: the player's place, its ordinal and
@@ -3551,6 +3630,63 @@ static void statPosition(Hud* h, const HudStatMap* m, const HudWidget* number,
 	statText(h, m, nth, localizedOrdinal(h, pos), nth->color, font, fontUnitPx);
 	snprintf(t, sizeof(t), "/%d", count);
 	statText(h, m, racers, t, racers->color, font, fontUnitPx);
+}
+
+int hud_race_standings(Hud* h, const HudRaceStats* s, HudStandingRow* rows, int max) {
+	if (!h || !s || !s->race || max <= 0)
+		return 0;
+	const Race* r = s->race;
+	int n = 0;
+	if (s->drift) {
+		for (int k = 0; k < s->driftRows && k < 4 && n < max; k++) {
+			HudStandingRow* o = &rows[n++];
+			o->place = k + 1;
+			o->name = s->driftName[k] ? s->driftName[k]
+				: (s->driftId[k] >= 0 && s->driftId[k] <= RACE_MAX_AI ? s->names[s->driftId[k]] : NULL);
+			snprintf(o->figure, sizeof(o->figure), "%.0f", (double)s->driftPts[k]);
+			o->me = s->driftMe[k];
+		}
+		return n;
+	}
+	int count = race_car_count(r);
+	if (count > 1 + RACE_MAX_AI)
+		count = 1 + RACE_MAX_AI;
+	int order[1 + RACE_MAX_AI], place[1 + RACE_MAX_AI];
+	for (int i = 0; i < count; i++) {
+		place[i] = race_position(r, i);
+		int j = i;
+		while (j > 0 && place[order[j - 1]] > place[i]) {
+			order[j] = order[j - 1];
+			j--;
+		}
+		order[j] = i;
+	}
+	const float len = r->route ? race_route_length(r->route) : 0.0f;
+	for (int i = 0; i < count && n < max; i++) {
+		const RacingCar* c = race_car(r, order[i]);
+		HudStandingRow* o = &rows[n++];
+		o->place = i + 1;
+		o->name = s->names[order[i]];
+		o->me = order[i] == 0;
+		o->figure[0] = '\0';
+		if (!c || o->me)
+			continue;
+		if (!c->finished) {
+			race_print_time(calcSplitTime(r, c, &r->car, len), 10, o->figure);
+		} else {
+			const char* why;
+			switch (c->finishReason) {
+			case 9: why = h->sTotaledLb; break;
+			case 3: why = h->sKnockedOut; break;
+			case 8: why = h->sBlownEngine; break;
+			case 0xB: why = h->sTimeup; break;
+			case 0xC: why = h->sDisconnected; break;
+			default: why = h->sFinished; break;
+			}
+			snprintf(o->figure, sizeof(o->figure), "%s", why ? why : "");
+		}
+	}
+	return n;
 }
 
 void hud_draw_race_stats(Hud* h, const HudRaceStats* s, C2D_Font font, float fontUnitPx,

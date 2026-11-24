@@ -113,6 +113,9 @@ extern gxCmdQueue_s __C3D_Context;
 #define GX_QUEUE_ENTRIES 128
 #include "bleach.h"
 #include <3ds/applets/swkbd.h>
+// Last: its macros route this file's hid* calls through the dev command file.
+#define DEVCMD_WRAP_HID
+#include "devcmd.h"
 
 // The UI font every String is drawn with (TASKS.md #425): Helvetica 67
 // Condensed Medium Oblique, the user's .ttf (repo root), converted to citro2d's
@@ -459,6 +462,11 @@ static void loadTimeEnd(const char* step) {
 //   HwVideoSelfTest  1 replaces every movie with mvd_player.c's test card,
 //                    to check that display path on hardware without an MVD
 //                    (Azahar). Default 0.
+//   DevCommands      1 lets the PC drive the game through sdmc:/nfsu2_cmd.txt
+//                    (buttons, touch, sticks, screenshots; devcmd.h). Default 0.
+//   Language         EN, FR, DE, IT, ES, NL, SV, DA (or the name): which
+//                    LANGUAGES/<name>.bin replaces English.bin, when it is on
+//                    the card. Default English. Read at boot only.
 // Diagnostics, all off by default and never needed to play. They exist so a
 // reported screenshot can be reproduced and taken apart one variable at a
 // time without a rebuild per variable (#191):
@@ -798,6 +806,10 @@ typedef enum {
 
 typedef struct {
 	char gameDir[256];
+	// Language=: which LANGUAGES/<name>.bin the text comes from ("" = English).
+	// buildGamePath() swaps it in for LANGUAGES/English.bin when the file is
+	// on the card, so every reader of the string table follows it.
+	char language[16];
 	// Mods= (#320, modfs.h): which folders of GameDir/mods lay over the
 	// data, in order; modsSet false = no line, every folder in name order.
 	char mods[256];
@@ -920,6 +932,7 @@ typedef struct {
 	bool  dbgFirstRunConfig; // write both builds' first-run configs to test files (#449)
 	bool  debugMenuEnabled;  // DebugMenuEnabled: the Debug Menu from boot (#448)
 	bool  debugLogging;      // DebugLogging=1: write sdmc:/nfsu2_debug.txt (#533; off by default)
+	bool  devCommands;       // DevCommands=1: the PC drives the game through sdmc:/nfsu2_cmd.txt (devcmd.h)
 	ConfigStatus status;
 	bool created;            // this run wrote the file: none was there (#449)
 	char path[512];          // where nfsu2_config.txt was looked for
@@ -978,6 +991,7 @@ static bool g_dbgTuneBdSweep;
 
 static bool loadConfig(int argc, char** argv, Config* out) {
 	out->gameDir[0] = '\0';
+	out->language[0] = '\0';
 	out->mods[0] = '\0';
 	out->modsSet = false;
 	out->wirelessTest = 0;
@@ -1083,6 +1097,7 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 	out->dbgFirstRunConfig = false;
 	out->debugMenuEnabled = false;
 	out->debugLogging = false;
+	out->devCommands = false;
 	out->status = CONFIG_NOT_FOUND;
 	out->created = false;
 
@@ -1159,6 +1174,25 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 		if (strcmp(key, "GameDir") == 0) {
 			strncpy(out->gameDir, val, sizeof(out->gameDir) - 1);
 			out->gameDir[sizeof(out->gameDir) - 1] = '\0';
+		} else if (strcasecmp(key, "Language") == 0) {
+			// The PC's LANGUAGES/<name>.bin files, by name or by code. The
+			// fonts carry Latin-1, so the Asian tables are left out.
+			static const struct { const char* name; const char* file; } kLanguages[] = {
+				{ "EN", "" }, { "ENGLISH", "" },
+				{ "FR", "French" }, { "FRENCH", "French" }, { "FRANCAIS", "French" },
+				{ "DE", "German" }, { "GERMAN", "German" }, { "DEUTSCH", "German" },
+				{ "IT", "Italian" }, { "ITALIAN", "Italian" }, { "ITALIANO", "Italian" },
+				{ "ES", "Spanish" }, { "SPANISH", "Spanish" }, { "ESPANOL", "Spanish" },
+				{ "NL", "Dutch" }, { "DUTCH", "Dutch" }, { "NEDERLANDS", "Dutch" },
+				{ "SV", "Swedish" }, { "SWEDISH", "Swedish" },
+				{ "DA", "Danish" }, { "DANISH", "Danish" },
+			};
+			out->language[0] = '\0';
+			for (size_t li = 0; li < sizeof(kLanguages) / sizeof(kLanguages[0]); li++)
+				if (strcasecmp(val, kLanguages[li].name) == 0) {
+					snprintf(out->language, sizeof(out->language), "%s", kLanguages[li].file);
+					break;
+				}
 		} else if (strcmp(key, "Mods") == 0) {
 			snprintf(out->mods, sizeof(out->mods), "%s", val);
 			out->modsSet = true;
@@ -1514,6 +1548,8 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 			out->debugMenuEnabled = atoi(val) != 0;
 		} else if (strcasecmp(key, "DebugLogging") == 0) {
 			out->debugLogging = atoi(val) != 0;
+		} else if (strcasecmp(key, "DevCommands") == 0) {
+			out->devCommands = atoi(val) != 0;
 		}
 	}
 	fclose(f);
@@ -1546,8 +1582,8 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 		out->status = isDir ? CONFIG_OK : CONFIG_GAMEDIR_MISSING;
 	}
 
-	snprintf(b, sizeof(b), "config loaded: GameDir=%s HwVideo=%d HwVideoSelfTest=%d%s",
-		out->gameDir, out->hwVideo, out->hwVideoSelfTest,
+	snprintf(b, sizeof(b), "config loaded: GameDir=%s Language=%s HwVideo=%d HwVideoSelfTest=%d%s",
+		out->gameDir, out->language[0] ? out->language : "English", out->hwVideo, out->hwVideoSelfTest,
 		out->status == CONFIG_NO_GAMEDIR ? " -- no GameDir line" :
 		out->status == CONFIG_GAMEDIR_MISSING ? " -- that folder is not on the SD card" : "");
 	dlog(b);
@@ -1640,6 +1676,22 @@ static bool buildGamePath(const Config* cfg, const char* relPath, char* out, siz
 	if (cfg->gameDir[0] == '\0') return false;
 	size_t len = strlen(cfg->gameDir);
 	bool needsSlash = (len > 0 && cfg->gameDir[len - 1] != '/');
+	// Language=: the chosen table in English.bin's place, when it is on the card.
+	if (cfg->language[0] != '\0' && strcmp(relPath, "LANGUAGES/English.bin") == 0) {
+		struct stat st;
+		snprintf(out, outSize, "sdmc:%s%sLANGUAGES/%s.bin", cfg->gameDir, needsSlash ? "/" : "",
+			cfg->language);
+		const bool ok = stat(out, &st) == 0 && S_ISREG(st.st_mode);
+		static bool logged;
+		if (!logged) {
+			logged = true;
+			char b[640];
+			snprintf(b, sizeof(b), "language: %s%s", out, ok ? "" : " not on the card -- English");
+			dlog(b);
+		}
+		if (ok)
+			return true;
+	}
 	snprintf(out, outSize, "sdmc:%s%s%s", cfg->gameDir, needsSlash ? "/" : "", relPath);
 	return true;
 }
@@ -4684,6 +4736,8 @@ typedef struct {
 	// texture, warmed by hash at load time because no widget references them.
 	C2D_Image itemIcons[MENU_MAX_ITEMS];
 	C2D_Text itemLabels[MENU_MAX_ITEMS];
+	// PORT: the same labels as plain UTF-8, for the U2-UI grid (drawUiIconGrid()).
+	char itemStr[MENU_MAX_ITEMS][48];
 	bool hasItemLabel[MENU_MAX_ITEMS];
 	int selected;
 	// A screen whose rows are built at load time rather than read straight out
@@ -5174,6 +5228,10 @@ typedef struct {
 	bool isFeDialog;
 	int feDlgButton[3];
 	int feDlgLabel[3];
+	// PORT: the blurb and the three labels as plain UTF-8, for the lower
+	// screen's own dialog (drawUiDialog()), which wraps them itself.
+	char dlgBlurb[256];
+	char dlgLabel[3][40];
 	s8 feDlgOwner[FNG_MAX_WIDGETS];
 	// UI_PostRaceResults.fng only (PostRaceResultsScreen, see g_postRace):
 	// the TIME_DATA_n Strings and HEADER_TEXT_3 by widget index, and
@@ -8393,6 +8451,32 @@ static const char* engageDialogFng(void) {
 #define ENGAGE_BTN_HIGHLIGHT_RGBA C2D_Color32(0xCC, 0xF4, 0x8A, 0xFF)
 #define ENGAGE_BTN_NORMAL_RGBA    C2D_Color32(0xE1, 0xE1, 0xE1, 0xFF)
 
+// PORT: the engage dialogs' texts as plain UTF-8, kept as loadFngScreen()
+// writes them, for the lower screen's U2-UI skin (drawUiEngage()), which
+// wraps the body itself.
+static struct {
+	char subject[96], type[48], body[640], from[96], dist[32], purse[32];
+	char title[96], accept[48], button3[48];
+} g_engStr;
+static void engageStrKeep(u32 objHash, const char* s) {
+	char* d = NULL;
+	size_t cap = 0;
+	switch (objHash) {
+		case ENGAGE_DLG_SUBJECT_HASH:  d = g_engStr.subject; cap = sizeof(g_engStr.subject); break;
+		case ENGAGE_DLG_TYPE_HASH:     d = g_engStr.type;    cap = sizeof(g_engStr.type);    break;
+		case ENGAGE_DLG_BODY_HASH:     d = g_engStr.body;    cap = sizeof(g_engStr.body);    break;
+		case ENGAGE_DLG_FROM_HASH:     d = g_engStr.from;    cap = sizeof(g_engStr.from);    break;
+		case ENGAGE_DLG_DISTANCE_HASH: d = g_engStr.dist;    cap = sizeof(g_engStr.dist);    break;
+		case ENGAGE_DLG_PURSE_HASH:    d = g_engStr.purse;   cap = sizeof(g_engStr.purse);   break;
+		case 0x02EDBDE5u:              d = g_engStr.title;   cap = sizeof(g_engStr.title);   break; // ENGAGE_SHOP_TITLE_HASH
+		case 0x04A04E7Cu:              d = g_engStr.body;    cap = sizeof(g_engStr.body);    break; // ENGAGE_SHOP_BODY_HASH
+		case 0xD72F002Au:              d = g_engStr.accept;  cap = sizeof(g_engStr.accept);  break; // ENGAGE_ACCEPT_BTN_HASH
+		case 0xB8A7C6CEu:              d = g_engStr.button3; cap = sizeof(g_engStr.button3); break; // ENGAGE_BUTTON3_HASH
+		default: return;
+	}
+	snprintf(d, cap, "%s", s);
+}
+
 static bool engageDialogOwns(u32 objHash) {
 	return objHash == ENGAGE_DLG_SUBJECT_HASH || objHash == ENGAGE_DLG_TYPE_HASH ||
 		objHash == ENGAGE_DLG_BODY_HASH || objHash == ENGAGE_DLG_FROM_HASH ||
@@ -9439,6 +9523,17 @@ static struct {
 	char rdBody[1600];
 } g_smsBox;
 
+// PORT: the mailbox and the reader in the lower screen's kit
+// (drawUiMailbox(), drawUiSmsReader()): their touch targets as last drawn,
+// and the reader's scroll in pixels.
+enum { SMH_BACK = 1, SMH_PREV, SMH_NEXT, SMH_READ, SMH_DELETE, SMH_DRIVE, SMH_INBOX, SMH_ROW0 = 32 };
+typedef struct { float x, y, w, h; int id; } SmsHit;
+static SmsHit g_smsHit[48];
+static int g_smsHitN = 0;
+static bool g_smsSkin = false;
+static float g_smsReaderTop = 0.0f, g_smsReaderMax = 0.0f;
+static int g_smsListTop = 0;
+
 static void smsBoxForget(void) {
 	free(g_smsBox.subj);
 	memset(&g_smsBox, 0, sizeof(g_smsBox));
@@ -9563,6 +9658,7 @@ static const char* smsBoxWantedScreen(void) {
 // thing. That in turn tells the prologue (Stage0StateManager::NotifyReadMessage
 // 0x80130668), which is one of the two flags state 5 waits on.
 static void smsReaderOpened(void) {
+	g_smsReaderTop = 0.0f;
 	if (g_smsBox.readerSlot < 0)
 		return;
 	const bool wasUnread = gProfile.sms[g_smsBox.readerSlot].read == 0;
@@ -9830,6 +9926,13 @@ typedef struct {
 	char text[256];
 } FeDialog;
 static FeDialog g_feDialog;
+// PORT: the skinned dialog's buttons as drawn last frame, for the touch.
+typedef struct { float r[4]; int button; } UiDlgHit;
+static UiDlgHit g_uiDlgHit[3];
+static int g_uiDlgHitN = 0;
+// The same for MC_Main's question (drawUiMcAsk()).
+static UiDlgHit g_mcDlgHit[2];
+static int g_mcDlgHitN = 0;
 
 static bool feDialogOwns(u32 objHash) {
 	return objHash == FEDLG_BLURB_HASH || objHash == FEDLG_LABEL1_HASH ||
@@ -16259,6 +16362,15 @@ static unsigned char g_gmNoProfileFilter[GAMEMAP_FILTERS];
 // The A arm's two dialogs. With the GPS idle, Activate GPS asks (Yes 0xF770
 // posting GM_MSG_START, No 0x061C and PAD_BACK posting GM_MSG_NO); with it
 // running, an OK that posts GM_MSG_STOP.
+// PORT: the World Map in the lower screen's kit (drawUiWorldMap()): its
+// touch targets as last drawn, whether the marker card and the filter drawer
+// are up, and a tap on Back waiting for gameMapInput().
+enum { WMH_BACK = 1, WMH_PREV, WMH_NEXT, WMH_ZIN, WMH_ZOUT, WMH_FILTERS, WMH_GPS, WMH_CARD_GPS,
+	WMH_CARD, WMH_DRAWER, WMH_ALL, WMH_DONE, WMH_ROW0 = 32 };
+typedef struct { float x, y, w, h; int id; } WmHit;
+static WmHit g_wmHit[48];
+static int g_wmHitN = 0;
+static bool g_wmCard = false, g_wmDrawer = false, g_wmBack = false, g_wmSkin = false;
 #define GM_MSG_START 0x51123592u
 #define GM_MSG_NO    0xB4623F67u
 #define GM_MSG_STOP  0x34DC1BECu
@@ -16898,6 +17010,8 @@ static bool loadFngScreenFresh(const Config* cfg, const char* screenName, bool f
 	const bool engageDlg = g_engageDlg.kind != ENGAGE_KIND_NONE &&
 		strcasecmp(screenName, engageDialogFng()) == 0;
 	const bool engageRace = engageDlg && g_engageDlg.kind == ENGAGE_KIND_RACE;
+	if (engageDlg)
+		memset(&g_engStr, 0, sizeof(g_engStr));
 	const bool feDlg = g_feDialog.up && strcasecmp(screenName, g_feDialog.pkg) == 0;
 	const bool ctrlScreen = strcasecmp(screenName, "UI_OptionsController.fng") == 0;
 	// Customize Display Settings (TASKS.md #326): a screen class of its own on
@@ -16982,6 +17096,7 @@ static bool loadFngScreenFresh(const Config* cfg, const char* screenName, bool f
 			const LangTable* lt = langLoaded ? &lang : NULL;
 			if (engageRace ? engageDialogText(lt, w->objHash, tmp, sizeof(tmp))
 					: engageEventText(lt, w->objHash, tmp, sizeof(tmp))) {
+				engageStrKeep(w->objHash, tmp);
 				C2D_TextFontParse(&out->texts[i], g_uiFont, out->textBuf, tmp);
 				C2D_TextOptimize(&out->texts[i]);
 				out->hasText[i] = true;
@@ -16992,6 +17107,11 @@ static bool loadFngScreenFresh(const Config* cfg, const char* screenName, bool f
 		if (feDlg && w->type == FNG_TYPE_STRING && w->hasObjHash &&
 				feDialogOwns(w->objHash)) {
 			if (feDialogText(langLoaded ? &lang : NULL, w->objHash, tmp, sizeof(tmp))) {
+				if (w->objHash == FEDLG_BLURB_HASH)
+					snprintf(out->dlgBlurb, sizeof(out->dlgBlurb), "%s", tmp);
+				for (int k = 0; k < 3; k++)
+					if (w->objHash == FEDLG_LABEL1_HASH + (u32)k)
+						snprintf(out->dlgLabel[k], sizeof(out->dlgLabel[k]), "%s", tmp);
 				C2D_TextFontParse(&out->texts[i], g_uiFont, out->textBuf, tmp);
 				C2D_TextOptimize(&out->texts[i]);
 				out->hasText[i] = true;
@@ -18493,6 +18613,7 @@ static bool loadFngScreenFresh(const Config* cfg, const char* screenName, bool f
 			continue;
 		char lt[256];
 		langTextToUtf8(raw, lt, sizeof(lt));
+		snprintf(out->itemStr[i], sizeof(out->itemStr[i]), "%s", lt);
 		C2D_TextFontParse(&out->itemLabels[i], g_uiFont, out->textBuf, lt);
 		C2D_TextOptimize(&out->itemLabels[i]);
 		out->hasItemLabel[i] = true;
@@ -19737,6 +19858,7 @@ static bool feDialogShow(const Config* cfg, MenuState* dlg, const char* pkg, int
 	g_feDialog.numButtons = numButtons;
 	g_feDialog.current = numButtons == 1 ? 2 : 1;
 	g_feDialog.up = true;
+	g_uiDlgHitN = 0;
 	freeMenu(dlg);
 	if (!loadFngScreen(cfg, g_feDialog.pkg, false, dlg)) {
 		g_feDialog.up = false;
@@ -24873,18 +24995,11 @@ static int feSoundFilter(const MenuState* m, int ev) {
 	// The paint list is up: its scrolls make their own (paintInput()).
 	if (m && m->isPaint && g_paint.browsing && ev >= FE_EV_LEFT && ev <= FE_EV_DOWN)
 		return FE_EV_NONE;
-	if (m && m->isIconScroller) {
-		// IconPanel has no vertical message at all, and its LEFT/RIGHT stop
-		// at the ends instead of wrapping (ICONSCROLL_WIDTH), so a press
-		// that runs off the strip posts nothing and retail stays silent --
-		// BaseNotifySound hangs off the notification, not off the pad.
-		if (ev == FE_EV_UP || ev == FE_EV_DOWN)
-			return FE_EV_NONE;
-		if (ev == FE_EV_LEFT && m->selected <= 0)
-			return FE_EV_NONE;
-		if (ev == FE_EV_RIGHT && m->selected >= m->itemCount - 1)
-			return FE_EV_NONE;
-	}
+	// PORT (the user, 2026-11-15: "de cima pra baixo não faz som, corrija pra
+	// tudo fazer som"): retail's IconPanel has no vertical message and stays
+	// silent off either end of the strip, but the lower screen's grid
+	// (drawUiIconGrid()) walks UP / DOWN too, so every direction clicks here,
+	// the ends included.
 	// CribWorldMapScreen plays its own: ScrollEvent's 6/7 and ScrollRegion's
 	// 4/5 only when the selection moved, the A arm's 8 only off the region
 	// node. Back's 10 is the one it plays unconditionally.
@@ -26653,14 +26768,15 @@ static void wmScrollRegion(MenuState* m, int dir, u64 now, float dt, const char*
 // selection a node per stride of travel, the way the strip itself moves. The
 // region arrows and the side arrows take a tap while RefreshHeader shows them.
 #define WM_TOUCH_MIN_PX 24.0f
+static bool fskLive(const MenuState* m);
 static void wmTouch(MenuState* m, const Config* cfg, MenuState* dlg, u64 now, float dt) {
 	static bool s_stripDrag = false;
 	static float s_anchorY = 0.0f;
 	const TouchState* t = &g_touch;
 	const int mi = m->wmMasterWidget;
 	if (!m->isWorldMap || mi < 0 || !m->splitToBottom || g_feDialog.up ||
-			!(t->held || t->up))
-		return;
+			!(t->held || t->up) || fskLive(m))
+		return;   // the skin's own targets (drawUiCribMap()) when it is up
 	const CribMap* cm = &g_cribMap;
 	float nodeY[CRIBMAP_MAX_NODES];
 	menuSelectPanel(m, true);
@@ -26929,6 +27045,19 @@ static u32 mcMainTouchKeys(MenuState* m, char* b, size_t cap) {
 	const TouchState* t = &g_touch;
 	if (!m->isMcMain || !mcMainAsking(m) || !touchTapped())
 		return 0;
+	// The skinned dialog (drawUiMcAsk()): a tap on a button is that button,
+	// at once -- made current, then accepted.
+	if (m->screenW == SCREEN_BOT_W && g_mcDlgHitN > 0) {
+		for (int k = 0; k < g_mcDlgHitN; k++) {
+			const float* r = g_mcDlgHit[k].r;
+			if (t->x < r[0] || t->x >= r[0] + r[2] || t->y < r[1] || t->y >= r[1] + r[3])
+				continue;
+			m->mcCurrent = g_mcDlgHit[k].button;
+			snprintf(b, cap, "fe touch: memory card dialog button %d tapped -> A", m->mcCurrent);
+			return KEY_A;
+		}
+		return 0;
+	}
 	for (int k = 0; k < 2; k++) {
 		if (!menuTouchHitsWidget(m, m->mcBtn[k], FE_TOUCH_MIN_PX, t->x, t->y) &&
 				!menuTouchHitsWidget(m, m->mcBtnBg[k], FE_TOUCH_MIN_PX, t->x, t->y))
@@ -27159,6 +27288,137 @@ static bool carSelLegendTapped(MenuState* m, int x, int y) {
 	return false;
 }
 
+// PORT: the lower screen's U2-UI skins of frontend and in-world screens (the
+// user's mockup, 2026-11-14) lay out their touch targets here as they draw,
+// and the next tap goes through fskTouchKeys(): into the keys the screen's
+// own input already answers, so every screen keeps retail's logic. A skin is
+// live for the menu it last drew while it keeps drawing (FSK_LIVE_MS).
+enum { FSK_KEY = 1, FSK_ITEM, FSK_ROW, FSK_ROWA, FSK_ROWL, FSK_ROWR, FSK_BTN, FSK_CAR, FSK_PART,
+	FSK_LIST, FSK_SWATCH, FSK_LANROW, FSK_LANBTN, FSK_LANOPT };
+typedef struct { float x, y, w, h; int kind; u32 arg; } FskHit;
+#define FSK_MAX 64
+#define FSK_LIVE_MS 250u
+#define UI_STATUS_ROW_H 22.0f   // the Career Status skin's row pitch: STATUS_SLOTS fit
+static FskHit g_fsk[FSK_MAX];
+static int g_fskN;
+static const MenuState* g_fskMenu;
+static u64 g_fskMs;
+// The current row of the list a skin laid FSK_LIST targets over: a tap on it
+// is A, on another row that many UP / DOWN steps.
+static int g_fskListSel;
+// Where the dyno's graph skins laid out their plots (drawUiTuneGraph(),
+// drawUiTuneNos()), for tuneGraphTouch() and tuneNosTouch() while one is live.
+static struct { bool on; float x, y, w, h, knob; } g_uiTg, g_uiNos;
+static void fskBegin(const MenuState* m) {
+	g_fskMenu = m;
+	g_fskMs = osGetTime();
+	g_fskN = 0;
+}
+static void fskHit(float x, float y, float w, float h, int kind, u32 arg) {
+	if (g_fskN < FSK_MAX)
+		g_fsk[g_fskN++] = (FskHit){ x, y, w, h, kind, arg };
+}
+static bool fskLive(const MenuState* m) {
+	return m && g_fskMenu == m && osGetTime() - g_fskMs < FSK_LIVE_MS;
+}
+// A tap on the live skin: the keys it stands for (or a queued walk to the
+// tapped item / row). Later hits are on top, so they are tried first.
+static u32 fskTouchKeys(MenuState* m, char* b, size_t cap) {
+	if (!fskLive(m) || !touchTapped())
+		return 0;
+	const float x = (float)g_touch.x, y = (float)g_touch.y;
+	for (int k = g_fskN - 1; k >= 0; k--) {
+		const FskHit* h = &g_fsk[k];
+		if (x < h->x || x >= h->x + h->w || y < h->y || y >= h->y + h->h)
+			continue;
+		u32 keys = 0;
+		const int a = (int)h->arg;
+		switch (h->kind) {
+			case FSK_KEY:
+				keys = h->arg;
+				break;
+			case FSK_ITEM:
+				if (a == m->selected)
+					keys = KEY_A;
+				else
+					feTouchQueue(a > m->selected ? KEY_RIGHT : KEY_LEFT, abs(a - m->selected));
+				break;
+			case FSK_ROW:
+			case FSK_ROWA:
+			case FSK_ROWL:
+			case FSK_ROWR:
+				if (a != m->modeRowSel)
+					feTouchQueue(a > m->modeRowSel ? KEY_DOWN : KEY_UP, abs(a - m->modeRowSel));
+				else if (h->kind == FSK_ROWL)
+					keys = KEY_LEFT;
+				else if (h->kind == FSK_ROWR)
+					keys = KEY_RIGHT;
+				else if (h->kind == FSK_ROWA)
+					keys = KEY_A;
+				break;
+			case FSK_BTN:
+				keys = a == m->engageSel ? KEY_A : a == 0 ? KEY_LEFT : KEY_RIGHT;
+				break;
+			case FSK_PART:
+				// A body shop part row: the current one is A, another that many
+				// steps down the list (bodyShopInput()'s ScrollVertical).
+				if (a == g_bodyShop.sel)
+					keys = KEY_A;
+				else
+					feTouchQueue(a > g_bodyShop.sel ? KEY_DOWN : KEY_UP, abs(a - g_bodyShop.sel));
+				break;
+			case FSK_LIST:
+				if (a == g_fskListSel)
+					keys = KEY_A;
+				else
+					feTouchQueue(a > g_fskListSel ? KEY_DOWN : KEY_UP, abs(a - g_fskListSel));
+				break;
+			case FSK_SWATCH: {
+				// A paint swatch: in the current one's row, LEFT / RIGHT
+				// steps; in another row, UP / DOWN to it first.
+				const int cur = g_paint.sel;
+				if (a == cur)
+					keys = KEY_A;
+				else if (a / PAINT_COLS == cur / PAINT_COLS)
+					feTouchQueue(a > cur ? KEY_RIGHT : KEY_LEFT, abs(a - cur));
+				else
+					feTouchQueue(a > cur ? KEY_DOWN : KEY_UP, abs(a / PAINT_COLS - cur / PAINT_COLS));
+				break;
+			}
+			case FSK_LANROW:
+				// lanTouchKeys()'s rows: another row is selected at once.
+				if (a == m->lanSel) {
+					if (m->lanKind == LANK_LOBBY)
+						m->lanBtn = 1;   // Join Game
+					keys = KEY_A;
+				} else {
+					m->lanSel = a;
+				}
+				break;
+			case FSK_LANBTN:
+				m->lanBtn = a;
+				keys = KEY_A;
+				break;
+			case FSK_LANOPT:
+				m->lanSel = 0;
+				keys = KEY_A;
+				break;
+			case FSK_CAR:
+				// A car row: the current one is A, another that many steps.
+				if (a == m->carRowSel)
+					keys = KEY_A;
+				else
+					feTouchQueue(a > m->carRowSel ? KEY_RIGHT : KEY_LEFT, abs(a - m->carRowSel));
+				break;
+		}
+		if (b && cap)
+			snprintf(b, cap, "ui skin touch: %s hit %d (kind %d, arg %d) -> keys %08lX", m->screenName,
+				k, h->kind, a, (unsigned long)keys);
+		return keys;
+	}
+	return 0;
+}
+
 static u32 feTouchKeys(MenuState* m, MenuState* dlg, u32 kDown) {
 	static char s_screen[64];
 	static bool s_dlgUp = false;
@@ -27182,6 +27442,18 @@ static u32 feTouchKeys(MenuState* m, MenuState* dlg, u32 kDown) {
 		if (g_feHelpUp && dlg->isFeDialog && dlg->touchBottomWhole && touchTapped()) {
 			keys = KEY_B;
 			snprintf(b, sizeof(b), "fe touch: help dialog tapped -> B");
+		} else if (dlg->isFeDialog && touchTapped() && g_uiDlgHitN > 0) {
+			// The skinned dialog (drawUiDialog()): a tap on a button is that
+			// button, at once -- made current, then accepted.
+			for (int k = 0; k < g_uiDlgHitN; k++) {
+				const float* r = g_uiDlgHit[k].r;
+				if (t->x < r[0] || t->x >= r[0] + r[2] || t->y < r[1] || t->y >= r[1] + r[3])
+					continue;
+				g_feDialog.current = g_uiDlgHit[k].button;
+				keys = KEY_A;
+				snprintf(b, sizeof(b), "fe touch: dialog Button%d tapped -> A", g_uiDlgHit[k].button + 1);
+				break;
+			}
 		} else if (dlg->isFeDialog && dlg->touchBottomWhole && touchTapped()) {
 			for (int i = 0; i < dlg->screen.widgetCount && i < FNG_MAX_WIDGETS; i++) {
 				const int k = dlg->feDlgOwner[i];
@@ -27194,6 +27466,9 @@ static u32 feTouchKeys(MenuState* m, MenuState* dlg, u32 kDown) {
 				break;
 			}
 		}
+	} else if (fskLive(m)) {
+		// A U2-UI skin drew this screen: its own targets, nothing else.
+		keys = fskTouchKeys(m, b, sizeof(b));
 	} else if (touchTapped() && feHelpTapped(m, t->x, t->y)) {
 		keys = KEY_ZL;
 		snprintf(b, sizeof(b), "fe touch: Help tapped -> ZL (Pad_Button4)");
@@ -28327,6 +28602,73 @@ static int ctsWrapText(const MenuFont* f, const char* src, float limit, char* ds
 	return lines;
 }
 
+// PORT: ctsWrapText() measures with the PC font's own widths, but the lines are
+// drawn with g_uiFont at the MENU_MIN_TEXT_PX floor, which is wider -- on the
+// lower panel the reader's lines ran past the screen's right edge. This wraps
+// the same way (breaks at '\n' / '^', then whole words) measuring what is
+// actually drawn, against the pixels the line really has.
+static float smsMeasurePx(C2D_TextBuf tmp, const char* str, float sx, float sy) {
+	if (!str[0])
+		return 0.0f;
+	C2D_TextBufClear(tmp);
+	C2D_Text t;
+	C2D_TextFontParse(&t, g_uiFont, tmp, str);
+	float w = 0.0f, h = 0.0f;
+	textDims(&t, sx, sy, &w, &h);
+	return w;
+}
+
+static void smsWrapPx(C2D_TextBuf tmp, const char* src, float sx, float sy, float limitPx,
+		char* dst, size_t cap) {
+	size_t o = 0;
+	int lines = 0;
+	char line[256];
+	if (cap > 0)
+		dst[0] = '\0';
+	const char* p = src;
+	for (;;) {
+		const char* cr = p;
+		while (*cr && *cr != '\n' && *cr != '^')
+			cr++;
+		size_t ll = 0;
+		line[0] = '\0';
+		const char* q = p;
+		bool any = false;
+		while (q < cr) {
+			while (q < cr && *q == ' ')
+				q++;
+			if (q >= cr)
+				break;
+			const char* we = q;
+			while (we < cr && *we != ' ')
+				we++;
+			char cand[256];
+			const int n = snprintf(cand, sizeof(cand), "%s%s%.*s", line, ll ? " " : "",
+				(int)(we - q), q);
+			if (ll == 0 || (n < (int)sizeof(cand) && smsMeasurePx(tmp, cand, sx, sy) <= limitPx)) {
+				snprintf(line, sizeof(line), "%s", cand);
+				ll = strlen(line);
+			} else {
+				if (lines++ > 0)
+					menuWrapPut(dst, cap, &o, "\n", 1);
+				menuWrapPut(dst, cap, &o, line, ll);
+				any = true;
+				snprintf(line, sizeof(line), "%.*s", (int)(we - q), q);
+				ll = strlen(line);
+			}
+			q = we;
+		}
+		if (ll > 0 || !any) {
+			if (lines++ > 0)
+				menuWrapPut(dst, cap, &o, "\n", 1);
+			menuWrapPut(dst, cap, &o, line, ll);
+		}
+		if (!*cr || !cr[1])
+			break;
+		p = cr + 1;
+	}
+}
+
 // The reader's ten Body_Text lines are 23 canvas units apart, so the floor
 // would stack them through each other: each is capped at the line box that
 // pitch holds, as the sponsor's TERMS lines are (postRaceSponsorLayout()).
@@ -28371,6 +28713,32 @@ static void smsReaderLayout(MenuState* m) {
 		if (raw > 0.0f && drawn > 0.0f)
 			limit *= raw / drawn;
 		ctsWrapText(&mf, body, limit, m->rdWrap, sizeof(m->rdWrap));
+		// PORT: rewrap in drawn pixels when the line is left-justified (see
+		// smsWrapPx()). The room is the authored box or what the panel has
+		// right of the line's x, whichever is less.
+		const u32 just = w->hasJustify ? w->justify : 0x5u;
+		C2D_TextBuf ptmp = !(just & 0x2u) && drawn > 0.0f ? C2D_TextBufNew(256) : NULL;
+		if (ptmp) {
+			const bool wasBottom = m->drawingBottom;
+			menuSelectPanel(m, m->layoutBottom[t0]);
+			float sx = drawn;
+			if (m->groupScaleY[t0] > 0.0f && m->groupScaleX[t0] != m->groupScaleY[t0])
+				sx *= m->groupScaleX[t0] / m->groupScaleY[t0];
+			const float ax = menuX(m, m->worldPosX[t0]);
+			float px = (float)(w->maxWidth - 16) * m->layoutScale * menuStretchX(m) *
+				(m->groupScaleX[t0] > 0.0f ? m->groupScaleX[t0] : 1.0f);
+			// Left-justified: the room right of the anchor. Centred (the
+			// reader's body is): twice the nearer side's room.
+			const float edge = (just & 0x1u)
+				? 2.0f * fminf(ax - 12.0f, m->screenW - 12.0f - ax)
+				: m->screenW - 12.0f - ax;
+			if (m->screenW > 0.0f && edge < px)
+				px = edge;
+			menuSelectPanel(m, wasBottom);
+			if (px > 40.0f)
+				smsWrapPx(ptmp, body, sx, drawn, px, m->rdWrap, sizeof(m->rdWrap));
+			C2D_TextBufDelete(ptmp);
+		}
 	} else {
 		snprintf(m->rdWrap, sizeof(m->rdWrap), "%s", body);
 	}
@@ -29622,6 +29990,8 @@ static float bodyShopHandleY(const MenuState* m, int hw) {
 static void drawBodyShopParts(MenuState* m) {
 	bodyShopRefreshHeader(m);
 	drawHudPicker(m);
+	if (fskLive(m))
+		return; // the parts list's skin (drawUiBodyParts()) drew its own
 	const BodyShopCat* c = bodyShopCurrent(m);
 	if (!c || !g_bodyShop.browsing || m->bsMiniWidget < 0)
 		return;
@@ -29916,6 +30286,19 @@ static bool tuneGraphTouch(MenuState* m, int* col, float* canvasY) {
 	int px = 0, py = 0;
 	if (!touchTapAt(&px, &py))
 		return false;
+	if (fskLive(m) && g_uiTg.on) {
+		// The skin's plot (drawUiTuneGraph()): its column, and the tap's
+		// height as the canvas y the same value stands at on retail's.
+		if (px < g_uiTg.x || px >= g_uiTg.x + g_uiTg.w || py < g_uiTg.y - 16.0f ||
+				py > g_uiTg.y + g_uiTg.h + 16.0f || g_uiTg.w <= 0.0f || g_uiTg.h <= 0.0f)
+			return false;
+		*col = (int)(((float)px - g_uiTg.x) / (g_uiTg.w / (float)CUSTTUNE_CURVE_POINTS));
+		if (*col >= CUSTTUNE_CURVE_POINTS)
+			*col = CUSTTUNE_CURVE_POINTS - 1;
+		const float f = (g_uiTg.y + g_uiTg.h - (float)py) / g_uiTg.h;
+		*canvasY = g_tgraph.oy - TGRAPH_H * f;
+		return true;
+	}
 	menuSelectPanel(m, true);
 	const float sx = m->layoutScale * menuStretchX(m);
 	if (sx <= 0.0f || m->layoutScale <= 0.0f)
@@ -30057,6 +30440,12 @@ static int tuneNosTouch(MenuState* m) {
 	int px = 0, py = 0;
 	if (!touchTapAt(&px, &py))
 		return 0;
+	if (fskLive(m) && g_uiNos.on) {
+		// The skin's slider (drawUiTuneNos()); its arrows are fskHit()s.
+		if (px < g_uiNos.x || px >= g_uiNos.x + g_uiNos.w || py < g_uiNos.y || py >= g_uiNos.y + g_uiNos.h)
+			return 0;
+		return (float)px < g_uiNos.knob ? -1 : 1;
+	}
 	if (menuTouchHitsWidget(m, g_tnos.arrow[0], 24.0f, px, py))
 		return -1;
 	if (menuTouchHitsWidget(m, g_tnos.arrow[1], 24.0f, px, py))
@@ -30460,8 +30849,183 @@ static int modeRowImageTint(const MenuState* m, int i, u32* rgba) {
 	return 0;
 }
 
+// PORT: the badge rect drawMenu() gives a $JOY_EVENT$ slot, the same sums as
+// its draw, for menuTextKeepClear().
+static bool menuPadGlyphRect(const MenuState* m, int i, float* x0, float* y0, float* x1,
+		float* y1) {
+	if (i < 0 || i >= m->screen.widgetCount || m->layoutHidden[i] ||
+			m->layoutBottom[i] != m->drawingBottom)
+		return false;
+	const FngWidget* w = &m->screen.widgets[i];
+	if (!w->hasPos)
+		return false;
+	const float x = menuX(m, m->worldPosX[i]);
+	const float y = menuWidgetY(m, i);
+	float gh = menuTextScaleRaw(m, w) * m->groupScaleY[i] * g_fontUnitPx;
+	if (gh < 8.0f)
+		gh = 8.0f;
+	const float r = gh * 0.5f;
+	const u32 just = w->hasJustify ? w->justify : 0x5u;
+	const float cx = (just & 0x2u) ? x - r : (just & 0x1u) ? x : x + r;
+	const float cy = (just & 0x4u) ? y : (just & 0x8u) ? y - r : y + r;
+	const float hw = gh * (float)PAD_CELL_W / (float)PAD_CELL_ART_H * 0.5f;
+	*x0 = cx - hw;
+	*x1 = cx + hw;
+	*y0 = cy - r;
+	*y1 = cy + r;
+	return true;
+}
+
+// PORT (legibility, not engine behaviour): MENU_MIN_TEXT_PX makes a floored
+// string wider than the designer's, and on a 320/400 px panel that width ran
+// labels off the screen's edge and under the button badge beside them ("Go to
+// Mailboxes" behind its B). A string is first moved off any badge it now
+// overlaps on its own line, then narrowed (down to MENU_TEXT_EDGE_SQUEEZE of
+// its width) and slid back inside the panel. A string wholly off the panel is
+// left alone -- that is a layout parking it there, not an overflow.
+#define MENU_TEXT_EDGE_PAD     4.0f
+#define MENU_TEXT_EDGE_SQUEEZE 0.75f
+static void menuTextKeepClear(const MenuState* m, int wi, u32 align, float* x,
+		float y0, float y1, float* scaleX, float* tw) {
+	const float W = m->screenW;
+	if (W <= 0.0f || *tw <= 0.0f)
+		return;
+	float left = align == C2D_AlignRight ? *x - *tw
+		: align == C2D_AlignCenter ? *x - *tw * 0.5f : *x;
+	if (left > W || left + *tw < 0.0f)
+		return;
+	float dx = 0.0f;
+	for (int k = 0; k < m->padGlyphCount; k++) {
+		const int gi = m->padGlyphIdx[k];
+		if (gi == wi)
+			continue;
+		float gx0, gy0, gx1, gy1;
+		if (!menuPadGlyphRect(m, gi, &gx0, &gy0, &gx1, &gy1))
+			continue;
+		const float l = left + dx, r = l + *tw;
+		if (y1 <= gy0 || y0 >= gy1 || r <= gx0 || l >= gx1)
+			continue;
+		const float gc = (gx0 + gx1) * 0.5f;
+		if (l + *tw * 0.5f >= gc)
+			dx += gx1 + 2.0f - l;   // the words go right of the badge
+		else
+			dx -= r - (gx0 - 2.0f); // or left of it
+	}
+	left += dx;
+	const float room = W - 2.0f * MENU_TEXT_EDGE_PAD;
+	if (*tw > room) {
+		float k = room / *tw;
+		if (k < MENU_TEXT_EDGE_SQUEEZE)
+			k = MENU_TEXT_EDGE_SQUEEZE;
+		*scaleX *= k;
+		*tw *= k;
+	}
+	if (left + *tw > W - MENU_TEXT_EDGE_PAD)
+		left = W - MENU_TEXT_EDGE_PAD - *tw;
+	if (left < MENU_TEXT_EDGE_PAD)
+		left = MENU_TEXT_EDGE_PAD;
+	*x = align == C2D_AlignRight ? left + *tw
+		: align == C2D_AlignCenter ? left + *tw * 0.5f : left;
+}
+
+static bool drawUiDialog(const MenuState* m);
+static bool drawUiMcAsk(const MenuState* m);
+static void uiScreenBackdrop(float W, float H);
+static bool drawUiIconGrid(const MenuState* m);
+static bool drawUiBodyParts(const MenuState* m);
+static bool drawUiCarSelect(const MenuState* m);
+static bool drawUiTrackSelect(const MenuState* m);
+static bool uiTrackScreen(const MenuState* m);
+static bool drawUiPerfPackage(const MenuState* m);
+static bool drawUiPaint(const MenuState* m);
+static bool drawUiMcList(const MenuState* m);
+static bool drawUiTrax(const MenuState* m);
+static bool drawUiLan(const MenuState* m);
+static bool drawUiPerfBrand(const MenuState* m);
+static bool drawUiTuneGraph(const MenuState* m);
+static bool drawUiTuneNos(const MenuState* m);
+static bool drawUiDynoChart(const MenuState* m);
+static bool drawUiDynoResults(const MenuState* m);
+static bool drawUiCribMap(const MenuState* m);
+static int uiGridNav(const MenuState* m, u32 kDown);
+static bool drawUiRows(const MenuState* m);
+static bool drawUiEngage(const MenuState* m);
+static bool drawUiStatus(const MenuState* m);
+static bool drawUiHelp(const MenuState* m);
+static bool drawUiWorldMap(const MenuState* m);
+static bool drawUiMailbox(const MenuState* m);
+static bool drawUiSmsReader(const MenuState* m);
 static void drawMenu(const MenuState* m, int animFrame) {
 	const u64 now = osGetTime();
+	// A U2-UI skin is live for the frame it draws in: this menu's last one
+	// lapses here and is set again only if a skin draws it now, so a screen
+	// that follows in the same MenuState never inherits its targets.
+	if (g_fskMenu == m)
+		g_fskMenu = NULL;
+	// The U2-UI skins below are the lower screen's. A split screen also draws
+	// its top half (the stats plate over the car, menuStatsToTop()) through
+	// here, and that half keeps its authored widgets: no skin on it.
+	const bool skinOk = !m->splitToBottom || m->drawingBottom;
+	// PORT: a GenericDialog draws as the lower screen's dialog (the user's
+	// mockup, 2026-11-13); the help dialog keeps its own icon column.
+	if (skinOk && m->isFeDialog && g_feDialog.up && !g_feHelpUp && drawUiDialog(m))
+		return;
+	// PORT: MC_Main's question on the lower screen in the same dialog.
+	if (skinOk && m->isMcMain && drawUiMcAsk(m))
+		return;
+	// PORT: the rest of the lower screen in the same kit (the user's mockup,
+	// 2026-11-14): the help dialog, the icon hubs, the option pages, the
+	// engage dialogs and the Career Status overlay (its page is drawn by the
+	// master's skin, so the page's own draw is skipped while it is live).
+	if (skinOk && m->isFeDialog && g_feDialog.up && g_feHelpUp && drawUiHelp(m))
+		return;
+	if (skinOk && m->isBodyShop && drawUiBodyParts(m))
+		return;
+	if (skinOk && m->isIconScroller && drawUiIconGrid(m))
+		return;
+	if (skinOk && (m->isCribCarSel || m->isCarLot || m->hasCarRows) && drawUiCarSelect(m))
+		return;
+	if (skinOk && m->hasTrackRows && drawUiTrackSelect(m))
+		return;
+	if (skinOk && m->isPerfPackage && drawUiPerfPackage(m))
+		return;
+	if (skinOk && m->isPaint && drawUiPaint(m))
+		return;
+	if (skinOk && m->isMcList && drawUiMcList(m))
+		return;
+	if (skinOk && m->hasTraxRows && drawUiTrax(m))
+		return;
+	if (skinOk && m->lanKind && drawUiLan(m))
+		return;
+	if (skinOk && m->isPerfBrand && drawUiPerfBrand(m))
+		return;
+	if (skinOk && m->tuneGraph && drawUiTuneGraph(m))
+		return;
+	if (skinOk && m->tuneNos && drawUiTuneNos(m))
+		return;
+	if (skinOk && m->tuneChart && drawUiDynoChart(m))
+		return;
+	if (skinOk && m->tuneResults && drawUiDynoResults(m))
+		return;
+	if (skinOk && m->isWorldMap && drawUiCribMap(m))
+		return;
+	if (skinOk && m->hasModeRows && drawUiRows(m))
+		return;
+	if (skinOk && m->isEngageDlg && m->touchBottomWhole && drawUiEngage(m))
+		return;
+	if (skinOk && m->isStatus && statusPageOf(m->screenName) >= 0 && g_fskMenu && g_fskMenu->isStatus &&
+			fskLive(g_fskMenu))
+		return;
+	if (skinOk && m->isStatus && statusPageOf(m->screenName) == -1 && drawUiStatus(m))
+		return;
+	// And the in-game World Map as the lower screen's map.
+	if (skinOk && m->isGameMap && drawUiWorldMap(m))
+		return;
+	// The mailbox and its reader as the lower screen's lists.
+	if (skinOk && m->isSmsBox && g_smsBox.up && drawUiMailbox(m))
+		return;
+	if (skinOk && m->isSmsReader && g_smsBox.reader && drawUiSmsReader(m))
+		return;
 	for (int oi = 0; oi < m->screen.widgetCount; oi++) {
 		const int i = m->drawOrder[oi];
 		const FngWidget* w = &m->screen.widgets[i];
@@ -31037,6 +31601,8 @@ static void drawMenu(const MenuState* m, int animFrame) {
 			if (!wrapped && textScale > rawScale && rawScale > 0.0f) {
 				drawY -= th * (1.0f - rawScale / textScale) * 0.5f;
 			}
+			if (!menuTurnedText(m, i))
+				menuTextKeepClear(m, i, align, &x, drawY, drawY + th, &textScaleX, &tw);
 			// The help text's icon column (feHelpSplit()), on its own line
 			// pitch: two cells and a gap, the words after it.
 			if (ff && m->lineCount[i] > 1 && g_feHelpUp && m->isFeDialog &&
@@ -31259,6 +31825,8 @@ static void drawCarouselOverlay(const MenuState* m, int wi, float depth) {
 // ctor (0x4CF750) and carries no icon row at all, so while this lived inside
 // drawCarousel() its pages came up with the title band blank.
 static void drawScreenTitle(const MenuState* m) {
+	if (fskLive(m))
+		return; // a U2-UI skin drew its own
 	if (!m->hasScreenTitle || m->screenTitleWidget < 0)
 		return;
 	int wi = m->screenTitleWidget;
@@ -31328,6 +31896,8 @@ static void drawTrackInfoValues(const MenuState* m) {
 }
 
 static void drawCarousel(const MenuState* m) {
+	if (fskLive(m))
+		return; // a U2-UI skin drew its own
 	if (!m->isIconScroller || m->itemCount <= 0)
 		return;
 
@@ -31433,6 +32003,8 @@ static void drawCarousel(const MenuState* m) {
 // plate's own widgets, which drawMenu() places from the row's ratings
 // (statBarPart(), TASKS.md #116).
 static void drawCarSelect(const MenuState* m) {
+	if (fskLive(m))
+		return; // the lower screen's card (drawUiCarSelect()) drew all of it
 	if (!m->hasCarRows || m->carRowCount <= 0)
 		return;
 	const int sel = m->carRowSel;
@@ -37398,6 +37970,36 @@ static MinimapMarker g_markers[WORLD_MAX_MARKERS];
 static int g_markerCount = 0;
 // Each marker's zone, for IsRenderable's GPS test (minimap.h, "The GPS").
 static const TrackPathZone* g_markerZone[WORLD_MAX_MARKERS];
+// PORT: what the lower screen's marker card and destination strip call each
+// marker -- the element type's player-facing name (the shop records carry
+// only internal names such as UC_BODYSHOP) and, for an event, its purse.
+static char g_markerTitle[WORLD_MAX_MARKERS][24];
+static char g_markerInfo[WORLD_MAX_MARKERS][32];
+static void worldMarkerText(int i, const EventRec* ev) {
+	static const char* const kName[MINIMAP_ELEM_COUNT] = {
+		[MINIMAP_ELEM_SHOWCASE] = "Showcase", [MINIMAP_ELEM_CRIB] = "Garage",
+		[MINIMAP_ELEM_PAINTSHOP] = "Paint Shop", [MINIMAP_ELEM_PARTSSHOP] = "Parts Shop",
+		[MINIMAP_ELEM_ICESHOP] = "Car Specialties", [MINIMAP_ELEM_PERFORMANCESHOP] = "Performance Shop",
+		[MINIMAP_ELEM_CARLOT] = "Car Lot", [MINIMAP_ELEM_CIRCUITEVENT] = "Circuit",
+		[MINIMAP_ELEM_DRAGEVENT] = "Drag", [MINIMAP_ELEM_STREETEVENT] = "Street X",
+		[MINIMAP_ELEM_DRIFTEVENT] = "Drift", [MINIMAP_ELEM_SPRINTEVENT] = "Sprint",
+		[MINIMAP_ELEM_URLEVENT] = "URL", [MINIMAP_ELEM_SUVEVENT] = "SUV Race",
+	};
+	const u8 el = g_markers[i].element;
+	const char* n = el < MINIMAP_ELEM_COUNT && kName[el] ? kName[el] : "Marker";
+	snprintf(g_markerTitle[i], sizeof(g_markerTitle[i]), "%s", n);
+	g_markerInfo[i][0] = '\0';
+	if (ev) {
+		char c[24];
+		formatCashGrouped(ev->purse, c, sizeof(c));
+		snprintf(g_markerInfo[i], sizeof(g_markerInfo[i]), "%s%s%s",
+			ev->cls == EVENT_CLASS_SPON ? "Sponsor race" : "Race",
+			ev->purse ? " \xc2\xb7 $" : "", ev->purse ? c : "");
+	} else if (el >= MINIMAP_ELEM_CRIB && el <= MINIMAP_ELEM_CARLOT) {
+		snprintf(g_markerInfo[i], sizeof(g_markerInfo[i]), "%s",
+			el == MINIMAP_ELEM_CRIB ? "Save and change cars" : "Shop");
+	}
+}
 
 // The marker effects (afx.h, TASKS.md #174). g_fxZones is what
 // UpdateTriggerEffects (SPEED2.EXE 0x605780) chooses between every frame:
@@ -37787,6 +38389,10 @@ typedef enum {
 	WORLD_UI_TUNE,    // the dyno's tuning screens (#417) -- g_tune.screen
 	WORLD_UI_REPLAY,  // ReplayMenu over a race (#498) -- replayUiOpen()
 } WorldUiMode;
+// PORT: a lower-screen chip asking for one of the world's screens, answered
+// where the pad's press would be (the bank chip: status; the SMS chip: the
+// mailbox).
+static WorldUiMode g_touchOpenUi = WORLD_UI_NONE;
 
 static const char* worldUiFng(WorldUiMode m) {
 	switch (m) {
@@ -37933,14 +38539,58 @@ static bool smsBoxInput(const Config* cfg, MenuState* menu, u32 kDown) {
 	// missing under it there is nothing left to reload, so let it go.
 	if (!cfg)
 		return true;
+	// PORT: the skinned screens' taps, as the keys this screen already
+	// answers; a row tap selects, and on the selected row reads.
+	if (g_smsSkin && touchTapped()) {
+		const float x = (float)g_touch.x, y = (float)g_touch.y;
+		for (int k = g_smsHitN - 1; k >= 0; k--) {
+			const SmsHit* h = &g_smsHit[k];
+			if (x < h->x || x >= h->x + h->w || y < h->y || y >= h->y + h->h)
+				continue;
+			switch (h->id) {
+			case SMH_BACK: kDown |= g_smsBox.reader ? KEY_B : KEY_B; break;
+			case SMH_PREV: kDown |= KEY_LEFT; break;
+			case SMH_NEXT: kDown |= KEY_RIGHT; break;
+			case SMH_READ: kDown |= KEY_A; break;
+			case SMH_DELETE: kDown |= KEY_Y; break;
+			case SMH_DRIVE: kDown |= KEY_Y; break;
+			case SMH_INBOX: kDown |= KEY_B; break;
+			default:
+				if (h->id >= SMH_ROW0) {
+					const int row = h->id - SMH_ROW0;
+					if (row == g_smsBox.sel)
+						kDown |= KEY_A;
+					else
+						g_smsBox.sel = row;
+				}
+				break;
+			}
+			break;
+		}
+	}
 	if (g_smsBox.reader) {
 		// Everything else the viewer gets goes to its CTextScroller: up and
 		// down walk the body.
+		if (g_smsSkin) {
+			// The skinned reader scrolls its own wrap, a line a press, and
+			// follows a drag.
+			if (kDown & KEY_UP) g_smsReaderTop -= 19.0f;
+			if (kDown & KEY_DOWN) g_smsReaderTop += 19.0f;
+			static int s_dy;
+			if (g_touch.down) s_dy = g_touch.y;
+			if (g_touch.held && g_touch.drag) {
+				g_smsReaderTop -= (float)(g_touch.y - s_dy);
+				s_dy = g_touch.y;
+			}
+			if (g_smsReaderTop > g_smsReaderMax) g_smsReaderTop = g_smsReaderMax;
+			if (g_smsReaderTop < 0.0f) g_smsReaderTop = 0.0f;
+		} else {
 		if (kDown & KEY_UP)
 			smsReaderScroll(menu, -1, "up");
 		if (kDown & KEY_DOWN)
 			smsReaderScroll(menu, +1, "down");
 		smsReaderTouch(menu);
+		}
 		if (kDown & (KEY_Y | KEY_B)) {
 			// Either way the dialog has been dismissed, which is the second
 			// of the prologue's two state-5 flags.
@@ -38014,7 +38664,7 @@ static bool smsBoxInput(const Config* cfg, MenuState* menu, u32 kDown) {
 
 	// A tap on a row, which the lower panel makes the natural way in.
 	bool openIt = false;
-	if (touchTapped() && menu->isSmsBox) {
+	if (touchTapped() && menu->isSmsBox && !g_smsSkin) {
 		for (int r = 0; r < SMS_ROW_COUNT; r++) {
 			const int row = g_smsBox.top + r;
 			if (row >= v->count || menu->smsRowBar[r] < 0)
@@ -39354,6 +40004,7 @@ static void worldAddZoneMarker(const TrackPathZone* z, u32 texHash, u8 element, 
 	mk->texHash = texHash;
 	mk->element = element;
 	mk->turns = false;
+	worldMarkerText(g_markerCount - 1, NULL);
 	if (fxSlot >= 0) {
 		FxZone* fz = &g_fxZones[g_fxZoneCount++];
 		fz->x = z->entry[0];
@@ -39457,6 +40108,7 @@ static void worldRecalcUnlockedZones(void) {
 		mk->texHash = MINIMAP_ICON_SAFE_HOUSE;
 		mk->element = (u8)eventdb_shop_minimap_element(shop);
 		mk->turns = false;
+		worldMarkerText(g_markerCount - 1, NULL);
 	}
 	const int shopMarkers = g_markerCount;
 	// RecalcUnlockedZones' pile walk: each event at its start zone
@@ -39523,6 +40175,7 @@ static void worldRecalcUnlockedZones(void) {
 		mk->texHash = (mk->element >= 12 && ev->cls == EVENT_CLASS_SPON)
 			? MINIMAP_ICON_CROSS : MINIMAP_ICON_CIRCUIT;
 		mk->turns = false;
+		worldMarkerText(g_markerCount - 1, ev);
 	}
 	const int eventMarkers = g_markerCount - shopMarkers;
 	// The showcases and the world challenges (#268 K): RecalcUnlockedZones'
@@ -47885,6 +48538,25 @@ static void statusTouch(const Config* cfg, MenuState* m) {
 	const TouchState* t = &g_touch;
 	StatusState* s = &g_status;
 	MenuState* pg = &g_statusPage;
+	if (fskLive(m)) {
+		// The U2-UI skin's rows, UI_STATUS_ROW_H apart; its taps went
+		// through fskTouchKeys() in statusInput().
+		if (s->pageShown == 0 && pg->loaded) {
+			if (t->down)
+				s_anchorY = (float)t->y0;
+			if (t->held && t->drag) {
+				while ((float)t->y - s_anchorY <= -UI_STATUS_ROW_H) {
+					s_anchorY -= UI_STATUS_ROW_H;
+					statusScroll(+1);
+				}
+				while ((float)t->y - s_anchorY >= UI_STATUS_ROW_H) {
+					s_anchorY += UI_STATUS_ROW_H;
+					statusScroll(-1);
+				}
+			}
+		}
+		return;
+	}
 	if (s->pageShown == 0 && pg->loaded) {
 		if (t->down)
 			s_anchorY = (float)t->y0;
@@ -47923,6 +48595,8 @@ static void statusTouch(const Config* cfg, MenuState* m) {
 // UP / DOWN reach the career page's ScrollStatus, and Accept (8) or Back (10)
 // pop the package with that sound and unpause. True when it closes.
 static bool statusInput(const Config* cfg, MenuState* m, u32 kDown) {
+	if (fskLive(m))
+		kDown |= fskTouchKeys(m, NULL, 0);
 	if (kDown & (KEY_A | KEY_B)) {
 		const bool accept = (kDown & KEY_A) != 0;
 		feSoundPlay(accept ? FE_EV_ACCEPT : FE_EV_BACK);
@@ -48658,6 +49332,14 @@ static bool engageDialogInput(const Config* cfg, MenuState* m, u32 kDown) {
 // fingertip minimum around each label's anchor.
 #define ENGAGE_TOUCH_MIN_PX 40.0f
 static u32 engageTouchKeys(MenuState* m) {
+	if (fskLive(m)) {
+		char b[160];
+		b[0] = '\0';
+		const u32 k = fskTouchKeys(m, b, sizeof(b));
+		if (b[0])
+			dlog(b);
+		return k;
+	}
 	if (!m->isEngageDlg || !m->touchBottomWhole || !touchTapped())
 		return 0;
 	for (int k = 0; k < 3; k++) {
@@ -49032,6 +49714,21 @@ static bool gameMapDragPan(const MenuState* m) {
 	const TouchState* t = &g_touch;
 	GameMap* gm = &g_gameMap;
 	const int mi = m->trackMapWidget;
+	if (g_wmSkin) {
+		// The skinned map fills the panel: a window is its 320 px across.
+		if (t->down)
+			s_onMap = true;
+		bool moved = false;
+		if (t->held && t->drag && s_onMap && !t->down)
+			moved = gamemap_pan(gm, -(float)(t->x - s_x) / SCREEN_BOT_W, -(float)(t->y - s_y) / SCREEN_BOT_W);
+		if (t->held) {
+			s_x = t->x;
+			s_y = t->y;
+		}
+		if (moved)
+			g_wmCard = false;
+		return moved;
+	}
 	if (mi < 0 || !m->touchBottomWhole)
 		return false;
 	const float s = m->layoutScale;
@@ -49193,6 +49890,107 @@ static void gameMapTouch(const Config* cfg, MenuState* m, MenuState* dlg) {
 
 // GameWorldMapScreen::NotificationMessage, a frame of it. `dlgMsg` is what a
 // dialog posted this frame (feDialogInput()). Returns true to close the map.
+// The skinned map's taps: its chips by what drawUiWorldMap() laid out, else
+// the nearest marker (cursor on it, its card up), else nothing (card and
+// drawer down).
+#define WM_PLACE_OK(e) (e)
+static bool wmPlace(const GameMap* gm, float wx, float wy, float* sx, float* sy);
+static void uiWmTouch(const Config* cfg, MenuState* m, MenuState* dlg) {
+	if (!touchTapped())
+		return;
+	GameMap* gm = &g_gameMap;
+	const float x = (float)g_touch.x, y = (float)g_touch.y;
+	for (int k = g_wmHitN - 1; k >= 0; k--) {
+		const WmHit* h = &g_wmHit[k];
+		if (x < h->x || x >= h->x + h->w || y < h->y || y >= h->y + h->h)
+			continue;
+		switch (h->id) {
+		case WMH_BACK: g_wmBack = true; break;
+		case WMH_PREV: gameMapScrollZoom(m, -1, "touch region"); break;
+		case WMH_NEXT: gameMapScrollZoom(m, +1, "touch region"); break;
+		case WMH_ZIN:
+		case WMH_ZOUT:
+			if (gamemap_zoom_by(gm, h->id == WMH_ZIN ? 0.8f : 1.25f)) {
+				feSoundPlay(h->id == WMH_ZIN ? 0x12 : 0x11);
+				gameMapViewMoved(m);
+			}
+			break;
+		case WMH_FILTERS: g_wmDrawer = !g_wmDrawer; g_wmCard = false; break;
+		case WMH_GPS:
+		case WMH_CARD_GPS: gameMapAccept(cfg, dlg); break;
+		case WMH_CARD: case WMH_DRAWER: break;
+		case WMH_DONE: g_wmDrawer = false; break;
+		case WMH_ALL: {
+			// Show all when any is hidden, else hide all: each row that differs
+			// toggled the way the pad's X does it, the pad's row put back.
+			int shown = 0;
+			for (int r = 0; r < gm->rowCount; r++)
+				shown += gamemap_row_on(gm, r) ? 1 : 0;
+			const bool want = shown < gm->rowCount;
+			const int keep = gm->highlight;
+			for (int r = 0; r < gm->rowCount; r++)
+				if (gamemap_row_on(gm, r) != want) {
+					gm->highlight = r;
+					gameMapToggleFilter(m, "touch show/hide all");
+				}
+			gm->highlight = keep;
+			break;
+		}
+		default:
+			if (h->id >= WMH_ROW0 && h->id - WMH_ROW0 < gm->rowCount) {
+				gm->highlight = h->id - WMH_ROW0;
+				gameMapToggleFilter(m, "touch filter row");
+			}
+			break;
+		}
+		return;
+	}
+	int best = -1;
+	float bd = 16.0f * 16.0f;
+	for (int k = 0; k < gm->elemCount; k++) {
+		const GameMapElem* e = &gm->elems[k];
+		float sx, sy;
+		if (!e->onArt || !gamemap_renderable(gm, e) || !wmPlace(gm, e->worldX, e->worldY, &sx, &sy))
+			continue;
+		const float d = (sx - x) * (sx - x) + (sy - y) * (sy - y);
+		if (d < bd) {
+			bd = d;
+			best = k;
+		}
+	}
+	if (best < 0) {
+		g_wmCard = false;
+		g_wmDrawer = false;
+		return;
+	}
+	const GameMapElem* e = &gm->elems[best];
+	// The cursor walks one row's type (buildTriggerList()): a marker of
+	// another type needs that row and its list first, or the cursor stays
+	// where it was and the card shows the marker before (the user on
+	// hardware, 2026-11-14: a tap "picked whatever was nearest").
+	int row = -1;
+	for (int n = 0; n < gm->rowCount; n++)
+		if (gm->rows[n].wme == e->wme)
+			row = n;
+	if (row >= 0 && row != gm->highlight) {
+		gm->highlight = row;
+		gamemap_rebuild_locator(gm, gameMapGpsIdle());
+		gamemap_update_button(gm, gameMapGpsIdle());
+	}
+	const bool moved = gamemap_cursor_to(gm, best);
+	char b[128];
+	snprintf(b, sizeof(b), "game map: touch marker %d (row %d) -> %s, cursor %d of %d", best, row,
+		moved ? "on it" : "not on the cursor's list", gm->cursorAt, gm->cursorCount);
+	dlog(b);
+	if (!moved) {
+		g_wmCard = false;
+		return;
+	}
+	feSoundPlay(FE_EV_RIGHT);
+	g_wmCard = true;
+	g_wmDrawer = false;
+}
+
 static bool gameMapInput(const Config* cfg, MenuState* m, MenuState* dlg, u32 kDown,
 		u32 kHeld, float dt, u32 dlgMsg) {
 	if (!m->isGameMap)
@@ -49236,6 +50034,11 @@ static bool gameMapInput(const Config* cfg, MenuState* m, MenuState* dlg, u32 kD
 	}
 	if (g_feDialog.up)
 		return false;
+	if (g_wmBack) {
+		g_wmBack = false;
+		feSoundPlay(FE_EV_BACK);
+		return true;
+	}
 	if (kDown & KEY_B)
 		return true;
 	if (kDown & KEY_SELECT) {
@@ -49243,20 +50046,33 @@ static bool gameMapInput(const Config* cfg, MenuState* m, MenuState* dlg, u32 kD
 		return true;
 	}
 	// The D-pad alone: KEY_UP..KEY_RIGHT carry the Circle Pad too, which pans.
+	// PORT: on the skinned map up/down walk the filter drawer (opening it) and
+	// left/right the markers (their card up).
 	if (kDown & KEY_DUP)
 		gameMapScrollHighlight(m, -1, "UP");
 	else if (kDown & KEY_DDOWN)
 		gameMapScrollHighlight(m, +1, "DOWN");
+	if (kDown & (KEY_DUP | KEY_DDOWN)) {
+		g_wmDrawer = true;
+		g_wmCard = false;
+	}
 	if (kDown & KEY_DLEFT)
 		gameMapScrollGps(m, -1, "LEFT");
 	else if (kDown & KEY_DRIGHT)
 		gameMapScrollGps(m, +1, "RIGHT");
+	if (kDown & (KEY_DLEFT | KEY_DRIGHT)) {
+		g_wmCard = true;
+		g_wmDrawer = false;
+	}
 	gameMapView(m, kDown, kHeld, dt);
 	if (kDown & KEY_X)
 		gameMapToggleFilter(m, "X");
 	if (kDown & KEY_A)
 		gameMapAccept(cfg, dlg);
-	gameMapTouch(cfg, m, dlg);
+	if (g_wmSkin)
+		uiWmTouch(cfg, m, dlg);
+	else
+		gameMapTouch(cfg, m, dlg);
 	return false;
 }
 
@@ -50166,13 +50982,24 @@ static void worldInput(u32 kHeld, u32 kDown, float dt) {
 	in.handbrake = (kHeld & controlsKeysFor(OPT_ACT_HANDBRAKE)) != 0;
 	in.shiftUp   = (kDown & controlsKeysFor(OPT_ACT_SHIFT_UP)) != 0;
 	in.shiftDown = (kDown & controlsKeysFor(OPT_ACT_SHIFT_DOWN)) != 0;
+	// PORT (the user's option, Gameplay > Drag Shift: ZL/ZR): in a drag the
+	// shoulder triggers shift -- ZR up, ZL down -- on top of the scheme's
+	// buttons, and whatever the scheme put on them (the camera, the reset)
+	// stands down for the race.
+	const u32 zShift = (g_dragOn && gProfile.options.gameplay.dragTriggerShift)
+		? (KEY_ZL | KEY_ZR) : 0u;
+	if (zShift) {
+		if (kDown & KEY_ZR) in.shiftUp = true;
+		if (kDown & KEY_ZL) in.shiftDown = true;
+	}
 	// Under the photo shoot the camera is its ShowcaseCameraMover (#268 B),
 	// which neither button reaches.
-	if ((kDown & controlsKeysFor(OPT_ACT_CHANGE_CAMERA)) && !g_shoot.up && !nisPlaying())
+	if ((kDown & ~zShift & controlsKeysFor(OPT_ACT_CHANGE_CAMERA)) && !g_shoot.up && !nisPlaying())
 		worldCycleCamera();
-	g_lookBack = !g_shoot.up && !nisPlaying() && (kHeld & controlsKeysFor(OPT_ACT_LOOK_BACK)) != 0;
+	g_lookBack = !g_shoot.up && !nisPlaying() &&
+		(kHeld & ~zShift & controlsKeysFor(OPT_ACT_LOOK_BACK)) != 0;
 	// RacingJoyHandler's JoyEvent 0xA1, answered once the car has moved (#279).
-	bool resetPressed = (kDown & controlsKeysFor(OPT_ACT_RESET_CAR)) != 0;
+	bool resetPressed = (kDown & ~zShift & controlsKeysFor(OPT_ACT_RESET_CAR)) != 0;
 
 	// The pager runs first so the surface being asked about is loaded: at speed
 	// the car crosses into the next section between frames, and asking before
@@ -50272,7 +51099,7 @@ static void worldInput(u32 kHeld, u32 kDown, float dt) {
 	// style moment is style.c's. Not ported from the press: the radial blur
 	// and Player+0x210, and the rumble.
 	{
-		const u32 nosKeys = controlsKeysFor(OPT_ACT_NITROUS);
+		const u32 nosKeys = controlsKeysFor(OPT_ACT_NITROUS) & ~zShift;
 		const bool driving = !held && !showOff && !(g_raceRun.on && g_raceRun.race.car.finished);
 		char b[128];
 		if (driving && (kDown & nosKeys)) {
@@ -52841,6 +53668,22 @@ static bool tuneBackdropVp(C3D_Mtx* out) {
 	return true;
 }
 
+// The C-Stick's look round the car (worldCamera()): how fast it turns at full
+// tilt, in radians a second (about 170 degrees), how long it holds the angle
+// once the stick is let go before gliding back behind the car, in seconds,
+// and the same up and down: how fast it climbs, and the lowest and highest
+// the eye may stand over the car, as an angle up from the road (just over the
+// tarmac to nearly straight down from above).
+#define CAM_ORBIT_RATE   3.0f
+#define CAM_ORBIT_HOLD_S 2.0f
+#define CAM_PITCH_RATE   1.5f
+#define CAM_PITCH_MIN    0.05f
+#define CAM_PITCH_MAX    1.48f
+// Below this speed (m/s) the view is left where the stick put it, however long
+// -- a parked car can be looked round at leisure, as in GTA; moving, it
+// settles back behind the car after the hold.
+#define CAM_RETURN_SPEED 3.0f
+
 static void worldCamera(C3D_Mtx* out, float aspect) {
 	// The Camera option is read every frame, so a change on the pause menu's
 	// options takes at once, the way Player::ChangeCameraMover swaps movers.
@@ -53022,12 +53865,87 @@ static void worldCamera(C3D_Mtx* out, float aspect) {
 	// instead, but only when RunTimePlayerSettings+0xB is clear, and the one
 	// write to it is ResetToDefaults' 1 (0x80225804).
 	const float back = g_lookBack ? -1.0f : 1.0f;
+	// PORT (the user, 2026-11-14): the New 3DS's C-Stick looks round the car
+	// in the chase views. Across, it turns the camera about the car's vertical
+	// all the way round, as long as it is held -- pushed right, the eye goes
+	// round to the car's left and looks right, at up to CAM_ORBIT_RATE -- and
+	// the view stays where it was left for CAM_ORBIT_HOLD_S before gliding
+	// back behind the car the short way round. Up and down it does the same
+	// over the car -- the eye climbs or dips round it at up to CAM_PITCH_RATE,
+	// from just over the road to nearly overhead, and stays there for the
+	// same hold before settling back. Not over a look-back, and not while the
+	// C-Stick is the hydraulics' (hydJoyHandler(): a level on, the stick its
+	// button). On an old 3DS hidCstickRead() reads nothing, so nothing moves.
+	static float s_camOrbit = 0.0f, s_camPitch = 0.0f, s_camIdle = 0.0f;
+	{
+		float turn = 0.0f, climb = 0.0f;
+		const bool hydStick = hydLevel() != 0 && g_hyd.allowed &&
+			(!g_cfgMain || g_cfgMain->hydButton == 0);
+		if (outside && !g_lookBack && !hydStick) {
+			circlePosition cs;
+			hidCstickRead(&cs);
+			const float sx = clamp1((float)cs.dx / HYD_CSTICK_FULL);
+			const float sy = clamp1((float)cs.dy / HYD_CSTICK_FULL);
+			// A small dead zone, so a stick resting off-centre does not drift.
+			if (fabsf(sx) > 0.12f)
+				turn = -sx;
+			if (fabsf(sy) > 0.12f)
+				climb = sy;
+		}
+		if (turn != 0.0f || climb != 0.0f) {
+			s_camOrbit += turn * CAM_ORBIT_RATE * dt;
+			s_camPitch += climb * CAM_PITCH_RATE * dt;
+			s_camIdle = 0.0f;
+		} else {
+			s_camIdle += dt;
+			// Back behind the car once the hold is over (or at once outside
+			// the chase views); the angle is kept in -pi..pi, so this is the
+			// short way round.
+			if ((s_camIdle >= CAM_ORBIT_HOLD_S && fabsf(g_sim.speed) > CAM_RETURN_SPEED) ||
+					!outside || g_lookBack) {
+				const float back3 = clampTo(dt * 3.0f, 0.0f, 1.0f);
+				s_camOrbit += (0.0f - s_camOrbit) * back3;
+				s_camPitch += (0.0f - s_camPitch) * back3;
+			}
+		}
+		if (s_camOrbit > (float)M_PI)
+			s_camOrbit -= 2.0f * (float)M_PI;
+		else if (s_camOrbit < -(float)M_PI)
+			s_camOrbit += 2.0f * (float)M_PI;
+		if (fabsf(s_camOrbit) < 1e-4f)
+			s_camOrbit = 0.0f;
+		if (fabsf(s_camPitch) < 1e-4f)
+			s_camPitch = 0.0f;
+	}
+	const float oc = cosf(s_camOrbit), os = sinf(s_camOrbit);
 	float target[3];
-	for (int k = 0; k < 3; k++) {
-		g_camPos[k] = o[k] + back * (f[k] * g_chase.eye[0].val + l[k] * g_chase.eye[1].val) +
-			u[k] * g_chase.eye[2].val;
-		target[k] = o[k] + back * (f[k] * g_chase.look[0].val + l[k] * g_chase.look[1].val) +
-			u[k] * g_chase.look[2].val;
+	{
+		// Both offsets turned in the frame's forward/left plane.
+		const float ex = back * g_chase.eye[0].val, ey = back * g_chase.eye[1].val;
+		const float lx = back * g_chase.look[0].val, ly = back * g_chase.look[1].val;
+		float erx = ex * oc - ey * os, ery = ex * os + ey * oc;
+		const float lrx = lx * oc - ly * os, lry = lx * os + ly * oc;
+		float ez = g_chase.eye[2].val;
+		// The climb: the eye swung up or down round the car at its own
+		// distance, its angle over the road held between the two limits (and
+		// the climb with it, so the stick does not wind up past them).
+		if (s_camPitch != 0.0f) {
+			const float hd = sqrtf(erx * erx + ery * ery);
+			const float R = sqrtf(hd * hd + ez * ez);
+			if (hd > 1e-3f && R > 1e-3f) {
+				const float base = atan2f(ez, hd);
+				const float e = clampTo(base + s_camPitch, CAM_PITCH_MIN, CAM_PITCH_MAX);
+				s_camPitch = e - base;
+				const float kk = R * cosf(e) / hd;
+				erx *= kk;
+				ery *= kk;
+				ez = R * sinf(e);
+			}
+		}
+		for (int k = 0; k < 3; k++) {
+			g_camPos[k] = o[k] + f[k] * erx + l[k] * ery + u[k] * ez;
+			target[k] = o[k] + f[k] * lrx + l[k] * lry + u[k] * g_chase.look[2].val;
+		}
 	}
 	// A view on the car takes the car's own up (Update 0x80072460), so it rolls
 	// with the body; a chase view keeps its smoothed tip with z at 1.
@@ -55337,7 +56255,9 @@ static void worldSimPager(void) {
 static u32 worldSimPad(circlePosition* cp) {
 	u32 held = hidKeysHeld();
 	hidCircleRead(cp);
-	if (hidSharedMem) {
+	// The dev command file is pressing for the PC (devcmd.h): the frame's
+	// reads carry its input, the shared page does not.
+	if (hidSharedMem && !devcmd_active()) {
 		u32 id = hidSharedMem[4];
 		if (id > 7)
 			id = 7;
@@ -55914,8 +56834,8 @@ static void drawFeSweepStatus(C2D_TextBuf buf, const Config* cfg) {
 // to it (12.6 : 22.8), which is the same accommodation menuTextScale() and
 // hud.c's HUD_MIN_TEXT_PX already make, for the same reason -- a quarter of
 // the canvas's pixels.
-#define WBOT_BANK_H        34.0f
-#define WBOT_BANK_VALUE_PX 26.0f
+#define WBOT_BANK_H        24.0f
+#define WBOT_BANK_VALUE_PX 16.0f
 #define WBOT_BANK_LABEL_PX (WBOT_BANK_VALUE_PX * 12.6f / 22.8f)
 #define WBOT_BANK_PAD       8.0f
 #define WBOT_BANK_COLOR    C2D_Color32(192, 192, 192, 255)
@@ -56001,6 +56921,8 @@ static u8 countdownAlpha(u64 ms, u32 len, u32 in, u32 out) {
 	return (u8)(255u - 255u * (t - out) / (len - out));
 }
 
+static u32 g_wcChipColor;
+static char g_wcChipText[16];
 static void drawWorldCountdown(C2D_TextBuf buf) {
 	static char shown[16] = "00:00:00";
 	static int script = -1; // 0 Animate, 1 Animate_RED
@@ -56022,45 +56944,112 @@ static void drawWorldCountdown(C2D_TextBuf buf) {
 		: countdownAlpha(now - scriptT0, 800, 300, 540);
 	const u32 valueColor = red ? C2D_Color32(149, 0, 0, a) : C2D_Color32(204, 244, 138, a);
 
-	C2D_DrawRectSolid(0.0f, 0.0f, 0.4f, BOTTOM_W, WBOT_BANK_H, C2D_Color32(0, 0, 0, 0x6D));
-	const float labelScale = WBOT_BANK_LABEL_PX / g_fontUnitPx;
-	const float valueScale = WBOT_WC_VALUE_PX / g_fontUnitPx;
-	C2D_Text label, value;
-	C2D_TextFontParse(&label, g_uiFont, buf, "Time:");
-	C2D_TextOptimize(&label);
-	C2D_TextFontParse(&value, g_uiFont, buf, shown);
-	C2D_TextOptimize(&value);
-	float lw = 0.0f, lh = 0.0f, vw = 0.0f, vh = 0.0f;
-	textDims(&label, labelScale, labelScale, &lw, &lh);
-	textDims(&value, valueScale, valueScale, &vw, &vh);
-	C2D_DrawText(&label, C2D_WithColor, WBOT_BANK_PAD, (WBOT_BANK_H - lh) * 0.5f,
-		0.5f, labelScale, labelScale, WBOT_BANK_COLOR);
-	C2D_DrawText(&value, C2D_WithColor, BOTTOM_W - WBOT_BANK_PAD - vw,
-		(WBOT_BANK_H - vh) * 0.5f, 0.5f, valueScale, valueScale, valueColor);
+	// PORT: in the lower screen's HUD kit, in the bank chip's place.
+	(void)buf;
+	g_wcChipColor = valueColor;
+	snprintf(g_wcChipText, sizeof(g_wcChipText), "%s", shown);
 }
 
-static void drawWorldBank(C2D_TextBuf buf) {
-	// formatCashGrouped() is EA's own %$d: digit grouping with ',' every three
-	// and no currency symbol (SPEED2.EXE 0x43F618/0x43F5FC).
-	char cash[32];
-	formatCashGrouped(gProfile.cash, cash, sizeof(cash));
-	const float labelScale = WBOT_BANK_LABEL_PX / g_fontUnitPx;
-	const float valueScale = WBOT_BANK_VALUE_PX / g_fontUnitPx;
-	C2D_Text label, value;
-	// The authored St text, not a language key: the label widget's stringHash
-	// (0x329F6C5B) is not in English.bin, so retail falls through to the
-	// string the .fng carries.
-	C2D_TextFontParse(&label, g_uiFont, buf, "Bank:");
-	C2D_TextOptimize(&label);
-	C2D_TextFontParse(&value, g_uiFont, buf, cash);
-	C2D_TextOptimize(&value);
-	float lw = 0.0f, lh = 0.0f, vw = 0.0f, vh = 0.0f;
-	textDims(&label, labelScale, labelScale, &lw, &lh);
-	textDims(&value, valueScale, valueScale, &vw, &vh);
-	C2D_DrawText(&label, C2D_WithColor, WBOT_BANK_PAD, (WBOT_BANK_H - lh) * 0.5f,
-		0.5f, labelScale, labelScale, WBOT_BANK_COLOR);
-	C2D_DrawText(&value, C2D_WithColor, BOTTOM_W - WBOT_BANK_PAD - vw,
-		(WBOT_BANK_H - vh) * 0.5f, 0.5f, valueScale, valueScale, WBOT_BANK_COLOR);
+// An envelope, `w` wide, top-left at (x, y).
+static void drawEnvelope(float x, float y, float w, u32 c) {
+	const float h = w * 0.68f;
+	C2D_DrawRectSolid(x, y, 0.5f, w, 1.5f, c);
+	C2D_DrawRectSolid(x, y + h - 1.5f, 0.5f, w, 1.5f, c);
+	C2D_DrawRectSolid(x, y, 0.5f, 1.5f, h, c);
+	C2D_DrawRectSolid(x + w - 1.5f, y, 0.5f, 1.5f, h, c);
+	C2D_DrawLine(x, y, c, x + w * 0.5f, y + h * 0.55f, c, 1.5f, 0.5f);
+	C2D_DrawLine(x + w, y, c, x + w * 0.5f, y + h * 0.55f, c, 1.5f, 0.5f);
+}
+
+// PORT: the map's event feed, The Run's lower-screen readout in this game's
+// colours -- the last few things that happened, top-left over the map,
+// newest on top, each up WBOT_FEED_MS and fading out over its last half
+// second. Fed by the bank rewards (drawWorldBankReward()) and new SMS.
+#define WBOT_FEED_N   3
+#define WBOT_FEED_MS  4000u
+typedef struct {
+	char text[72];
+	u32 rgb;
+	u64 t0;
+} WorldFeedLine;
+static WorldFeedLine g_feed[WBOT_FEED_N];
+
+static void worldFeedPush(const char* text, u32 rgb) {
+	for (int i = WBOT_FEED_N - 1; i > 0; i--)
+		g_feed[i] = g_feed[i - 1];
+	snprintf(g_feed[0].text, sizeof(g_feed[0].text), "%s", text);
+	g_feed[0].rgb = rgb;
+	g_feed[0].t0 = osGetTime();
+}
+
+static void uiTab(float x, float y, float w, float h, int side, u32 fill);
+static void drawWorldFeed(C2D_TextBuf buf, float x, float bottom) {
+	// Bottom-anchored, newest lowest, chips in the HUD kit's style (drawn
+	// after it is defined, so only the shapes are repeated here).
+	const u64 now = osGetTime();
+	const float px = 13.0f, sc = px / g_fontUnitPx, h = 22.0f;
+	x = 0.0f; // U2-UI: a tab off the left edge
+	float y = bottom - h;
+	for (int i = 0; i < WBOT_FEED_N; i++) {
+		const WorldFeedLine* f = &g_feed[i];
+		if (!f->text[0] || now - f->t0 >= WBOT_FEED_MS)
+			continue;
+		const u64 left = WBOT_FEED_MS - (now - f->t0);
+		const float k = left < 500 ? (float)left / 500.0f : 1.0f;
+		C2D_Text t;
+		C2D_TextFontParse(&t, g_uiFont, buf, f->text);
+		C2D_TextOptimize(&t);
+		float tw = 0.0f, th = 0.0f;
+		textDims(&t, sc, sc, &tw, &th);
+		const float w = tw + 36.0f;
+		uiTab(x, y, w, h, 0, C2D_Color32(0, 0, 0, (u8)(153 * k)));
+		const u32 rgb = f->rgb;
+		C2D_DrawCircleSolid(x + 11.0f, y + h * 0.5f, 0.81f, 3.2f,
+			C2D_Color32((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, (u8)(255 * k)));
+		C2D_DrawText(&t, C2D_WithColor, x + 20.0f, y + (h - px) * 0.5f, 0.83f, sc, sc,
+			C2D_Color32(255, 255, 255, (u8)(255 * k)));
+		y -= h + 4.0f;
+	}
+}
+
+// PORT: touch on the map pans it, as on a GPS. A drag moves the map with the
+// finger, a tap puts it back on the car, and left alone for
+// WBOT_PAN_HOLD_MS it eases back by itself.
+#define WBOT_PAN_HOLD_MS 4000u
+static bool g_tapPending = false;
+static float g_tapX, g_tapY;
+static void worldMapTouch(float mapX, float mapY, float mapW, float mapH) {
+	static bool dragging = false;
+	static int lx = 0, ly = 0;
+	static u64 lastTouch = 0;
+	const TouchState* t = &g_touch;
+	const u64 now = osGetTime();
+	const bool inMap = t->x >= mapX && t->x < mapX + mapW && t->y >= mapY && t->y < mapY + mapH;
+	if (t->down) {
+		dragging = inMap;
+		lx = t->x;
+		ly = t->y;
+	}
+	if (dragging && t->held) {
+		if (t->drag && (t->x != lx || t->y != ly))
+			minimap_pan_px(g_minimap, (float)(t->x - lx), (float)(t->y - ly));
+		lx = t->x;
+		ly = t->y;
+		lastTouch = now;
+	}
+	// A tap anywhere goes to the HUD (worldHandleTap()): its buttons, a
+	// marker, or nothing.
+	if (t->up && !t->drag) {
+		g_tapPending = true;
+		g_tapX = (float)t->x;
+		g_tapY = (float)t->y;
+	}
+	if (t->up) {
+		dragging = false;
+		lastTouch = now;
+	}
+	if (!dragging && minimap_panned(g_minimap) && now - lastTouch > WBOT_PAN_HOLD_MS)
+		minimap_pan_ease(g_minimap, 0.12f);
 }
 
 // PickedUpBankIndicator (#293), HUD_SingleRace.fng's Cash_Bank under the bank
@@ -56111,7 +57100,10 @@ static void drawWorldBankReward(C2D_TextBuf buf) {
 		formatCashGrouped(g_bankRewardPending, cash, sizeof(cash));
 		snprintf(text, sizeof(text), "%s %s", g_bankRewardLabel, cash);
 		g_bankRewardPending = 0;
-		on = true;
+		// PORT: the bar no longer has retail's right-hand value for
+		// Cash_Animate to rise into; the reward goes to the map's feed.
+		worldFeedPush(text, 0xCAF48Au);
+		on = false;
 		t0 = now;
 		char b[128];
 		snprintf(b, sizeof(b), "bank: Cash_Animate \"%s\"", text);
@@ -56150,10 +57142,3296 @@ static void drawWorldBankReward(C2D_TextBuf buf) {
 // the biggest thing on the screen -- and the race stats in the column right
 // of it (hud_draw_race_stats). 184 px holds a 144 px map widget (minimap_draw
 // sizes it in steps of 8) and leaves the stats 136.
-#define WBOT_RACE_MAP_W 184.0f
+#define WBOT_RACE_MAP_W 160.0f
+
+// ---------------------------------------------------------------------------
+// PORT: the lower screen's HUD (free roam and races), the layout settled on
+// the user's mockup (2026-11-13). Not retail's -- the PC game has no second
+// screen -- but built from retail's own menu pieces (the "U2-UI" kit, read out
+// of GLOBALB.BUN's textures and GenericDialog*.fng, 2026-11-13 rev 2):
+//   * U2_Menu_Box is black at alpha 153; U2_Menu_Box_White is white at 153
+//     that screens tint grey -- the panels and the list rows. Corners are
+//     U2_Menu_RoundedCorner's 3 px.
+//   * U2_Menu_Text_Corner ends a title bar in a half disc -- the tabs that
+//     hang from the screen's edges here.
+//   * GenericDialog rings its panel in (197,218,165) (U2_Highlight_Box).
+//   * The selection is U2_Icon_Highlight: a crisp rim, lime by the screen's
+//     tint, lit softly from inside. No outer glow -- the texture has none,
+//     and at 320x240 one would only smear.
+//   * Buttons are UI_PC_Generic_Button's black pill with a light rim.
+// Labels are small caps in the HUD's lime over large white values. The top is
+// status (bank, messages), the bottom is action (the GPS destination).
+// ---------------------------------------------------------------------------
+#define UI_PANEL     C2D_Color32(0, 0, 0, 153)
+#define UI_DEEP      C2D_Color32(0, 0, 0, 209)
+#define UI_PANEL_SOLID C2D_Color32(0, 0, 0, 255)
+#define UI_RIM       C2D_Color32(255, 255, 255, 40)
+#define UI_GREY      C2D_Color32(135, 135, 135, 87)
+#define UI_GREY_HI   C2D_Color32(150, 150, 150, 128)
+#define UI_FRAME     C2D_Color32(197, 218, 165, 255)
+#define UI_ACCENT    C2D_Color32(202, 244, 138, 255)
+#define UI_GPS       C2D_Color32(47, 140, 255, 255)
+#define UI_WHITE     C2D_Color32(255, 255, 255, 255)
+#define UI_DIM       C2D_Color32(154, 154, 154, 255)
+#define UI_DARK_INK  C2D_Color32(19, 23, 15, 255)
+#define UI_AHEAD     C2D_Color32(255, 143, 122, 255)
+#define UI_BEHIND    C2D_Color32(143, 214, 160, 255)
+#define UI_LABEL_PX  12.0f
+#define UI_Z         0.8f
+
+// A rounded rectangle with no overlapping pieces, so a translucent colour
+// blends once everywhere: three strips and four quarter-disc fans that each
+// stay inside their own corner square.
+static void uiRoundRect(float x, float y, float w, float h, float r, float z, u32 c) {
+	if (r * 2.0f > h) r = h * 0.5f;
+	if (r * 2.0f > w) r = w * 0.5f;
+	C2D_DrawRectSolid(x + r, y, z, w - 2.0f * r, h, c);
+	if (h > 2.0f * r) {
+		C2D_DrawRectSolid(x, y + r, z, r, h - 2.0f * r, c);
+		C2D_DrawRectSolid(x + w - r, y + r, z, r, h - 2.0f * r, c);
+	}
+	const float cx[4] = { x + r, x + w - r, x + w - r, x + r };
+	const float cy[4] = { y + r, y + r, y + h - r, y + h - r };
+	const float a0[4] = { (float)M_PI, (float)M_PI * 1.5f, 0.0f, (float)M_PI * 0.5f };
+	for (int k = 0; k < 4; k++) {
+		for (int i = 0; i < 4; i++) {
+			const float b0 = a0[k] + (float)M_PI * 0.125f * (float)i;
+			const float b1 = b0 + (float)M_PI * 0.125f;
+			C2D_DrawTriangle(cx[k], cy[k], c, cx[k] + r * cosf(b0), cy[k] + r * sinf(b0), c,
+				cx[k] + r * cosf(b1), cy[k] + r * sinf(b1), c, z);
+		}
+	}
+}
+
+// The outline of a rounded rectangle pushed out by `d` (in by a negative d):
+// four corner arcs of UI_RR_SEG steps, `n` = 4 * (UI_RR_SEG + 1) points.
+#define UI_RR_SEG 5
+#define UI_RR_N   (4 * (UI_RR_SEG + 1))
+static void uiRRPath(float x, float y, float w, float h, float r, float d, float* px, float* py) {
+	if (r * 2.0f > h) r = h * 0.5f;
+	if (r * 2.0f > w) r = w * 0.5f;
+	const float cx[4] = { x + r, x + w - r, x + w - r, x + r };
+	const float cy[4] = { y + r, y + r, y + h - r, y + h - r };
+	const float a0[4] = { (float)M_PI, (float)M_PI * 1.5f, 0.0f, (float)M_PI * 0.5f };
+	float rr = r + d;
+	if (rr < 0.0f) rr = 0.0f;
+	int k = 0;
+	for (int c = 0; c < 4; c++)
+		for (int i = 0; i <= UI_RR_SEG; i++) {
+			const float a = a0[c] + (float)M_PI * 0.5f * (float)i / (float)UI_RR_SEG;
+			px[k] = cx[c] + rr * cosf(a);
+			py[k] = cy[c] + rr * sinf(a);
+			k++;
+		}
+}
+// The band between the outline pushed out by d0 and by d1, coloured c0 on
+// the first edge and c1 on the second -- a rim when both match, a soft glow
+// when one is clear. Quads that share edges only, so it blends once.
+static void uiBand(float x, float y, float w, float h, float r, float d0, float d1, float z,
+		u32 c0, u32 c1) {
+	float ax[UI_RR_N], ay[UI_RR_N], bx[UI_RR_N], by[UI_RR_N];
+	uiRRPath(x, y, w, h, r, d0, ax, ay);
+	uiRRPath(x, y, w, h, r, d1, bx, by);
+	for (int i = 0; i < UI_RR_N; i++) {
+		const int j = (i + 1) % UI_RR_N;
+		C2D_DrawTriangle(ax[i], ay[i], c0, ax[j], ay[j], c0, bx[j], by[j], c1, z);
+		C2D_DrawTriangle(ax[i], ay[i], c0, bx[j], by[j], c1, bx[i], by[i], c1, z);
+	}
+}
+// A rim `t` thick just inside a rounded rectangle.
+static void uiRing(float x, float y, float w, float h, float r, float t, float z, u32 c) {
+	uiBand(x, y, w, h, r, 0.0f, -t, z, c, c);
+}
+static u32 uiAlpha(u32 c, float k) {
+	const float a = (float)((c >> 24) & 0xFF) * k;
+	return (c & 0x00FFFFFFu) | ((u32)(a < 0.0f ? 0.0f : a > 255.0f ? 255.0f : a) << 24);
+}
+
+// A U2 box: U2_Menu_Box's black at 60%, 3 px corners, a hairline rim so it
+// reads over the map. (`stripe` is from the first kit and no longer drawn.)
+static void uiChip(float x, float y, float w, float h, u32 stripe) {
+	(void)stripe;
+	uiRoundRect(x, y, w, h, 3.0f, UI_Z, UI_PANEL);
+	uiRing(x, y, w, h, 3.0f, 1.0f, UI_Z + 0.005f, UI_RIM);
+}
+// A tab hung from a screen edge: square where it meets the edge, the
+// U2_Menu_Text_Corner half disc on the open end. It is a pill whose other end
+// runs off the screen. side 0 hangs from the left edge, 1 from the right.
+static void uiTab(float x, float y, float w, float h, int side, u32 fill) {
+	const float ox = side == 0 ? x - h : x, ow = w + h;
+	uiRoundRect(ox, y, ow, h, h * 0.5f, UI_Z, fill);
+	// The rim fades with the fill (the feed's tabs fade out whole).
+	const float fa = (float)((fill >> 24) & 0xFF) / 153.0f;
+	uiRing(ox, y, ow, h, h * 0.5f, 1.0f, UI_Z + 0.005f, uiAlpha(UI_RIM, fa > 1.0f ? 1.0f : fa));
+}
+// The selection, after U2_Icon_Highlight: a crisp 1.5 px rim (lime unless
+// told) over a faint flat tint of the same colour. No glow inside or out --
+// the user's call on hardware (2026-11-13): a halo reads as neon, not U2.
+static void uiHighlight(float x, float y, float w, float h, float r, float z, u32 col) {
+	uiRoundRect(x, y, w, h, r, z, uiAlpha(col, 0.08f));
+	uiRing(x, y, w, h, r, 1.5f, z + 0.004f, col);
+}
+// A button: UI_PC_Generic_Button's black pill with a light rim; focused, the
+// highlight in place of the rim.
+static void uiPill(float x, float y, float w, float h, bool focus, float z) {
+	uiRoundRect(x, y, w, h, h * 0.5f, z, UI_DEEP);
+	if (focus)
+		uiHighlight(x, y, w, h, h * 0.5f, z + 0.005f, UI_ACCENT);
+	else
+		uiRing(x, y, w, h, h * 0.5f, 1.2f, z + 0.005f, C2D_Color32(255, 255, 255, 107));
+}
+// A list row: U2_Menu_Box_White tinted grey over the black, highlighted when
+// it is the selection.
+static void uiRowBar(float x, float y, float w, float h, bool sel) {
+	uiRoundRect(x, y, w, h, 3.0f, UI_Z, sel ? UI_GREY_HI : UI_GREY);
+	if (sel)
+		uiHighlight(x, y, w, h, 3.0f, UI_Z + 0.005f, UI_ACCENT);
+}
+// GenericDialog's ring round a panel.
+static void uiDialogRing(float x, float y, float w, float h) {
+	uiRing(x, y, w, h, 6.0f, 1.5f, UI_Z + 0.006f, UI_FRAME);
+}
+// A black band across the screen at y (a list's header or footer), with the
+// hairline on the side that faces the content.
+static void uiBand2(float y, float h, bool lineBelow) {
+	C2D_DrawRectSolid(0.0f, y, UI_Z - 0.01f, BOTTOM_W, h, C2D_Color32(0, 0, 0, 217));
+	C2D_DrawRectSolid(0.0f, lineBelow ? y + h : y, UI_Z - 0.005f, BOTTOM_W, 1.0f,
+		C2D_Color32(255, 255, 255, 36));
+}
+
+// The UI font's capitals at `px` (the line height every port size is given
+// in): g_fontUnitPx is the line a Conduit cap of 24 had over 34, so a cap is
+// that share of the line. Where the cap sits under a C2D_DrawText's y is the
+// cell's baseline at the drawn scale.
+static float uiCapPx(float px) {
+	return px * 24.0f / 34.0f;
+}
+static float uiBaselineOff(float px) {
+	const FINF_s* fi = C2D_FontGetInfo(g_uiFont);
+	const float ts = fontmip_text_scale(g_uiFont);
+	if (!fi || !fi->tglp || ts <= 0.0f)
+		return px * 0.8f;
+	return (float)fi->tglp->baselinePos * ts * (px / g_fontUnitPx);
+}
+
+// Width of a string at `px`.
+static float uiMeasure(C2D_TextBuf buf, const char* str, float px) {
+	if (!str || !str[0])
+		return 0.0f;
+	C2D_Text t;
+	float w = 0.0f, h = 0.0f;
+	C2D_TextFontParse(&t, g_uiFont, buf, str);
+	textDims(&t, px / g_fontUnitPx, px / g_fontUnitPx, &w, &h);
+	return w;
+}
+
+// One string on a baseline. `align` 0 left, 1 centre, 2 right of `x`. `maxW`
+// > 0 cuts it with ".." to fit. Light text gets a one-pixel drop shadow; dark
+// text (on a light button) is drawn clean. Returns its width.
+static float uiTextBase(C2D_TextBuf buf, const char* str, float px, float x, float base,
+		int align, u32 color, float maxW) {
+	if (!str || !str[0])
+		return 0.0f;
+	const float sc = px / g_fontUnitPx;
+	char tmp[64];
+	snprintf(tmp, sizeof(tmp), "%s", str);
+	C2D_Text t;
+	float w = 0.0f, h = 0.0f;
+	for (;;) {
+		C2D_TextFontParse(&t, g_uiFont, buf, tmp);
+		textDims(&t, sc, sc, &w, &h);
+		const size_t n = strlen(tmp);
+		if (maxW <= 0.0f || w <= maxW || n <= 3)
+			break;
+		tmp[n - 3] = '.';
+		tmp[n - 2] = '.';
+		tmp[n - 1] = '\0';
+		if (n > 4) {
+			tmp[n - 4] = '.';
+			tmp[n - 3] = '.';
+			tmp[n - 2] = '\0';
+		}
+	}
+	C2D_TextOptimize(&t);
+	const float dx = align == 2 ? -w : align == 1 ? -w * 0.5f : 0.0f;
+	const float y = base - uiBaselineOff(px);
+	if (color != UI_DARK_INK)
+		C2D_DrawText(&t, C2D_WithColor, x + dx + 1.0f, y + 1.0f, UI_Z + 0.02f, sc, sc,
+			C2D_Color32(0, 0, 0, (u8)(((color >> 24) & 0xFF) * 3 / 5)));
+	C2D_DrawText(&t, C2D_WithColor, x + dx, y, UI_Z + 0.03f, sc, sc, color);
+	return w;
+}
+
+// The same with its capitals centred on `cy`.
+static float uiText(C2D_TextBuf buf, const char* str, float px, float x, float cy, int align,
+		u32 color, float maxW) {
+	return uiTextBase(buf, str, px, x, cy + uiCapPx(px) * 0.5f, align, color, maxW);
+}
+static float uiLabel(C2D_TextBuf buf, const char* str, float x, float cy, int align, u32 color) {
+	return uiText(buf, str, UI_LABEL_PX, x, cy, align, color, 0.0f);
+}
+
+// A small filled arrow pointing along `a` (screen radians, 0 = right).
+static void uiArrow(float x, float y, float a, float size, u32 c) {
+	const float ca = cosf(a), sa = sinf(a);
+	#define UIR(px, py) (x + (px) * ca - (py) * sa), (y + (px) * sa + (py) * ca)
+	C2D_DrawTriangle(UIR(size, 0.0f), c, UIR(-size * 0.8f, -size * 0.75f), c,
+		UIR(-size * 0.35f, 0.0f), c, UI_Z + 0.03f);
+	C2D_DrawTriangle(UIR(size, 0.0f), c, UIR(-size * 0.35f, 0.0f), c,
+		UIR(-size * 0.8f, size * 0.75f), c, UI_Z + 0.03f);
+	#undef UIR
+}
+
+// The HUD's touch targets, laid out by the draw and hit by the next tap.
+enum { HIT_BANK = 1, HIT_SMS, HIT_ZOOM_IN, HIT_ZOOM_OUT, HIT_RECENTER, HIT_STRIP_GPS,
+	HIT_STRIP_CANCEL, HIT_CARD_GPS, HIT_CARD };
+typedef struct { float x, y, w, h; int id; } UiHit;
+static UiHit g_uiHit[16];
+static int g_uiHitN;
+static void uiHit(float x, float y, float w, float h, int id) {
+	if (g_uiHitN < 16)
+		g_uiHit[g_uiHitN++] = (UiHit){ x, y, w, h, id };
+}
+
+static int g_mmSel = -1;        // the marker whose card is up
+static int g_nearestEvent = -1; // the destination strip's offer with the GPS off
+
+static u32 uiMarkerColour(int i);
+static u32 uiLighten(u32 c, float k);
+static u32 uiRgb(u32 c);
+static void worldGpsToMarker(int i) {
+	if (i < 0 || i >= g_markerCount || !g_markerZone[i] || !gps_loaded())
+		return;
+	float target[3], icon[2];
+	gpsZoneTarget(g_markerZone[i], target, icon);
+	GpsCar car;
+	gpsCarFrom(&car);
+	gps_start(&car, target, icon);
+	char b[64];
+	snprintf(b, sizeof(b), "GPS: %s", g_markerTitle[i]);
+	worldFeedPush(b, uiRgb(uiLighten(uiMarkerColour(i), 0.3f)));
+	dlog("bottom hud: GPS started from the touch screen");
+}
+
+// The marker the GPS is on, or -1.
+static int worldGpsMarker(void) {
+	const int st = gps_status();
+	if (st < GPS_STATUS_SEARCHING || st > GPS_STATUS_ACTIVE)
+		return -1;
+	for (int i = 0; i < g_markerCount; i++) {
+		if (!g_markerZone[i])
+			continue;
+		float target[3], icon[2];
+		gpsZoneTarget(g_markerZone[i], target, icon);
+		if (gps_is_target(target))
+			return i;
+	}
+	return -1;
+}
+
+static void worldHandleTap(void) {
+	if (!g_tapPending)
+		return;
+	g_tapPending = false;
+	const float x = g_tapX, y = g_tapY;
+	for (int k = g_uiHitN - 1; k >= 0; k--) {
+		const UiHit* h = &g_uiHit[k];
+		if (x < h->x || x >= h->x + h->w || y < h->y || y >= h->y + h->h)
+			continue;
+		switch (h->id) {
+		case HIT_BANK: g_touchOpenUi = WORLD_UI_STATUS; break;
+		case HIT_SMS: g_touchOpenUi = WORLD_UI_SMS; break;
+		case HIT_ZOOM_IN:
+			minimap_set_view_zoom(g_minimap, fminf(2.5f, minimap_view_zoom(g_minimap) * 1.25f));
+			break;
+		case HIT_ZOOM_OUT:
+			minimap_set_view_zoom(g_minimap, fmaxf(0.5f, minimap_view_zoom(g_minimap) * 0.8f));
+			break;
+		case HIT_RECENTER: minimap_pan_reset(g_minimap); break;
+		case HIT_STRIP_GPS: worldGpsToMarker(g_nearestEvent); break;
+		case HIT_STRIP_CANCEL:
+			gps_stop();
+			worldFeedPush("GPS off", 0xAAB0B8u);
+			break;
+		case HIT_CARD_GPS:
+			worldGpsToMarker(g_mmSel);
+			g_mmSel = -1;
+			break;
+		default: break;
+		}
+		return;
+	}
+	// Not a button: the nearest marker within reach of a fingertip, or none.
+	// Only the markers the map draws: with the GPS engaged in a stage it
+	// shows the GPS's own alone (drawWorldBottom()'s IsRenderable), and a
+	// tap must not pick one of the hidden ones near the finger instead (the
+	// user on hardware, 2026-11-14).
+	const int gpsSt = gps_status();
+	const bool gpsOnly = !g_raceRun.on && gpsSt >= GPS_STATUS_SEARCHING && gpsSt <= GPS_STATUS_ACTIVE &&
+		g_careerStage != 0;
+	int best = -1;
+	float bd = 16.0f * 16.0f;
+	for (int i = 0; i < g_markerCount && !g_raceRun.on; i++) {
+		float sx, sy;
+		if (gpsOnly) {
+			float target[3], icon[2];
+			if (!g_markerZone[i])
+				continue;
+			gpsZoneTarget(g_markerZone[i], target, icon);
+			if (!gps_is_target(target))
+				continue;
+		}
+		if (!minimap_world_to_panel(g_minimap, g_markers[i].worldX, g_markers[i].worldY, &sx, &sy))
+			continue;
+		const float d = (sx - x) * (sx - x) + (sy - y) * (sy - y);
+		if (d < bd) {
+			bd = d;
+			best = i;
+		}
+	}
+	g_mmSel = best;
+}
+
+// Straight-line distance in the profile's units.
+static void uiDistance(float metres, char* out, size_t cap) {
+	// The speedometer's own test, read every frame: switching MPH / KM/H in
+	// the options switches this too.
+	if (unitsMetric()) {
+		if (metres < 1000.0f)
+			snprintf(out, cap, "%d m", (int)(metres / 10.0f + 0.5f) * 10);
+		else
+			snprintf(out, cap, "%.1f km", (double)(metres / 1000.0f));
+	} else {
+		const float ft = metres * 3.28084f;
+		if (ft < 1000.0f)
+			snprintf(out, cap, "%d ft", (int)(ft / 10.0f + 0.5f) * 10);
+		else
+			snprintf(out, cap, "%.1f mi", (double)(metres / 1609.34f));
+	}
+}
+
+// A marker's colour, the minimap's own element table (minimap.h).
+#define UI_RGBA(r, g, b, a) ((u32)(r) | ((u32)(g) << 8) | ((u32)(b) << 16) | ((u32)(a) << 24))
+static u32 uiMarkerColour(int i) {
+	static const u32 kCol[MINIMAP_ELEM_COUNT] = {
+		[MINIMAP_ELEM_SHOWCASE] = UI_RGBA(210, 195, 25, 255),
+		[MINIMAP_ELEM_CRIB] = UI_RGBA(150, 80, 200, 255),
+		[MINIMAP_ELEM_PAINTSHOP] = UI_RGBA(192, 64, 76, 255),
+		[MINIMAP_ELEM_PARTSSHOP] = UI_RGBA(46, 162, 74, 255),
+		[MINIMAP_ELEM_ICESHOP] = UI_RGBA(190, 190, 40, 255),
+		[MINIMAP_ELEM_PERFORMANCESHOP] = UI_RGBA(61, 116, 192, 255),
+		[MINIMAP_ELEM_CARLOT] = UI_RGBA(82, 163, 163, 255),
+		[MINIMAP_ELEM_CIRCUITEVENT] = UI_RGBA(165, 60, 233, 255),
+		[MINIMAP_ELEM_DRAGEVENT] = UI_RGBA(50, 130, 200, 255),
+		[MINIMAP_ELEM_STREETEVENT] = UI_RGBA(130, 190, 230, 255),
+		[MINIMAP_ELEM_DRIFTEVENT] = UI_RGBA(202, 244, 138, 255),
+		[MINIMAP_ELEM_SPRINTEVENT] = UI_RGBA(32, 176, 32, 255),
+		[MINIMAP_ELEM_URLEVENT] = UI_RGBA(190, 180, 45, 255),
+		[MINIMAP_ELEM_SUVEVENT] = UI_RGBA(207, 128, 48, 255),
+	};
+	const u8 el = g_markers[i].element;
+	return el < MINIMAP_ELEM_COUNT && kCol[el] ? kCol[el] : UI_WHITE;
+}
+
+// A colour pulled toward white by `k` (0..1), alpha kept: dark element
+// colours (the garage's purple) still read as text on the panels.
+static u32 uiLighten(u32 c, float k) {
+	const u32 r = c & 0xFF, g = (c >> 8) & 0xFF, b = (c >> 16) & 0xFF;
+	return UI_RGBA(r + (u32)((255 - r) * k), g + (u32)((255 - g) * k), b + (u32)((255 - b) * k),
+		(c >> 24) & 0xFF);
+}
+static u32 uiRgb(u32 c) {
+	return ((c & 0xFF) << 16) | (c & 0xFF00) | ((c >> 16) & 0xFF);
+}
+
+// The marker the GPS is tracking this frame (worldGpsMarker()), worked out
+// once at the top of drawWorldBottom: its colour is the GPS's everywhere it
+// shows -- the map's rings, the destination strip, the compass, the feed.
+static int g_gpsMarkerNow = -1;
+static u32 uiGpsColour(void) {
+	return g_gpsMarkerNow >= 0 ? uiMarkerColour(g_gpsMarkerNow) : UI_GPS;
+}
+
+// A label over nothing and a value beside it on one line, in a chip at
+// (x, y). Returns the chip's width.
+// As a tab hung from the left edge (`x` is that edge). Returns its width.
+#define UI_CHIP_H 28.0f
+static float uiStatChip(C2D_TextBuf buf, float x, float y, const char* label, const char* value,
+		u32 valueColor) {
+	const float lw = uiMeasure(buf, label, UI_LABEL_PX), vw = uiMeasure(buf, value, 19.0f);
+	const float w = 10.0f + lw + 7.0f + vw + 18.0f;
+	const float cy = y + UI_CHIP_H * 0.5f;
+	uiTab(x, y, w, UI_CHIP_H, 0, UI_PANEL);
+	uiLabel(buf, label, x + 10.0f, cy, 0, UI_ACCENT);
+	uiText(buf, value, 19.0f, x + 10.0f + lw + 7.0f, cy, 0, valueColor, 0.0f);
+	return w;
+}
+
+// Words of `src` that fit `maxW` at `px`, line by line, into `out` (lines
+// split by '\n'). Returns the line count.
+static int uiWrap(C2D_TextBuf buf, const char* src, float px, float maxW, char* out, size_t cap) {
+	size_t o = 0;
+	int lines = 0;
+	char line[160] = "";
+	out[0] = '\0';
+	const char* p = src;
+	for (;;) {
+		while (*p == ' ')
+			p++;
+		const char* e = p;
+		while (*e && *e != ' ' && *e != '\n' && *e != '^')
+			e++;
+		if (e > p) {
+			char cand[200];
+			snprintf(cand, sizeof(cand), "%s%s%.*s", line, line[0] ? " " : "", (int)(e - p), p);
+			if (line[0] && uiMeasure(buf, cand, px) > maxW) {
+				o += (size_t)snprintf(out + o, o < cap ? cap - o : 0, "%s%s", lines ? "\n" : "", line);
+				lines++;
+				snprintf(line, sizeof(line), "%.*s", (int)(e - p), p);
+			} else {
+				snprintf(line, sizeof(line), "%s", cand);
+			}
+		}
+		if (*e == '\n' || *e == '^' || !*e) {
+			if (line[0] || *e) {
+				o += (size_t)snprintf(out + o, o < cap ? cap - o : 0, "%s%s", lines ? "\n" : "", line);
+				lines++;
+				line[0] = '\0';
+			}
+			if (!*e)
+				break;
+			e++;
+		}
+		p = e;
+		if (o >= cap)
+			break;
+	}
+	return lines;
+}
+
+// A lower-screen button: the pill with the console button's badge and the
+// label centred. The lit one (`focus`, or the action bar's primary) wears
+// the highlight and a lime label; the rest are black with a light rim.
+static void uiButton(C2D_TextBuf buf, float x, float y, float w, float h, char key,
+		const char* text, bool primary, bool focus) {
+	const bool lit = focus || primary;
+	uiPill(x, y, w, h, lit, UI_Z + 0.015f);
+	const float px = h >= 34.0f ? 16.0f : 14.0f;
+	const float tw = uiMeasure(buf, text, px), gh = key ? (h >= 34.0f ? 15.0f : 13.0f) : 0.0f;
+	const float gap = key ? 6.0f : 0.0f;
+	const float total = gh + gap + tw, x0 = x + (w - total) * 0.5f, cy = y + h * 0.5f;
+	if (key)
+		drawPadGlyph(key, x0 + gh * 0.5f, cy, gh, UI_Z + 0.04f);
+	uiText(buf, text, px, x0 + gh + gap, cy, 0, lit ? UI_ACCENT : UI_WHITE, w - gh - gap - h * 0.5f);
+}
+
+// A dialog in the lower screen's kit, GenericDialog's shape: the screen
+// behind dimmed, a panel near the screen's width two black layers deep with
+// the pale (197,218,165) ring, an optional title as a lime label, the blurb
+// wrapped at 16 px and centred, and the buttons a row of 36 px pills. `ids`
+// names each button for the caller; the one equal to `current` is lit and
+// wears A, the one equal to `noId` wears B (what B does). On the lower
+// screen each button's touch box goes to `hits`.
+static void uiDialogBox(C2D_TextBuf buf, float W, float H, const char* title, const char* blurb,
+		const char* const* labels, const int* ids, int nb, int current, int noId,
+		UiDlgHit* hits, int* hitN) {
+	C2D_DrawRectSolid(0.0f, 0.0f, UI_Z - 0.1f, W, H, C2D_Color32(0, 0, 0, 140));
+	const float pw = fminf(W - 20.0f, 340.0f), px = (W - pw) * 0.5f;
+	char wrapped[512];
+	const int lines = blurb && blurb[0] ? uiWrap(buf, blurb, 16.0f, pw - 36.0f, wrapped, sizeof(wrapped)) : 0;
+	const float lh = 20.0f, titleH = title && title[0] ? 22.0f : 0.0f;
+	const float ph = 20.0f + titleH + (float)lines * lh + 16.0f + 36.0f + 12.0f, py = floorf((H - ph) * 0.5f);
+	uiRoundRect(px, py, pw, ph, 6.0f, UI_Z, C2D_Color32(0, 0, 0, 209));
+	uiDialogRing(px, py, pw, ph);
+	float y = py + 20.0f;
+	if (titleH > 0.0f) {
+		uiLabel(buf, title, px + pw * 0.5f, y + 2.0f, 1, UI_ACCENT);
+		y += titleH;
+	}
+	for (char* line = wrapped; lines > 0 && line && *line; ) {
+		char* nl = strchr(line, '\n');
+		if (nl) *nl = '\0';
+		uiText(buf, line, 16.0f, px + pw * 0.5f, y + lh * 0.5f - 4.0f, 1, UI_WHITE, 0.0f);
+		y += lh;
+		line = nl ? nl + 1 : NULL;
+	}
+	const float gap = 10.0f;
+	const float bw = nb == 1 ? fminf(150.0f, pw - 28.0f) : (pw - 28.0f - gap * (float)(nb - 1)) / (float)nb;
+	const float bx0 = nb == 1 ? px + (pw - bw) * 0.5f : px + 14.0f;
+	const float by = py + ph - 12.0f - 36.0f;
+	if (hitN)
+		*hitN = 0;
+	for (int i = 0; i < nb; i++) {
+		const float bx = bx0 + (float)i * (bw + gap);
+		const bool cur = ids[i] == current;
+		uiButton(buf, bx, by, bw, 36.0f, cur ? 'A' : (ids[i] == noId ? 'B' : 0), labels[i], false, cur);
+		if (W == BOTTOM_W && hits && hitN)
+			hits[(*hitN)++] = (UiDlgHit){ { bx - 3.0f, by - 4.0f, bw + 6.0f, 44.0f }, ids[i] };
+	}
+}
+
+// The GenericDialog in the lower screen's kit (uiDialogBox()), with the
+// buttons BuildFromConfig shows -- Button1 / Button2 for a Yes/No, Button3
+// alone for an OK. False when there is nothing to draw it from, and
+// drawMenu() carries on as before.
+static bool drawUiDialog(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	if (!buf || !g_uiFont)
+		return false;
+	C2D_TextBufClear(buf);
+	const float W = m->screenW > 0.0f ? m->screenW : BOTTOM_W, H = SCREEN_TOP_H;
+	int btn[3], nb = 0;
+	if (g_feDialog.numButtons == 1)
+		btn[nb++] = 2;
+	else
+		for (int k = 0; k < g_feDialog.numButtons && k < 3; k++)
+			btn[nb++] = k;
+	if (nb == 0)
+		return false;
+	const char* labels[3];
+	for (int i = 0; i < nb; i++) {
+		const int k = btn[i];
+		labels[i] = m->dlgLabel[k][0] ? m->dlgLabel[k] : (k == 2 ? "OK" : k == 0 ? "Yes" : "No");
+	}
+	uiDialogBox(buf, W, H, NULL, m->dlgBlurb, labels, btn, nb, g_feDialog.current, 1,
+		g_uiDlgHit, &g_uiDlgHitN);
+	return true;
+}
+
+// MC_Main.fng's question on the lower screen -- the new-profile question
+// Start New Career and the Profile Manager raise, and the frontend's save /
+// load confirms -- as the same dialog: its title, its message, Yes / No (or
+// OK alone for "No profiles were found."). Its own layout was the PC's
+// 640x480 panel squeezed onto 320x240: a wide grey box, small text and
+// buttons that barely showed. The boot question stays on the top screen in
+// the retail look. A tap on a button is that button (mcMainTouchKeys()).
+static bool drawUiMcAsk(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	if (!buf || !g_uiFont || !m->isMcMain || !mcMainAsking(m) || m->screenW != SCREEN_BOT_W)
+		return false;
+	C2D_TextBufClear(buf);
+	const bool note = m->mcPhase == MCMAIN_SAVE && m->mcSaveKind == MCSAVE_NOTE;
+	const char* labels[2] = { m->mcText[note ? MCT_OK : MCT_YES], m->mcText[MCT_NO] };
+	static const int ids[2] = { 0, 1 };
+	// The kit's own backdrop over MC_Background's title art, which the top
+	// screen already shows -- the same picture twice read as a mistake.
+	uiScreenBackdrop(BOTTOM_W, SCREEN_TOP_H);
+	uiDialogBox(buf, BOTTOM_W, SCREEN_TOP_H, m->mcText[MCT_TITLE_ASK], mcMainMessage(m), labels, ids,
+		note ? 1 : 2, m->mcCurrent, note ? -1 : 1, g_mcDlgHit, &g_mcDlgHitN);
+	return true;
+}
+
+// The World Map's colours, per WorldMapElementType: the minimap's element
+// table (uiMarkerColour()) in the legend's order.
+static u32 uiWmeColour(int wme) {
+	static const u32 k[GAMEMAP_WME_COUNT] = {
+		UI_RGBA(165, 60, 233, 255), UI_RGBA(50, 130, 200, 255), UI_RGBA(130, 190, 230, 255),
+		UI_RGBA(202, 244, 138, 255), UI_RGBA(32, 176, 32, 255), UI_RGBA(190, 180, 45, 255),
+		UI_RGBA(207, 128, 48, 255), UI_RGBA(192, 64, 76, 255), UI_RGBA(46, 162, 74, 255),
+		UI_RGBA(61, 116, 192, 255), UI_RGBA(82, 163, 163, 255), UI_RGBA(190, 190, 40, 255),
+		UI_RGBA(150, 80, 200, 255), UI_RGBA(210, 195, 25, 255), UI_RGBA(240, 148, 58, 255),
+	};
+	return wme >= 0 && wme < GAMEMAP_WME_COUNT ? k[wme] : UI_WHITE;
+}
+
+// The skinned map's view: GameMap's window, its width across the 320 px
+// panel and three quarters of it down, so the art keeps its aspect.
+static float s_wmA0u, s_wmA0v, s_wmWu, s_wmWv, s_wmOx, s_wmOy, s_wmSpan;
+static bool wmPlace(const GameMap* gm, float wx, float wy, float* sx, float* sy) {
+	(void)gm;
+	if (s_wmSpan <= 0.0f || s_wmWu <= 0.0f)
+		return false;
+	const float au = (wx - s_wmOx) / s_wmSpan, av = (s_wmOy - wy) / s_wmSpan;
+	*sx = (au - s_wmA0u) / s_wmWu * BOTTOM_W;
+	*sy = (av - s_wmA0v) / s_wmWv * BOTTOM_H;
+	return *sx >= -8.0f && *sx <= BOTTOM_W + 8.0f && *sy >= -8.0f && *sy <= BOTTOM_H + 8.0f;
+}
+static void wmHit(float x, float y, float w, float h, int id) {
+	if (g_wmHitN < 48)
+		g_wmHit[g_wmHitN++] = (WmHit){ x, y, w, h, id };
+}
+
+static bool drawUiWorldMap(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	if (!buf || !g_uiFont || !g_minimap)
+		return false;
+	g_wmSkin = true;
+	C2D_TextBufClear(buf);
+	g_wmHitN = 0;
+	const GameMap* gm = &g_gameMap;
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	C2D_DrawRectSolid(0.0f, 0.0f, 0.1f, W, H, C2D_Color32(20, 20, 20, 255));
+	// ---- the art ----
+	C2D_Image art = {0};
+	if (minimap_map_art(g_minimap, &art, &s_wmOx, &s_wmOy, &s_wmSpan) && art.subtex) {
+		const float cu = (gm->u0 + gm->u1) * 0.5f, cv = (gm->v0 + gm->v1) * 0.5f;
+		s_wmWu = gm->u1 - gm->u0;
+		s_wmWv = s_wmWu * H / W;
+		s_wmA0u = cu - s_wmWu * 0.5f;
+		s_wmA0v = cv - s_wmWv * 0.5f;
+		const Tex3DS_SubTexture* t = art.subtex;
+		const float fx = t->right - t->left, fy = t->top - t->bottom;
+		static Tex3DS_SubTexture win;
+		win = *t;
+		win.width = (u16)W;
+		win.height = (u16)H;
+		win.left = t->left + s_wmA0u * fx;
+		win.right = t->left + (s_wmA0u + s_wmWu) * fx;
+		win.top = t->top - s_wmA0v * fy;
+		win.bottom = t->top - (s_wmA0v + s_wmWv) * fy;
+		C2D_Image wi = art;
+		wi.subtex = &win;
+		C2D_DrawImageAt(wi, 0.0f, 0.0f, 0.2f, NULL, 1.0f, 1.0f);
+	}
+	// ---- markers, the cursor's and the GPS target's ringed ----
+	const GameMapElem* cur = gamemap_cursor(gm);
+	const u64 now = osGetTime();
+	const float pulse = (float)(now % 1400) / 1400.0f;
+	for (int k = 0; k < gm->elemCount; k++) {
+		const GameMapElem* e = &gm->elems[k];
+		float x, y;
+		if (!gamemap_renderable(gm, e) || !wmPlace(gm, e->worldX, e->worldY, &x, &y))
+			continue;
+		const u32 col = uiWmeColour(e->wme);
+		bool isGps = false;
+		if (e->zone) {
+			float tg[3], ic[2];
+			gpsZoneTarget((const TrackPathZone*)e->zone, tg, ic);
+			isGps = gps_is_target(tg);
+		}
+		if (isGps || (e == cur && g_wmCard)) {
+			const u32 rc = isGps ? uiLighten(col, 0.25f) : UI_ACCENT;
+			const float r = 9.0f + pulse * 11.0f;
+			const u8 a = (u8)(255.0f * (1.0f - pulse));
+			const u32 c = (rc & 0x00FFFFFFu) | ((u32)a << 24);
+			for (int s2 = 0; s2 < 24; s2++) {
+				const float a0 = (float)s2 * (float)M_PI / 12.0f, a1 = a0 + (float)M_PI / 12.0f;
+				C2D_DrawLine(x + r * cosf(a0), y + r * sinf(a0), c, x + r * cosf(a1), y + r * sinf(a1), c,
+					2.0f, 0.29f);
+			}
+		}
+		if (e->wme >= GAMEMAP_WME_PAINTSHOP) {
+			uiRoundRect(x - 8.5f, y - 8.5f, 17.0f, 17.0f, 4.0f, 0.3f, UI_PANEL_SOLID);
+			uiRoundRect(x - 6.5f, y - 6.5f, 13.0f, 13.0f, 3.0f, 0.31f, col);
+		} else {
+			C2D_DrawCircleSolid(x, y, 0.3f, 8.5f, UI_PANEL_SOLID);
+			C2D_DrawCircleSolid(x, y, 0.31f, 6.5f, col);
+		}
+	}
+	// ---- the player ----
+	{
+		float x, y;
+		if (wmPlace(gm, g_gmPlayer[0], g_gmPlayer[1], &x, &y)) {
+			uiArrow(x, y, -g_gmPlayer[2], 9.0f, UI_PANEL_SOLID);
+			uiArrow(x, y, -g_gmPlayer[2], 7.0f, C2D_Color32(65, 214, 90, 255));
+		}
+	}
+	// ---- top: the back tab off the left edge, the region off the right ----
+	C2D_DrawRectangle(0.0f, 0.0f, UI_Z - 0.05f, W, 40.0f, C2D_Color32(0, 0, 0, 102),
+		C2D_Color32(0, 0, 0, 102), C2D_Color32(0, 0, 0, 0), C2D_Color32(0, 0, 0, 0));
+	const float tw = uiMeasure(buf, "WORLD MAP", UI_LABEL_PX) + 44.0f;
+	uiTab(0.0f, 6.0f, tw, 28.0f, 0, UI_PANEL);
+	drawPadGlyph('B', 14.0f, 20.0f, 13.0f, UI_Z + 0.04f);
+	uiLabel(buf, "WORLD MAP", 27.0f, 20.0f, 0, UI_ACCENT);
+	wmHit(0.0f, 4.0f, tw, 32.0f, WMH_BACK);
+	char rn[64];
+	langTextToUtf8(g_gmStr[GMS_ZOOM0 + gm->section], rn, sizeof(rn));
+	const float rw = fmaxf(128.0f, uiMeasure(buf, rn, 16.0f) + 70.0f), rx = W - rw;
+	uiTab(rx, 6.0f, rw, 28.0f, 1, UI_PANEL);
+	uiArrow(rx + 20.0f, 20.0f, (float)M_PI, 5.0f, UI_ACCENT);
+	uiArrow(W - 12.0f, 20.0f, 0.0f, 5.0f, UI_ACCENT);
+	uiText(buf, rn, 16.0f, rx + 4.0f + rw * 0.5f, 20.0f, 1, UI_WHITE, rw - 48.0f);
+	wmHit(rx, 4.0f, rw * 0.5f, 32.0f, WMH_PREV);
+	wmHit(rx + rw * 0.5f, 4.0f, rw * 0.5f, 32.0f, WMH_NEXT);
+	// ---- filters: a sheet in from the right edge, the types as a list --
+	// a row each, so every name reads whole (the user on hardware,
+	// 2026-11-14: the wrapped pills cut them to "Cir.."). Opaque, the map
+	// still showing on the left; Done on top, Show all / Hide all under the
+	// rows. Up / down on the pad walk the rows, as retail's list does. Shut,
+	// the zoom boxes and the filters / GPS tabs instead. ----
+	const float fy = H - 34.0f;
+	g_gpsMarkerNow = worldGpsMarker();
+	if (g_wmDrawer && gm->rowCount > 0) {
+		static int s_top = 0;
+		const int n = gm->rowCount < GAMEMAP_SLOTS ? gm->rowCount : GAMEMAP_SLOTS;
+		const float sw = 196.0f, sx = W - sw, headH = 36.0f, footH = 38.0f;
+		const float listY = headH, listH = H - headH - footH;
+		const float rowH = fminf(28.0f, fmaxf(24.0f, listH / (float)n));
+		const int vis = (int)(listH / rowH);
+		if (gm->highlight < s_top) s_top = gm->highlight;
+		if (gm->highlight >= s_top + vis) s_top = gm->highlight - vis + 1;
+		if (s_top > n - vis) s_top = n - vis;
+		if (s_top < 0) s_top = 0;
+		C2D_DrawRectSolid(sx, 0.0f, UI_Z - 0.01f, sw, H, C2D_Color32(0, 0, 0, 235));
+		C2D_DrawRectSolid(sx, 0.0f, UI_Z - 0.005f, 1.0f, H, C2D_Color32(255, 255, 255, 41));
+		wmHit(sx, 0.0f, sw, H, WMH_DRAWER);
+		uiLabel(buf, "SHOW ON MAP", sx + 10.0f, 18.0f, 0, UI_ACCENT);
+		const float dw = uiMeasure(buf, "Done", 14.0f) + 13.0f + 6.0f + 28.0f;
+		uiButton(buf, W - 6.0f - dw, 5.0f, dw, 26.0f, 'B', "Done", false, false);
+		wmHit(W - 6.0f - dw - 3.0f, 0.0f, dw + 9.0f, headH, WMH_DONE);
+		for (int k = 0; k < vis && s_top + k < n; k++) {
+			const int r = s_top + k;
+			char name[48];
+			langTextToUtf8(g_gmStr[GMS_ZONE0 + gm->rows[r].zoneType], name, sizeof(name));
+			const float py = listY + (float)k * rowH, ph = rowH - 3.0f, cy = py + ph * 0.5f;
+			const float px = sx + 6.0f, pw = sw - 12.0f - (n > vis ? 6.0f : 0.0f);
+			const bool on = gamemap_row_on(gm, r), focus = r == gm->highlight;
+			const u32 col = uiWmeColour(gm->rows[r].wme);
+			// On: a grey row, the type's colour in a solid dot and a tick.
+			// Off: an empty outline, the dot a ring, the name dim. The pad's
+			// row: a lime rim, no glow.
+			if (on)
+				uiRoundRect(px, py, pw, ph, 3.0f, UI_Z, C2D_Color32(135, 135, 135, 90));
+			uiRing(px, py, pw, ph, 3.0f, focus ? 1.5f : 1.0f, UI_Z + 0.005f,
+				focus ? UI_ACCENT : C2D_Color32(255, 255, 255, on ? 61 : 41));
+			if (on)
+				C2D_DrawCircleSolid(px + 13.0f, cy, UI_Z + 0.02f, 5.0f, col);
+			else
+				uiRing(px + 8.0f, cy - 5.0f, 10.0f, 10.0f, 5.0f, 1.3f, UI_Z + 0.02f, UI_DIM);
+			uiText(buf, name, 14.0f, px + 25.0f, cy, 0, focus ? UI_ACCENT : on ? UI_WHITE : UI_DIM,
+				pw - 25.0f - 26.0f);
+			// The tick on the right: shown or not, at a glance.
+			const float tx = px + pw - 16.0f;
+			if (on) {
+				const u32 tc = focus ? UI_ACCENT : UI_WHITE;
+				C2D_DrawLine(tx - 5.0f, cy, tc, tx - 1.5f, cy + 3.5f, tc, 2.0f, UI_Z + 0.03f);
+				C2D_DrawLine(tx - 1.5f, cy + 3.5f, tc, tx + 5.0f, cy - 4.0f, tc, 2.0f, UI_Z + 0.03f);
+			}
+			wmHit(px, py, pw, rowH, WMH_ROW0 + r);
+		}
+		if (n > vis && vis > 0) {
+			const float th = listH * (float)vis / (float)n;
+			uiRoundRect(W - 8.0f, listY, 3.0f, listH - 3.0f, 1.5f, UI_Z, C2D_Color32(255, 255, 255, 26));
+			uiRoundRect(W - 8.0f, listY + (listH - 3.0f - th) * (float)s_top / (float)(n - vis), 3.0f, th, 1.5f,
+				UI_Z + 0.01f, UI_ACCENT);
+		}
+		int shown = 0;
+		for (int r = 0; r < gm->rowCount; r++)
+			shown += gamemap_row_on(gm, r) ? 1 : 0;
+		const char* an = shown < gm->rowCount ? "Show all" : "Hide all";
+		const float ay = H - footH + 6.0f;
+		uiButton(buf, sx + 6.0f, ay, sw - 12.0f, 28.0f, 0, an, false, false);
+		wmHit(sx, ay - 4.0f, sw, footH, WMH_ALL);
+	} else {
+		// ---- zoom: two 30 px boxes ----
+		const float zx = W - 36.0f;
+		for (int k = 0; k < 2; k++) {
+			const float y = 76.0f + 34.0f * (float)k, cx = zx + 15.0f, cy = y + 15.0f;
+			uiChip(zx, y, 30.0f, 30.0f, 0);
+			C2D_DrawRectSolid(cx - 6.0f, cy - 1.0f, UI_Z + 0.03f, 12.0f, 2.0f, UI_WHITE);
+			if (k == 0)
+				C2D_DrawRectSolid(cx - 1.0f, cy - 6.0f, UI_Z + 0.03f, 2.0f, 12.0f, UI_WHITE);
+			wmHit(zx - 4.0f, y - 2.0f, 40.0f, 34.0f, k == 0 ? WMH_ZIN : WMH_ZOUT);
+		}
+		// ---- bottom: the filters tab off the left edge, the GPS off the right ----
+		int shown = 0;
+		for (int r = 0; r < gm->rowCount; r++)
+			shown += gamemap_row_on(gm, r) ? 1 : 0;
+		char ft[32];
+		snprintf(ft, sizeof(ft), "FILTERS  %d/%d", shown, gm->rowCount);
+		const float fw = uiMeasure(buf, ft, UI_LABEL_PX) + 44.0f;
+		uiTab(0.0f, fy, fw, 28.0f, 0, UI_PANEL);
+		for (int i = 0; i < 3; i++)
+			C2D_DrawRectSolid(10.0f, fy + 9.0f + 4.0f * (float)i, UI_Z + 0.03f, 10.0f, 1.6f, UI_WHITE);
+		uiLabel(buf, ft, 27.0f, fy + 14.0f, 0, UI_WHITE);
+		wmHit(0.0f, fy - 2.0f, fw, 36.0f, WMH_FILTERS);
+		if (!gameMapGpsIdle() && g_gpsMarkerNow >= 0) {
+			const u32 c = uiGpsColour();
+			const float glw = uiMeasure(buf, "GPS", UI_LABEL_PX);
+			const float gw = 25.0f + glw + 6.0f + uiMeasure(buf, g_markerTitle[g_gpsMarkerNow], 14.0f) + 10.0f;
+			const float gx = W - fminf(gw, W - fw - 12.0f);
+			uiTab(gx, fy, W - gx, 28.0f, 1, UI_PANEL);
+			C2D_DrawCircleSolid(gx + 16.0f, fy + 14.0f, UI_Z + 0.02f, 3.5f, c);
+			uiLabel(buf, "GPS", gx + 25.0f, fy + 14.0f, 0, uiLighten(c, 0.35f));
+			uiText(buf, g_markerTitle[g_gpsMarkerNow], 14.0f, gx + 31.0f + glw, fy + 14.0f, 0, UI_WHITE,
+				W - 8.0f - (gx + 31.0f + glw));
+			wmHit(gx, fy - 2.0f, W - gx, 36.0f, WMH_GPS);
+		}
+	}
+	// ---- the cursor's card: the dialog's look, small ----
+	if (g_wmCard && cur) {
+		const float cw = 200.0f, ch = 82.0f, cx = (W - cw) * 0.5f, cy = 48.0f;
+		const u32 col = uiWmeColour(cur->wme);
+		uiRoundRect(cx, cy, cw, ch, 6.0f, UI_Z, UI_DEEP);
+		uiDialogRing(cx, cy, cw, ch);
+		uiRoundRect(cx + 9.0f, cy + 7.0f, 22.0f, 3.0f, 1.5f, UI_Z + 0.01f, col);
+		wmHit(cx, cy, cw, ch, WMH_CARD);
+		char nm[48];
+		langTextToUtf8(g_gmStr[GMS_ZONE0 + cur->zoneType], nm, sizeof(nm));
+		uiLabel(buf, cur->wme >= GAMEMAP_WME_PAINTSHOP ? "SHOP" : "EVENT", cx + 37.0f, cy + 9.0f, 0, UI_DIM);
+		uiText(buf, nm, 16.0f, cx + 10.0f, cy + 26.0f, 0, UI_WHITE, cw - 20.0f);
+		if (cur->sponsor)
+			uiText(buf, "Sponsor race", 13.0f, cx + 10.0f, cy + 44.0f, 0, UI_DIM, cw - 20.0f);
+		const bool idle = gameMapGpsIdle();
+		const char* bl = idle ? "Set GPS" : "GPS Off";
+		const float bw = uiMeasure(buf, bl, 14.0f) + 13.0f + 6.0f + 28.0f;
+		const float bx = cx + cw - bw - 8.0f, by = cy + ch - 34.0f;
+		if (!gm->gpsDisabled) {
+			uiButton(buf, bx, by, bw, 28.0f, 'A', bl, true, false);
+			wmHit(bx - 4.0f, by - 4.0f, bw + 8.0f, 36.0f, WMH_CARD_GPS);
+		}
+	}
+	return true;
+}
+
+// The lower screen's list/reader chrome in the U2-UI kit: a neutral black
+// backdrop, a black band across the top (the back pill with B, the category
+// switcher) and one across the bottom (the actions as pills).
+#define UI_HEAD_H 36.0f
+#define UI_FOOT_H 42.0f
+static void uiScreenBackdrop(float W, float H) {
+	C2D_DrawRectangle(0.0f, 0.0f, 0.1f, W, H, C2D_Color32(27, 27, 27, 255), C2D_Color32(27, 27, 27, 255),
+		C2D_Color32(7, 7, 7, 255), C2D_Color32(7, 7, 7, 255));
+	for (float i = -H; i < W; i += 14.0f)
+		C2D_DrawLine(i, H, C2D_Color32(255, 255, 255, 6), i + H, 0.0f, C2D_Color32(255, 255, 255, 6), 5.0f, 0.11f);
+}
+// The header band and its back pill; returns the pill's width.
+static float uiBackChip(C2D_TextBuf buf, const char* label) {
+	uiBand2(0.0f, UI_HEAD_H, true);
+	const float w = uiMeasure(buf, label, 14.0f) + 13.0f + 6.0f + 28.0f;
+	uiButton(buf, 6.0f, 5.0f, w, 26.0f, 'B', label, false, false);
+	return w;
+}
+// An action bar from the right in the footer band: { label, key, primary }
+// each, the first rightmost; the primary is the lit pill. Hits go to `hit`
+// with ids from `ids`.
+static void uiActionBar(C2D_TextBuf buf, int n, const char* const* labels, const char* keys,
+		const bool* primary, const int* ids, void (*hit)(float, float, float, float, int)) {
+	uiBand2(BOTTOM_H - UI_FOOT_H, UI_FOOT_H, false);
+	float x = BOTTOM_W - 8.0f;
+	const float y = BOTTOM_H - UI_FOOT_H + 6.0f;
+	for (int i = 0; i < n; i++) {
+		const float w = fmaxf(84.0f, uiMeasure(buf, labels[i], 14.0f) + 13.0f + 6.0f + 32.0f);
+		x -= w;
+		uiButton(buf, x, y, w, 30.0f, keys[i], labels[i], primary[i], false);
+		hit(x - 3.0f, y - 4.0f, w + 6.0f, 38.0f, ids[i]);
+		x -= 8.0f;
+	}
+}
+static void smsHit(float x, float y, float w, float h, int id) {
+	if (g_smsHitN < 48)
+		g_smsHit[g_smsHitN++] = (SmsHit){ x, y, w, h, id };
+}
+
+// The mailbox as the lower screen's list: the category with arrows, a row a
+// message -- the envelope in its SMSMessageCategories colour, the subject,
+// the selection lime -- and Read / Delete.
+static bool drawUiMailbox(const MenuState* m) {
+	(void)m;
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(3072);
+	if (!buf || !g_uiFont)
+		return false;
+	g_smsSkin = true;
+	C2D_TextBufClear(buf);
+	g_smsHitN = 0;
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	const float bw = uiBackChip(buf, "Mailbox");
+	smsHit(0.0f, 0.0f, 6.0f + bw + 4.0f, UI_HEAD_H, SMH_BACK);
+	// The category switcher, in the header band.
+	const float rx = 6.0f + bw + 8.0f, rw = W - 6.0f - rx;
+	const int c = g_smsBox.category;
+	if (c > 0)
+		uiArrow(rx + 10.0f, 17.0f, (float)M_PI, 5.0f, UI_ACCENT);
+	if (c < SMS_CATEGORY_COUNT - 1)
+		uiArrow(rx + rw - 10.0f, 17.0f, 0.0f, 5.0f, UI_ACCENT);
+	uiText(buf, (c >= 0 && c < SMS_CATEGORY_COUNT) ? g_smsBox.cat[c] : "", 17.0f, rx + rw * 0.5f, 15.0f, 1,
+		UI_ACCENT, rw - 40.0f);
+	for (int i = 0; i < SMS_CATEGORY_COUNT; i++)
+		C2D_DrawCircleSolid(rx + rw * 0.5f - (float)(SMS_CATEGORY_COUNT - 1) * 5.0f + 10.0f * (float)i, 29.5f,
+			UI_Z + 0.03f, 1.8f, i == c ? UI_ACCENT : C2D_Color32(255, 255, 255, 77));
+	smsHit(rx, 0.0f, rw * 0.5f, UI_HEAD_H, SMH_PREV);
+	smsHit(rx + rw * 0.5f, 0.0f, rw * 0.5f, UI_HEAD_H, SMH_NEXT);
+	// The rows: grey bars, the selection highlighted.
+	const SmsView* v = &g_smsBox.view;
+	const float y0 = UI_HEAD_H + 6.0f, rowH = 34.0f, bottom = H - UI_FOOT_H - 2.0f;
+	const int vis = (int)((bottom - y0) / rowH);
+	const int sel = g_smsBox.sel;
+	if (sel < g_smsListTop) g_smsListTop = sel;
+	if (sel >= g_smsListTop + vis) g_smsListTop = sel - vis + 1;
+	if (g_smsListTop > v->count - vis) g_smsListTop = v->count - vis;
+	if (g_smsListTop < 0) g_smsListTop = 0;
+	if (v->count == 0)
+		uiText(buf, "No messages", 15.0f, W * 0.5f, y0 + 50.0f, 1, UI_DIM, 0.0f);
+	const float rx0 = 8.0f, rww = W - 16.0f - 10.0f;
+	for (int k = 0; k < vis; k++) {
+		const int row = g_smsListTop + k;
+		if (row >= v->count)
+			break;
+		const int slot = v->idx[row];
+		const float y = y0 + (float)k * rowH, h = rowH - 4.0f, cy = y + h * 0.5f;
+		const bool isSel = row == sel;
+		const bool unread = slot < (int)gProfile.smsCount && gProfile.sms[slot].read == 0;
+		uiRowBar(rx0, y, rww, h, isSel);
+		u32 env = UI_DIM;
+		if (slot < (int)gProfile.smsCount) {
+			const u32 cc = sms_envelope_color(g_smsDb, &gProfile.sms[slot]);
+			env = C2D_Color32((u8)(cc >> 24), (u8)(cc >> 16), (u8)(cc >> 8), 255);
+		}
+		drawEnvelope(rx0 + 9.0f, cy - 5.0f, 14.0f, unread ? env : UI_DIM);
+		if (unread)
+			C2D_DrawCircleSolid(rx0 + 24.0f, cy - 5.0f, UI_Z + 0.03f, 2.6f, UI_ACCENT);
+		const char* subj = (g_smsBox.subj && slot < g_smsBox.subjCount) ? g_smsBox.subj[slot] : "";
+		const char* colon = strstr(subj, ": ");
+		uiText(buf, colon ? colon + 2 : subj, 15.0f, rx0 + 32.0f, cy, 0,
+			isSel ? UI_ACCENT : unread ? UI_WHITE : C2D_Color32(204, 204, 204, 255), rww - 32.0f - 10.0f);
+		smsHit(rx0, y, rww, h, SMH_ROW0 + row);
+	}
+	// The scrollbar: the track and a lime handle.
+	if (vis > 0) {
+		const float sh = (float)vis * rowH - 4.0f;
+		uiRoundRect(W - 12.0f, y0, 4.0f, sh, 2.0f, UI_Z, C2D_Color32(255, 255, 255, 26));
+		if (v->count > vis) {
+			const float th = sh * (float)vis / (float)v->count;
+			const float ty = y0 + (sh - th) * (float)g_smsListTop / (float)(v->count - vis);
+			uiRoundRect(W - 12.0f, ty, 4.0f, th, 2.0f, UI_Z + 0.01f, UI_ACCENT);
+		}
+	}
+	if (v->count > 0) {
+		static const char* const L[2] = { "Read", "Delete" };
+		static const char K[2] = { 'A', 'Y' };
+		static const bool P[2] = { true, false };
+		static const int I[2] = { SMH_READ, SMH_DELETE };
+		uiActionBar(buf, 2, L, K, P, I, smsHit);
+	} else {
+		uiBand2(H - UI_FOOT_H, UI_FOOT_H, false);
+	}
+	return true;
+}
+
+// The reader: who it is from and the subject in the header band beside the
+// back pill, the body in a U2 box scrolled by drag or the pad, and Drive.
+static bool drawUiSmsReader(const MenuState* m) {
+	(void)m;
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(4096);
+	if (!buf || !g_uiFont)
+		return false;
+	g_smsSkin = true;
+	C2D_TextBufClear(buf);
+	g_smsHitN = 0;
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	const float bw = uiBackChip(buf, "Inbox");
+	smsHit(0.0f, 0.0f, 6.0f + bw + 4.0f, UI_HEAD_H, SMH_INBOX);
+	// The header: FROM and the subject.
+	const char* from = g_smsBox.rdFrom;
+	const char* fc = strstr(from, ": ");
+	from = fc ? fc + 2 : from;
+	const char* subj = g_smsBox.rdSubject;
+	const char* sc = strstr(subj, ": ");
+	subj = sc ? sc + 2 : subj;
+	const float hx = 6.0f + bw + 10.0f;
+	char fl[96];
+	snprintf(fl, sizeof(fl), "FROM %s", from);
+	for (char* p = fl; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+	uiText(buf, fl, 11.0f, hx, 10.0f, 0, UI_ACCENT, W - hx - 8.0f);
+	uiText(buf, subj, 15.0f, hx, 25.0f, 0, UI_WHITE, W - hx - 8.0f);
+	// The body.
+	const float by = UI_HEAD_H + 8.0f, bh = H - UI_FOOT_H - 8.0f - by, lh = 19.0f;
+	static char wrapped[2400];
+	static char last[64];
+	static int lines = 0;
+	char key[64];
+	snprintf(key, sizeof(key), "%d:%.50s", g_smsBox.readerSlot, g_smsBox.rdBody);
+	if (strcmp(key, last) != 0) {
+		snprintf(last, sizeof(last), "%s", key);
+		lines = uiWrap(buf, g_smsBox.rdBody, 15.0f, W - 16.0f - 34.0f, wrapped, sizeof(wrapped));
+	}
+	g_smsReaderMax = fmaxf(0.0f, (float)lines * lh - bh + 12.0f);
+	uiRoundRect(8.0f, by, W - 16.0f, bh, 3.0f, UI_Z - 0.02f, UI_PANEL);
+	uiRing(8.0f, by, W - 16.0f, bh, 3.0f, 1.0f, UI_Z - 0.015f, UI_RIM);
+	// Clip the body to its box.
+	C2D_Flush();
+	C3D_SetScissor(GPU_SCISSOR_NORMAL, (u32)(SCREEN_TOP_H - (by + bh - 2.0f)), (u32)(W - (W - 8.0f)),
+		(u32)(SCREEN_TOP_H - (by + 2.0f)), (u32)(W - 8.0f));
+	float y = by + 16.0f - g_smsReaderTop;
+	const char* p = wrapped;
+	for (int i = 0; i < lines && *p; i++) {
+		const char* nl = strchr(p, '\n');
+		char line[200];
+		snprintf(line, sizeof(line), "%.*s", nl ? (int)(nl - p) : (int)strlen(p), p);
+		if (y > by - lh && y < by + bh + lh)
+			uiText(buf, line, 15.0f, 20.0f, y, 0, UI_WHITE, 0.0f);
+		y += lh;
+		if (!nl) break;
+		p = nl + 1;
+	}
+	C2D_Flush();
+	C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+	uiRoundRect(W - 16.0f, by + 6.0f, 3.0f, bh - 12.0f, 1.5f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 26));
+	if (g_smsReaderMax > 0.0f) {
+		const float th = (bh - 12.0f) * bh / (bh + g_smsReaderMax);
+		uiRoundRect(W - 16.0f, by + 6.0f + (bh - 12.0f - th) * (g_smsReaderTop / g_smsReaderMax), 3.0f, th,
+			1.5f, UI_Z + 0.02f, UI_ACCENT);
+	}
+	static const char* const L[1] = { "Drive" };
+	static const char K[1] = { 'Y' };
+	static const bool P[1] = { true };
+	static const int I[1] = { SMH_DRIVE };
+	uiActionBar(buf, 1, L, K, P, I, smsHit);
+	return true;
+}
+
+
+// ===========================================================================
+// PORT: the rest of the lower screen in the U2-UI kit (the user's mockup,
+// 2026-11-14): the icon menus as a grid of tiles, the option pages as rows,
+// the engage dialogs, the Career Status overlay and the help dialog. Each
+// draws from the screen's own state and lays its targets out with fskHit();
+// the screen's input is untouched (fskTouchKeys()).
+// ===========================================================================
+
+// A string the menu already parsed (in g_uiFont) drawn the kit's way: its
+// capitals centred on `cy`, squeezed to `maxW` when wider. Returns its width.
+static float uiCText(const C2D_Text* t, float px, float x, float cy, int align, u32 color, float maxW) {
+	const float sc = px / g_fontUnitPx;
+	float w = 0.0f, h = 0.0f;
+	textDims(t, sc, sc, &w, &h);
+	float sx = sc;
+	if (maxW > 0.0f && w > maxW && w > 0.0f) {
+		sx = sc * maxW / w;
+		w = maxW;
+	}
+	const float dx = align == 2 ? -w : align == 1 ? -w * 0.5f : 0.0f;
+	const float y = cy + uiCapPx(px) * 0.5f - uiBaselineOff(px);
+	C2D_DrawText(t, C2D_WithColor, x + dx + 1.0f, y + 1.0f, UI_Z + 0.02f, sx, sc,
+		C2D_Color32(0, 0, 0, (u8)(((color >> 24) & 0xFF) * 3 / 5)));
+	C2D_DrawText(t, C2D_WithColor, x + dx, y, UI_Z + 0.03f, sx, sc, color);
+	return w;
+}
+// Lines of `src` wrapped at `px` to `maxW`, drawn from `y` (first line's
+// centre) `lh` apart, aligned by `align` on `x`; at most `maxLines`.
+static int uiTextBlock(C2D_TextBuf buf, const char* src, float px, float x, float y, float lh,
+		float maxW, int align, u32 color, int maxLines) {
+	static char wrapped[1024];
+	const int n = uiWrap(buf, src, px, maxW, wrapped, sizeof(wrapped));
+	char* line = wrapped;
+	int k = 0;
+	for (; k < n && k < maxLines && line && *line; k++) {
+		char* nl = strchr(line, '\n');
+		if (nl)
+			*nl = '\0';
+		uiText(buf, line, px, x, y + (float)k * lh, align, color, maxW);
+		line = nl ? nl + 1 : NULL;
+	}
+	return n;
+}
+// The header band: an optional back pill (B), the title (a parsed string or
+// a plain one) and an optional Help pill (ZL). Returns the title's left edge.
+static void uiSkinHeader(C2D_TextBuf buf, const char* back, const C2D_Text* titleT, const char* titleS,
+		bool help) {
+	uiBand2(0.0f, UI_HEAD_H, true);
+	float x = 10.0f, right = BOTTOM_W - 8.0f;
+	if (back) {
+		const float bw = uiMeasure(buf, back, 14.0f) + 13.0f + 6.0f + 28.0f;
+		uiButton(buf, 6.0f, 5.0f, bw, 26.0f, 'B', back, false, false);
+		fskHit(0.0f, 0.0f, 6.0f + bw + 4.0f, UI_HEAD_H, FSK_KEY, KEY_B);
+		x = 6.0f + bw + 10.0f;
+	}
+	if (help) {
+		const float hw = uiMeasure(buf, "Help", 14.0f) + 13.0f + 6.0f + 28.0f;
+		uiButton(buf, BOTTOM_W - 6.0f - hw, 5.0f, hw, 26.0f, 'l', "Help", false, false);
+		fskHit(BOTTOM_W - 10.0f - hw, 0.0f, hw + 10.0f, UI_HEAD_H, FSK_KEY, KEY_ZL);
+		right = BOTTOM_W - 6.0f - hw - 8.0f;
+	}
+	if (titleT)
+		uiCText(titleT, 18.0f, x, 18.0f, 0, UI_ACCENT, right - x);
+	else if (titleS && titleS[0])
+		uiText(buf, titleS, 18.0f, x, 18.0f, 0, UI_ACCENT, right - x);
+}
+// The footer band's pills from the right, each a key: { label, glyph, key,
+// lit }. The first is rightmost.
+typedef struct { const char* label; char glyph; u32 key; bool lit; } UiAct;
+static void uiSkinFooter(C2D_TextBuf buf, const UiAct* a, int n) {
+	uiBand2(BOTTOM_H - UI_FOOT_H, UI_FOOT_H, false);
+	float x = BOTTOM_W - 8.0f;
+	const float y = BOTTOM_H - UI_FOOT_H + 6.0f;
+	for (int i = 0; i < n; i++) {
+		const float w = fmaxf(84.0f, uiMeasure(buf, a[i].label, 14.0f) + 13.0f + 6.0f + 32.0f);
+		x -= w;
+		uiButton(buf, x, y, w, 30.0f, a[i].glyph, a[i].label, a[i].lit, false);
+		fskHit(x - 3.0f, y - 4.0f, w + 6.0f, 38.0f, FSK_KEY, a[i].key);
+		x -= 8.0f;
+	}
+}
+// A five-point star, `k` of it lit from the left (0..1).
+static void uiStar(float cx, float cy, float r, float k) {
+	const u32 off = C2D_Color32(255, 255, 255, 46), on = UI_ACCENT;
+	float px[10], py[10];
+	for (int j = 0; j < 10; j++) {
+		const float rr = (j & 1) ? r * 0.44f : r, a = -(float)M_PI * 0.5f + (float)j * (float)M_PI / 5.0f;
+		px[j] = cx + rr * cosf(a);
+		py[j] = cy + rr * sinf(a);
+	}
+	for (int j = 0; j < 10; j++) {
+		const int n = (j + 1) % 10;
+		// A triangle is lit when its middle sits left of the lit edge.
+		const float mx = (cx + px[j] + px[n]) / 3.0f;
+		const bool lit = k >= 1.0f || (k > 0.0f && mx <= cx - r + 2.0f * r * k);
+		C2D_DrawTriangle(cx, cy, lit ? on : off, px[j], py[j], lit ? on : off, px[n], py[n], lit ? on : off,
+			UI_Z + 0.02f);
+	}
+}
+
+// ---- icon menus: a grid of tiles ----
+// Retail's IconScroller shows one icon at a time on a strip; here every
+// option is a tile with its own icon and name. LEFT / RIGHT still walk them
+// in the strip's order (and a tap still queues those steps), UP / DOWN move
+// to the tile above or below (uiGridNav()). Only the plain hubs and the body
+// shop's categories: the screens whose strip carries more (parts lists,
+// swatches, layers, sponsors) keep theirs.
+//
+// PORT: UI_Main has a hierarchy (the user on hardware, 2026-11-14): Career
+// and Quick Race as two large tiles, LAN / Customize / Profile Manager
+// smaller under them, and Options as a gear in the header, off the grid. It
+// is still the same item list in the same order.
+enum { UI_CELL_TILE, UI_CELL_HERO, UI_CELL_SMALL, UI_CELL_GEAR };
+typedef struct { float x, y, w, h; u8 kind; } UiGridCell;
+static struct {
+	const MenuState* m;
+	int n;
+	UiGridCell c[MENU_MAX_ITEMS];
+	float top, bottom, contentH, scroll;
+} g_uiGrid;
+
+static bool uiBodyShopGrid(const MenuState* m) {
+	// Every mode's categories: the vinyl groups, decals, ICE, neon, spinner
+	// and rim brands as much as the parts (the user, 2026-11-15).
+	return m->isBodyShop && !g_bodyShop.browsing;
+}
+static bool uiGridScreen(const MenuState* m) {
+	static const char* const kHubs[] = {
+		"UI_Main.fng", "UI_OptionsMain.fng", "UI_CareerCrib.fng", "UI_CribRewardOptionsMain.fng",
+		"UI_ChoosePerformanceCategory.fng", "UI_ChooseCustomizeCategory.fng", "UI_QRModeSelect.fng",
+		"UI_OLMAIN.fng",
+	};
+	(void)kHubs;
+	if (!m->isIconScroller || !m->navBottom || m->itemCount <= 0 || m->itemCount > MENU_MAX_ITEMS ||
+			m->isPerfPackage || m->isPaint || m->isPostSponsor || m->hasTrackRows)
+		return false;
+	if (m->isBodyShop)
+		return uiBodyShopGrid(m);
+	// PORT (the user, 2026-11-15: no screen left in the 640x480 layout):
+	// every other icon menu on the lower screen is a grid too, not only the
+	// hubs -- the vinyl layers, the shops' categories, the rewards.
+	return true;
+}
+
+// The item whose push target is `fng`, or -1.
+static int uiGridItemFor(const MenuState* m, const char* fng) {
+	for (int i = 0; i < m->itemCount; i++) {
+		const MenuItem* it = menuItemAt(m, i);
+		if (it && it->target && strcasecmp(it->target, fng) == 0)
+			return i;
+	}
+	return -1;
+}
+
+// The cells, in content coordinates (before the scroll). The gear sits in
+// the header and does not scroll.
+static void uiGridLayout(const MenuState* m) {
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	const int n = m->itemCount;
+	g_uiGrid.n = n;
+	g_uiGrid.top = UI_HEAD_H + 6.0f;
+	g_uiGrid.bottom = H - UI_FOOT_H - 6.0f;
+	const float top = g_uiGrid.top, avail = g_uiGrid.bottom - g_uiGrid.top, gap = 6.0f;
+	if (strcasecmp(m->screenName, "UI_Main.fng") == 0) {
+		const int career = uiGridItemFor(m, "UI_StartCareer.fng");
+		const int quick = uiGridItemFor(m, "UI_QRModeSelect.fng");
+		const int opts = uiGridItemFor(m, "UI_OptionsMain.fng");
+		const int nSmall = n - (career >= 0) - (quick >= 0) - (opts >= 0);
+		if (career >= 0 && quick >= 0 && nSmall >= 0 && nSmall <= 4) {
+			const float heroH = nSmall ? 84.0f : avail, smallH = avail - heroH - gap;
+			const float hw = (W - 16.0f - gap) * 0.5f;
+			g_uiGrid.c[career] = (UiGridCell){ 8.0f, top, hw, heroH, UI_CELL_HERO };
+			g_uiGrid.c[quick] = (UiGridCell){ 8.0f + hw + gap, top, hw, heroH, UI_CELL_HERO };
+			if (opts >= 0)
+				g_uiGrid.c[opts] = (UiGridCell){ 6.0f, 5.0f, 40.0f, 26.0f, UI_CELL_GEAR };
+			const float sw = nSmall ? (W - 16.0f - gap * (float)(nSmall - 1)) / (float)nSmall : 0.0f;
+			int k = 0;
+			for (int i = 0; i < n; i++) {
+				if (i == career || i == quick || i == opts)
+					continue;
+				g_uiGrid.c[i] = (UiGridCell){ 8.0f + (float)k * (sw + gap), top + heroH + gap, sw, smallH,
+					UI_CELL_SMALL };
+				k++;
+			}
+			g_uiGrid.contentH = avail;
+			return;
+		}
+	}
+	// The plain grid: up to three across for six or fewer, else four; rows
+	// no shorter than a fingertip's tile, scrolling past the screen.
+	const int cols = n <= 3 ? n : n <= 6 ? 3 : 4, rows = (n + cols - 1) / cols;
+	const float tw = (W - 16.0f - gap * (float)(cols - 1)) / (float)cols;
+	float th = fminf(90.0f, (avail - gap * (float)(rows - 1)) / (float)rows);
+	if (th < 66.0f)
+		th = 66.0f;
+	const float total = th * (float)rows + gap * (float)(rows - 1);
+	const float y0 = total < avail ? top + (avail - total) * 0.5f : top;
+	for (int i = 0; i < n; i++)
+		g_uiGrid.c[i] = (UiGridCell){ 8.0f + (float)(i % cols) * (tw + gap), y0 + (float)(i / cols) * (th + gap),
+			tw, th, UI_CELL_TILE };
+	g_uiGrid.contentH = total;
+}
+
+// The pad on a live grid: the item to select, -1 when the grid is not what
+// was drawn (the strip's own LEFT / RIGHT then). LEFT / RIGHT keep the
+// strip's order and stop at its ends; UP / DOWN go to the nearest tile in
+// that direction, the sideways offset counting double.
+static int uiGridNav(const MenuState* m, u32 kDown) {
+	// The track select's list (drawUiTrackSelect()): UP / DOWN walk it too.
+	if (fskLive(m) && uiTrackScreen(m) && m->selected >= 0 && m->selected < m->itemCount) {
+		const int s = m->selected, n = m->itemCount;
+		if (kDown & (KEY_LEFT | KEY_UP))
+			return s > 0 ? s - 1 : s;
+		if (kDown & (KEY_RIGHT | KEY_DOWN))
+			return s < n - 1 ? s + 1 : s;
+		return s;
+	}
+	if (!fskLive(m) || g_uiGrid.m != m || g_uiGrid.n != m->itemCount || !uiGridScreen(m))
+		return -1;
+	const int n = m->itemCount, s = m->selected;
+	if (s < 0 || s >= n)
+		return -1;
+	if (kDown & KEY_LEFT)
+		return s > 0 ? s - 1 : s;
+	if (kDown & KEY_RIGHT)
+		return s < n - 1 ? s + 1 : s;
+	const int dir = (kDown & KEY_UP) ? -1 : (kDown & KEY_DOWN) ? 1 : 0;
+	if (!dir)
+		return s;
+	const UiGridCell* a = &g_uiGrid.c[s];
+	const float ax = a->x + a->w * 0.5f, ay = a->y + a->h * 0.5f;
+	int best = s;
+	float bs = 1e9f;
+	for (int i = 0; i < n; i++) {
+		const UiGridCell* c = &g_uiGrid.c[i];
+		const float d = (c->y + c->h * 0.5f - ay) * (float)dir;
+		if (i == s || d < 1.0f)
+			continue;
+		const float score = d + 2.0f * fabsf(c->x + c->w * 0.5f - ax);
+		if (score < bs) {
+			bs = score;
+			best = i;
+		}
+	}
+	return best;
+}
+
+// The gear as a 32x32 A8 texture, built once: eight tapered teeth round a
+// ring with an open hub, each texel's alpha its coverage out of 4x4 samples.
+// Drawn 1:1 on whole pixels, so its edges are smooth at the ~20 px it is
+// shown at -- triangles left the teeth jagged there, and citro2d's soft-edged
+// circles blurred the hub into a smudge.
+#define UI_GEAR_TEX 32
+static C3D_Tex s_gearTex;
+static Tex3DS_SubTexture s_gearSub;
+static bool s_gearTried, s_gearOk;
+
+static u32 uiTexIndex(u32 x, u32 y, u32 w) {   // PICA 8x8 Morton tiles
+	u32 m = 0;
+	for (int b = 0; b < 3; b++)
+		m |= ((x >> b) & 1u) << (2 * b) | ((y >> b) & 1u) << (2 * b + 1);
+	return ((y >> 3) * (w >> 3) + (x >> 3)) * 64u + m;
+}
+
+static bool uiGearTex(void) {
+	if (s_gearTried)
+		return s_gearOk;
+	s_gearTried = true;
+	if (!C3D_TexInit(&s_gearTex, UI_GEAR_TEX, UI_GEAR_TEX, GPU_A8))
+		return false;
+	// Radii in pixels: the teeth's tips, their roots, the hub's hole. A tooth
+	// is a fraction of the 45-degree pitch wide, narrower at the tip.
+	const float c = UI_GEAR_TEX * 0.5f, rTip = 9.5f, rRoot = 7.0f, rHole = 3.0f;
+	const float wRoot = 0.52f, wTip = 0.40f;
+	u8* dst = (u8*)s_gearTex.data;
+	for (u32 y = 0; y < UI_GEAR_TEX; y++) {
+		for (u32 x = 0; x < UI_GEAR_TEX; x++) {
+			int n = 0;
+			for (int s = 0; s < 16; s++) {
+				const float px = (float)x + ((float)(s & 3) + 0.5f) * 0.25f - c;
+				const float py = (float)y + ((float)(s >> 2) + 0.5f) * 0.25f - c;
+				const float r = sqrtf(px * px + py * py);
+				if (r < rHole || r > rTip)
+					continue;
+				if (r <= rRoot) {
+					n++;
+					continue;
+				}
+				const float f = atan2f(py, px) * 4.0f / (float)M_PI;   // pitches
+				const float d = fabsf(f - roundf(f));
+				const float t = (r - rRoot) / (rTip - rRoot);
+				if (d <= (wRoot + (wTip - wRoot) * t) * 0.5f)   // half the tooth's width
+					n++;
+			}
+			dst[uiTexIndex(x, y, UI_GEAR_TEX)] = (u8)(n * 255 / 16);
+		}
+	}
+	C3D_TexFlush(&s_gearTex);
+	C3D_TexSetFilter(&s_gearTex, GPU_NEAREST, GPU_NEAREST);
+	C3D_TexSetWrap(&s_gearTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+	s_gearSub = (Tex3DS_SubTexture){ UI_GEAR_TEX, UI_GEAR_TEX, 0.0f, 1.0f, 1.0f, 0.0f };
+	s_gearOk = true;
+	return true;
+}
+
+// A gear: eight teeth round a ring. The texture above when it could be made
+// (`r` and `hole` are then unused: its size is fixed and its hub is open);
+// triangles otherwise.
+static void uiGear(float cx, float cy, float r, u32 col, u32 hole) {
+	if (uiGearTex()) {
+		const C2D_Image img = { &s_gearTex, &s_gearSub };
+		C2D_ImageTint tint;
+		C2D_PlainImageTint(&tint, col, 1.0f);
+		C2D_DrawImageAt(img, floorf(cx + 0.5f) - UI_GEAR_TEX * 0.5f, floorf(cy + 0.5f) - UI_GEAR_TEX * 0.5f,
+			UI_Z + 0.03f, &tint, 1.0f, 1.0f);
+		return;
+	}
+	const float tw = r * 0.26f, tIn = r * 0.62f, tOut = r;
+	for (int k = 0; k < 8; k++) {
+		const float a = (float)k * (float)M_PI / 4.0f, ca = cosf(a), sa = sinf(a);
+		const float x0 = cx + ca * tIn, y0 = cy + sa * tIn, x1 = cx + ca * tOut, y1 = cy + sa * tOut;
+		const float nx = -sa * tw, ny = ca * tw;
+		C2D_DrawTriangle(x0 + nx, y0 + ny, col, x0 - nx, y0 - ny, col, x1 + nx, y1 + ny, col, UI_Z + 0.03f);
+		C2D_DrawTriangle(x0 - nx, y0 - ny, col, x1 - nx, y1 - ny, col, x1 + nx, y1 + ny, col, UI_Z + 0.03f);
+	}
+	C2D_DrawCircleSolid(cx, cy, UI_Z + 0.031f, r * 0.74f, col);
+	C2D_DrawCircleSolid(cx, cy, UI_Z + 0.032f, r * 0.32f, hole);
+}
+
+// An item's icon fitted into a box, centred.
+static void uiGridIcon(const C2D_Image im, float x, float y, float w, float h, float alpha) {
+	if (!im.tex || !im.subtex || !im.subtex->width || !im.subtex->height || w <= 2.0f || h <= 2.0f)
+		return;
+	const float sw = (float)im.subtex->width, sh = (float)im.subtex->height;
+	const float k = fminf(w / sw, h / sh);
+	C2D_ImageTint tint;
+	C2D_AlphaImageTint(&tint, alpha);
+	C2D_DrawImageAt(im, x + (w - sw * k) * 0.5f, y + (h - sh * k) * 0.5f, UI_Z + 0.02f, &tint, k, k);
+}
+
+static bool drawUiIconGrid(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(4096);
+	if (!buf || !g_uiFont || !uiGridScreen(m))
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	const bool isMain = strcasecmp(m->screenName, "UI_Main.fng") == 0;
+	uiSkinHeader(buf, isMain ? NULL : "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, NULL,
+		feHelpHash(m->screenName) != 0);
+	if (g_uiGrid.m != m) {
+		g_uiGrid.m = m;
+		g_uiGrid.scroll = 0.0f;
+	}
+	uiGridLayout(m);
+	const int n = m->itemCount;
+	// Keep the selection in view.
+	const float top = g_uiGrid.top, bottom = g_uiGrid.bottom, view = bottom - top;
+	const float maxScroll = fmaxf(0.0f, g_uiGrid.contentH - view);
+	if (m->selected >= 0 && m->selected < n && g_uiGrid.c[m->selected].kind != UI_CELL_GEAR) {
+		const UiGridCell* s = &g_uiGrid.c[m->selected];
+		if (s->y - g_uiGrid.scroll < top)
+			g_uiGrid.scroll = s->y - top;
+		if (s->y + s->h - g_uiGrid.scroll > bottom)
+			g_uiGrid.scroll = s->y + s->h - bottom;
+	}
+	g_uiGrid.scroll = fmaxf(0.0f, fminf(maxScroll, g_uiGrid.scroll));
+	const float sc = g_uiGrid.scroll;
+	if (maxScroll > 0.0f)
+		scissorLogical(W, H, 0.0f, top - 4.0f, W, view + 8.0f);
+	for (int i = 0; i < n; i++) {
+		const UiGridCell* c = &g_uiGrid.c[i];
+		const bool sel = i == m->selected, locked = m->itemLocked[i];
+		const u32 ink = locked ? UI_DIM : sel ? UI_ACCENT : UI_WHITE;
+		const char* name = m->itemStr[i];
+		if (c->kind == UI_CELL_GEAR)
+			continue;   // in the header, after the scissor
+		const float x = c->x, y = c->y - sc, tw = c->w, th = c->h;
+		if (y + th < top - 4.0f || y > bottom + 4.0f)
+			continue;
+		uiRowBar(x, y, tw, th, sel);
+		const float alpha = locked ? 0.3f : sel ? 1.0f : 0.8f;
+		if (c->kind == UI_CELL_HERO) {
+			// A primary mode: the lime tag, a big icon and the name large.
+			uiRoundRect(x + 8.0f, y + 7.0f, 22.0f, 3.0f, 1.5f, UI_Z + 0.01f, sel ? UI_ACCENT : UI_DIM);
+			const float nameY = y + th - 15.0f;
+			uiGridIcon(m->itemIcons[i], x + 8.0f, y + 12.0f, tw - 16.0f, nameY - 12.0f - (y + 12.0f), alpha);
+			if (name[0])
+				uiText(buf, name, 18.0f, x + tw * 0.5f, nameY, 1, ink, tw - 12.0f);
+			else if (m->hasItemLabel[i])
+				uiCText(&m->itemLabels[i], 18.0f, x + tw * 0.5f, nameY, 1, ink, tw - 12.0f);
+		} else {
+			// The name, wrapped under the icon: two lines at 12 px, three at 11.
+			float px = 12.0f;
+			static char wr[256];
+			int lines = name[0] ? uiWrap(buf, name, px, tw - 8.0f, wr, sizeof(wr)) : (m->hasItemLabel[i] ? 1 : 0);
+			if (lines > 2 && name[0]) {
+				px = 11.0f;
+				lines = uiWrap(buf, name, px, tw - 8.0f, wr, sizeof(wr));
+			}
+			const float lh = px + 1.0f, textH = (float)(lines < 3 ? lines : 3) * lh;
+			const float room = th - textH - 12.0f;
+			const float iw = fminf(tw - 10.0f, 92.0f);
+			uiGridIcon(m->itemIcons[i], x + (tw - iw) * 0.5f, y + 5.0f, iw, room, alpha);
+			if (name[0])
+				uiTextBlock(buf, name, px, x + tw * 0.5f, y + th - 6.0f - textH + lh * 0.5f, lh, tw - 8.0f, 1,
+					ink, 3);
+			else if (m->hasItemLabel[i])
+				uiCText(&m->itemLabels[i], 12.0f, x + tw * 0.5f, y + th - 12.0f, 1, ink, tw - 8.0f);
+		}
+		if (locked)
+			uiLabel(buf, "LOCKED", x + tw * 0.5f, y + 10.0f, 1, UI_DIM);
+		const float hy0 = fmaxf(y, top - 4.0f), hy1 = fminf(y + th, bottom + 4.0f);
+		if (hy1 > hy0)
+			fskHit(x, hy0, tw, hy1 - hy0, FSK_ITEM, (u32)i);
+	}
+	if (maxScroll > 0.0f) {
+		scissorReset();
+		const float th = view * view / g_uiGrid.contentH;
+		uiRoundRect(W - 5.0f, top, 3.0f, view, 1.5f, UI_Z, C2D_Color32(255, 255, 255, 26));
+		uiRoundRect(W - 5.0f, top + (view - th) * sc / maxScroll, 3.0f, th, 1.5f, UI_Z + 0.01f, UI_ACCENT);
+	}
+	// The gear, in the header's left corner where a Back would be.
+	for (int i = 0; i < n; i++) {
+		const UiGridCell* c = &g_uiGrid.c[i];
+		if (c->kind != UI_CELL_GEAR)
+			continue;
+		const bool sel = i == m->selected;
+		uiPill(c->x, c->y, c->w, c->h, sel, UI_Z + 0.015f);
+		uiGear(c->x + c->w * 0.5f, c->y + c->h * 0.5f, 8.5f, sel ? UI_ACCENT : UI_WHITE, C2D_Color32(8, 8, 8, 255));
+		fskHit(0.0f, 0.0f, c->x + c->w + 6.0f, UI_HEAD_H, FSK_ITEM, (u32)i);
+	}
+	static const UiAct kSel[1] = { { "Select", 'A', KEY_A, true } };
+	uiSkinFooter(buf, kSel, 1);
+	// The bank, left in the footer, wherever a career is spending it.
+	if (careerInProgress() && (m->isBodyShop || strcasecmp(m->screenName, "UI_CareerCrib.fng") == 0 ||
+			strcasecmp(m->screenName, "UI_ChooseCustomizeCategory.fng") == 0 ||
+			strcasecmp(m->screenName, "UI_ChoosePerformanceCategory.fng") == 0)) {
+		char cash[32], line[40];
+		formatCashGrouped(gProfile.cash, cash, sizeof(cash));
+		snprintf(line, sizeof(line), "$%s", cash);
+		uiLabel(buf, "BANK", 12.0f, H - UI_FOOT_H * 0.5f, 0, UI_DIM);
+		uiText(buf, line, 16.0f, 12.0f + uiMeasure(buf, "BANK", UI_LABEL_PX) + 6.0f, H - UI_FOOT_H * 0.5f, 0,
+			UI_WHITE, 0.0f);
+	}
+	return true;
+}
+
+// ---- the body shop's parts list ----
+// PartSelectionScreen while browsing (plain and carbon parts): retail's
+// column of mini icons with the name and price over the 3D room, as rows --
+// the part's name, and what it is to this car: fitted, owned, or its price
+// where retail prints one (RefreshHeader: in a career, not from the crib).
+// UP / DOWN walk them (bodyShopInput()), A buys or fits, B goes back to the
+// categories. The specialties, vinyl, decal and rim lists keep theirs.
+static bool drawUiBodyParts(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	static int s_top = 0;
+	if (!buf)
+		buf = C2D_TextBufNew(3072);
+	if (!buf || !g_uiFont || !m->isBodyShop || !m->navBottom || !g_bodyShop.browsing || hudListUp(m))
+		return false;
+	const BodyShopCat* c = bodyShopCurrent(m);
+	if (!c || c->count <= 0)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	const char* cat = (m->selected >= 0 && m->selected < m->itemCount) ? m->itemStr[m->selected] : "";
+	uiSkinHeader(buf, "Back", NULL, cat, feHelpHash(m->screenName) != 0);
+	const int n = c->count, sel = g_bodyShop.sel;
+	const float y0 = UI_HEAD_H + 6.0f, rowH = 30.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const int vis = (int)((bottom - y0) / rowH);
+	if (sel < s_top) s_top = sel;
+	if (sel >= s_top + vis) s_top = sel - vis + 1;
+	if (s_top > n - vis) s_top = n - vis;
+	if (s_top < 0) s_top = 0;
+	const int cs = g_bodyShop.carSlot;
+	const bool okCs = cs >= 0 && cs < PROFILE_CAREER_ARRAYS;
+	const u32 fitted = okCs ? uniquesGetPart(gProfile.careerParts[cs], c->slot) : 0;
+	const bool career = careerInProgress();
+	const bool prices = career && g_customizeEntry != CUSTOMIZE_ENTRY_CRIB;
+	const float rx = 8.0f, rw = W - 16.0f - (n > vis ? 10.0f : 0.0f);
+	bool selBuy = false;
+	for (int k = 0; k < vis && s_top + k < n; k++) {
+		const int r = s_top + k;
+		const float y = y0 + (float)k * rowH, h = rowH - 4.0f, cy = y + h * 0.5f;
+		const bool cur = r == sel;
+		uiRowBar(rx, y, rw, h, cur);
+		const bool isFitted = fitted && c->hash[r] == fitted;
+		const bool owned = c->level[r] == 0 || bodyShopOwnsBit(cs, c->slot, c->entity[r], c->index[r]);
+		char tag[32];
+		u32 tagInk = UI_DIM;
+		tag[0] = '\0';
+		if (isFitted) {
+			snprintf(tag, sizeof(tag), "FITTED");
+			tagInk = UI_ACCENT;
+		} else if (career && owned && c->level[r] > 0) {
+			snprintf(tag, sizeof(tag), "OWNED");
+		} else if (prices && !owned) {
+			char cash[24];
+			formatCashGrouped((unsigned)(c->price[r] > 0 ? c->price[r] : 0), cash, sizeof(cash));
+			snprintf(tag, sizeof(tag), "$%s", cash);
+			tagInk = UI_WHITE;
+		}
+		if (cur)
+			selBuy = prices && !owned && !isFitted;
+		float tw = 0.0f;
+		if (tag[0]) {
+			const bool small = tag[0] != '$';
+			tw = small ? uiLabel(buf, tag, rx + rw - 10.0f, cy, 2, tagInk)
+				: uiText(buf, tag, 15.0f, rx + rw - 10.0f, cy, 2, tagInk, 0.0f);
+		}
+		if (isFitted)
+			C2D_DrawCircleSolid(rx + 11.0f, cy, UI_Z + 0.03f, 3.0f, UI_ACCENT);
+		char fallback[24];
+		snprintf(fallback, sizeof(fallback), "Option %d", r + 1);
+		uiText(buf, c->name[r][0] ? c->name[r] : fallback, 15.0f, rx + 20.0f, cy, 0, cur ? UI_ACCENT : UI_WHITE,
+			rw - 20.0f - tw - 20.0f);
+		fskHit(rx, y, rw, h + 4.0f, FSK_PART, (u32)r);
+	}
+	if (n > vis && vis > 0) {
+		const float shh = (float)vis * rowH - 4.0f, th = shh * (float)vis / (float)n;
+		uiRoundRect(W - 12.0f, y0, 4.0f, shh, 2.0f, UI_Z, C2D_Color32(255, 255, 255, 26));
+		uiRoundRect(W - 12.0f, y0 + (shh - th) * (float)s_top / (float)(n - vis), 4.0f, th, 2.0f,
+			UI_Z + 0.01f, UI_ACCENT);
+	}
+	const UiAct acts[1] = { { selBuy ? "Buy" : "Install", 'A', KEY_A, true } };
+	uiSkinFooter(buf, acts, 1);
+	if (career) {
+		char cash[32], bank[40];
+		formatCashGrouped(gProfile.cash, cash, sizeof(cash));
+		snprintf(bank, sizeof(bank), "$%s", cash);
+		uiLabel(buf, "BANK", 12.0f, H - UI_FOOT_H * 0.5f, 0, UI_DIM);
+		uiText(buf, bank, 16.0f, 12.0f + uiMeasure(buf, "BANK", UI_LABEL_PX) + 6.0f, H - UI_FOOT_H * 0.5f, 0,
+			UI_WHITE, 0.0f);
+	}
+	return true;
+}
+
+// ---- the car selects ----
+// UI_CareerCarSelect (the garage's), UI_CareerCarLot and the Quick Race /
+// LAN / Customize car selects: retail's PC strip -- a logo box between two
+// small arrows over the 3D room -- as the lower screen's card. The row in a
+// card between two full-height arrows (LEFT / RIGHT) with the manufacturer's
+// logo, the badge art and the name, and above it the garage's slots as tabs
+// (a tap walks there), or the list's position and, on the Quick Race kind,
+// its view filter between L and R. A tap on the card is A; each screen's A
+// is its own (cribCarAccept(), carLotAccept(), the race / LAN commit).
+static bool uiCarSelScreen(const MenuState* m) {
+	return m->navBottom && m->carRowCount > 0 &&
+		(m->isCribCarSel || m->isCarLot || (m->hasCarRows && isCarSelFng(m->screenName)));
+}
+static bool drawUiCarSelect(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	if (!buf || !g_uiFont || !uiCarSelScreen(m))
+		return false;
+	const int n = m->carRowCount, sel = m->carRowSel;
+	if (sel < 0 || sel >= n)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, NULL,
+		feHelpHash(m->screenName) != 0);
+	const bool garage = m->isCribCarSel;
+	const bool lotOwned = m->isCarLot && m->lotState == CARLOT_STATE_OWNED;
+	const bool filtered = !garage && !m->isCarLot && (g_feCtx == CARDB_CTX_CUSTOMIZE ||
+		g_feCtx == CARDB_CTX_QUICKRACE || g_feCtx == CARDB_CTX_LAN);
+	// The row's kind: a car, or (the garage's) a slot open for a sponsor car
+	// or not reached yet.
+	const int st = garage || lotOwned ? m->cribCarState[sel] : CRIBCAR_REAL;
+	const float sy = UI_HEAD_H + 6.0f, sh = 24.0f;
+	if (garage) {
+		// ---- the slots, as numbered tabs ----
+		const float gap = 4.0f, sw = (W - 16.0f - gap * (float)(n - 1)) / (float)n;
+		for (int r = 0; r < n; r++) {
+			const float x = 8.0f + (float)r * (sw + gap);
+			const bool cur = r == sel;
+			const int rs = m->cribCarState[r];
+			const bool driving = rs == CRIBCAR_REAL && m->cribCarSlot[r] == gProfile.currentCarSlot;
+			uiRowBar(x, sy, sw, sh, cur);
+			char t[16];
+			snprintf(t, sizeof(t), "%d", r + 1);
+			uiText(buf, t, 14.0f, x + sw * 0.5f, sy + sh * 0.5f, 1,
+				cur ? UI_ACCENT : rs == CRIBCAR_LOCKED ? UI_DIM : UI_WHITE, 0.0f);
+			if (driving)
+				C2D_DrawCircleSolid(x + sw - 7.0f, sy + 7.0f, UI_Z + 0.03f, 2.6f, UI_ACCENT);
+			fskHit(x, sy - 3.0f, sw, sh + 6.0f, FSK_CAR, (u32)r);
+		}
+	} else {
+		// ---- the filter between L and R (the Quick Race kind), and where
+		// the row is in the list ----
+		char pos[24];
+		snprintf(pos, sizeof(pos), "%d / %d", sel + 1, n);
+		const float pw = uiMeasure(buf, pos, 14.0f);
+		uiText(buf, pos, 14.0f, W - 10.0f, sy + sh * 0.5f, 2, UI_DIM, 0.0f);
+		if (filtered && m->hasCarFilterText) {
+			const float fw = W - 16.0f - pw - 12.0f;
+			uiRoundRect(8.0f, sy, fw, sh, sh * 0.5f, UI_Z, UI_DEEP);
+			uiRing(8.0f, sy, fw, sh, sh * 0.5f, 1.0f, UI_Z + 0.005f, C2D_Color32(255, 255, 255, 61));
+			drawPadGlyph('L', 8.0f + 14.0f, sy + sh * 0.5f, 13.0f, UI_Z + 0.04f);
+			drawPadGlyph('R', 8.0f + fw - 14.0f, sy + sh * 0.5f, 13.0f, UI_Z + 0.04f);
+			uiCText(&m->carFilterText, 14.0f, 8.0f + fw * 0.5f, sy + sh * 0.5f, 1, UI_ACCENT, fw - 60.0f);
+			fskHit(8.0f, sy - 3.0f, fw * 0.5f, sh + 6.0f, FSK_KEY, KEY_L);
+			fskHit(8.0f + fw * 0.5f, sy - 3.0f, fw * 0.5f, sh + 6.0f, FSK_KEY, KEY_R);
+		} else if (m->isCarLot) {
+			const char* what = m->lotState == CARLOT_STATE_BUY ? "BUY A CAR"
+				: m->lotState == CARLOT_STATE_OWNED ? "PICK YOUR CAR TO TRADE"
+				: (m->lotState == CARLOT_STATE_TRADE || m->lotState == CARLOT_STATE_CHOOSE) ? "TRADE IN" : "";
+			uiLabel(buf, what, 10.0f, sy + sh * 0.5f, 0, UI_ACCENT);
+		}
+		// The list's run, a thin bar under it.
+		const float bx = 8.0f, bw = W - 16.0f, by = sy + sh + 3.0f;
+		uiRoundRect(bx, by, bw, 3.0f, 1.5f, UI_Z, C2D_Color32(255, 255, 255, 26));
+		const float hw = fmaxf(10.0f, bw / (float)n);
+		uiRoundRect(bx + (bw - hw) * (n > 1 ? (float)sel / (float)(n - 1) : 0.0f), by, hw, 3.0f, 1.5f,
+			UI_Z + 0.01f, UI_ACCENT);
+	}
+	// ---- the card ----
+	const float cy0 = sy + sh + 10.0f, ch = H - UI_FOOT_H - 6.0f - cy0;
+	const float aw = 34.0f, cx0 = 8.0f + aw + 4.0f, cw = W - 16.0f - 2.0f * (aw + 4.0f);
+	for (int k = 0; k < 2; k++) {
+		const bool can = k == 0 ? sel > 0 : sel < n - 1;
+		const float ax = k == 0 ? 8.0f : W - 8.0f - aw;
+		uiRoundRect(ax, cy0, aw, ch, 3.0f, UI_Z, can ? UI_GREY : C2D_Color32(135, 135, 135, 30));
+		uiArrow(ax + aw * 0.5f, cy0 + ch * 0.5f, k == 0 ? (float)M_PI : 0.0f, 8.0f, can ? UI_WHITE : UI_DIM);
+		fskHit(ax - 4.0f, cy0, aw + 6.0f, ch, FSK_KEY, k == 0 ? KEY_LEFT : KEY_RIGHT);
+	}
+	uiRowBar(cx0, cy0, cw, ch, true);
+	const CarRow* row = &m->carRows[sel];
+	char head[48];
+	head[0] = '\0';
+	if (garage) {
+		char slotWord[32];
+		langTextToUtf8(m->cribSlotWord[0] ? m->cribSlotWord : "Slot", slotWord, sizeof(slotWord));
+		snprintf(head, sizeof(head), "%s %d", slotWord, sel + 1);
+	} else if (row->tunedSlot >= 0) {
+		snprintf(head, sizeof(head), "MY CAR %d", row->tunedSlot + 1);
+	} else if (row->careerSlot >= 0) {
+		snprintf(head, sizeof(head), "CAREER CAR %d", row->careerSlot + 1);
+	} else if (row->sponsorIdx >= 0) {
+		snprintf(head, sizeof(head), "SPONSOR CAR");
+	} else if (!m->isCarLot) {
+		snprintf(head, sizeof(head), "STOCK");
+	}
+	for (char* p = head; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+	if (head[0])
+		uiLabel(buf, head, cx0 + 10.0f, cy0 + 12.0f, 0, UI_DIM);
+	if ((garage || lotOwned) && st == CRIBCAR_REAL && m->cribCarSlot[sel] == gProfile.currentCarSlot)
+		uiLabel(buf, "DRIVING", cx0 + cw - 10.0f, cy0 + 12.0f, 2, UI_ACCENT);
+	// The manufacturer's logo on the left, the badge art filling the rest.
+	char name[96];
+	name[0] = '\0';
+	const char* raw = garage || lotOwned
+		? (st == CRIBCAR_REAL ? m->cribCarName[sel] : st == CRIBCAR_SPONSOR ? m->cribSponsorText
+			: m->cribLockedText)
+		: m->isCarLot ? m->lotCarName[sel] : "";
+	langTextToUtf8(raw, name, sizeof(name));
+	const float artY = cy0 + 22.0f, artH = ch - 22.0f - (name[0] ? 30.0f : 10.0f);
+	const C2D_Image logo = m->carLogo[sel], badge = m->carBadge[sel];
+	const bool hasBadge = st == CRIBCAR_REAL && badge.tex && badge.subtex;
+	const float logoW = hasBadge ? 58.0f : cw - 20.0f;
+	uiGridIcon(logo, cx0 + 10.0f, artY, logoW, artH, st == CRIBCAR_LOCKED ? 0.4f : 1.0f);
+	if (hasBadge)
+		uiGridIcon(badge, cx0 + 10.0f + logoW + 8.0f, artY, cw - 20.0f - logoW - 8.0f, artH, 1.0f);
+	if (name[0])
+		uiText(buf, name, st == CRIBCAR_REAL ? 17.0f : 14.0f, cx0 + cw * 0.5f, cy0 + ch - 15.0f, 1,
+			st == CRIBCAR_LOCKED ? UI_DIM : st == CRIBCAR_SPONSOR ? UI_ACCENT : UI_WHITE, cw - 16.0f);
+	fskHit(cx0, cy0, cw, ch, FSK_CAR, (u32)sel);
+	// ---- the footer: A, and the Quick Race kind's X ----
+	UiAct acts[2];
+	int na = 0;
+	const char* aLabel = garage ? "Select Car" : m->isCarLot
+		? (m->lotState == CARLOT_STATE_BUY ? "Buy" : m->lotState == CARLOT_STATE_OWNED ? "Trade" : "Trade In")
+		: "Select";
+	acts[na++] = (UiAct){ aLabel, 'A', KEY_A, true };
+	if (filtered && g_feCtx == CARDB_CTX_CUSTOMIZE && row->tunedSlot >= 0)
+		acts[na++] = (UiAct){ "Delete", 'X', KEY_X, false };
+	else if (filtered && g_feCtx != CARDB_CTX_CUSTOMIZE)
+		acts[na++] = (UiAct){ "Customize", 'X', KEY_X, false };
+	uiSkinFooter(buf, acts, na);
+	if (na == 1 && careerInProgress() && (garage || m->isCarLot)) {
+		char cash[32], bank[40];
+		formatCashGrouped(gProfile.cash, cash, sizeof(cash));
+		snprintf(bank, sizeof(bank), "$%s", cash);
+		uiLabel(buf, "BANK", 12.0f, H - UI_FOOT_H * 0.5f, 0, UI_DIM);
+		uiText(buf, bank, 16.0f, 12.0f + uiMeasure(buf, "BANK", UI_LABEL_PX) + 6.0f, H - UI_FOOT_H * 0.5f, 0,
+			UI_WHITE, 0.0f);
+	}
+	return true;
+}
+
+// ---- shared: lists of rows ----
+// PORT (the user, 2026-11-15: "refaça todas" -- every lower-screen menu in
+// the kit, none left in the 640x480 layout): the pieces the list skins below
+// share. A row is a name (a plain string or one of the menu's own parsed
+// Strings), an optional tag on the right, a dot and a dim state.
+typedef struct {
+	const char* s;
+	const C2D_Text* t;
+	const char* tag;
+	const C2D_Text* tagT;
+	u32 tagInk;
+	bool dim, mark;
+} UiRow;
+// The first row to show so `sel` stays in view, kept per caller in `*top`.
+static int uiListTop(int sel, int n, int vis, int* top) {
+	if (vis < 1)
+		vis = 1;
+	if (sel < *top) *top = sel;
+	if (sel >= *top + vis) *top = sel - vis + 1;
+	if (*top > n - vis) *top = n - vis;
+	if (*top < 0) *top = 0;
+	return *top;
+}
+// One row at `y`, `h` tall; its hit is `kind` with the row's index.
+static void uiListRow(C2D_TextBuf buf, const UiRow* r, int idx, bool cur, float rx, float y, float rw,
+		float h, int kind) {
+	const float cy = y + h * 0.5f;
+	uiRowBar(rx, y, rw, h, cur);
+	float tw = 0.0f;
+	const u32 tagInk = r->tagInk ? r->tagInk : UI_DIM;
+	if (r->tagT)
+		tw = uiCText(r->tagT, 14.0f, rx + rw - 10.0f, cy, 2, tagInk, rw * 0.45f);
+	else if (r->tag && r->tag[0])
+		tw = r->tag[0] == '$' ? uiText(buf, r->tag, 15.0f, rx + rw - 10.0f, cy, 2, tagInk, 0.0f)
+			: uiLabel(buf, r->tag, rx + rw - 10.0f, cy, 2, tagInk);
+	if (r->mark)
+		C2D_DrawCircleSolid(rx + 11.0f, cy, UI_Z + 0.03f, 3.0f, UI_ACCENT);
+	const u32 ink = r->dim ? UI_DIM : cur ? UI_ACCENT : UI_WHITE;
+	const float nx = rx + 20.0f, nw = rw - 20.0f - (tw > 0.0f ? tw + 20.0f : 10.0f);
+	if (r->t)
+		uiCText(r->t, 15.0f, nx, cy, 0, ink, nw);
+	else if (r->s && r->s[0])
+		uiText(buf, r->s, 15.0f, nx, cy, 0, ink, nw);
+	if (kind)
+		fskHit(rx, y, rw, h + 4.0f, kind, (u32)idx);
+}
+// The run of a list taller than its window, down the right edge.
+static void uiListBar(int top, int vis, int n, float y0, float rowH) {
+	if (n <= vis || vis <= 0)
+		return;
+	const float sh = (float)vis * rowH - 4.0f, th = fmaxf(8.0f, sh * (float)vis / (float)n);
+	uiRoundRect(BOTTOM_W - 12.0f, y0, 4.0f, sh, 2.0f, UI_Z, C2D_Color32(255, 255, 255, 26));
+	uiRoundRect(BOTTOM_W - 12.0f, y0 + (sh - th) * (float)top / (float)(n - vis), 4.0f, th, 2.0f,
+		UI_Z + 0.01f, UI_ACCENT);
+}
+// A strip of tabs, the screen's own options (an IconScroller's items): the
+// current one lit, the locked ones dim, a tap walks there (FSK_ITEM). Up to
+// `fit` show at a time, scrolled to keep the current one in view.
+static void uiItemTabs(C2D_TextBuf buf, const MenuState* m, float y, float h, int fit) {
+	const int n = m->itemCount, sel = m->selected;
+	if (n <= 0)
+		return;
+	const int vis = n < fit ? n : fit;
+	int first = sel - vis / 2;
+	if (first > n - vis) first = n - vis;
+	if (first < 0) first = 0;
+	const float gap = 4.0f, aw = n > vis ? 14.0f : 0.0f;
+	const float x0 = 8.0f + aw, span = BOTTOM_W - 16.0f - 2.0f * aw;
+	const float tw = (span - gap * (float)(vis - 1)) / (float)vis;
+	for (int k = 0; k < vis; k++) {
+		const int i = first + k;
+		const float x = x0 + (float)k * (tw + gap);
+		const bool cur = i == sel;
+		uiRowBar(x, y, tw, h, cur);
+		const u32 ink = m->itemLocked[i] ? UI_DIM : cur ? UI_ACCENT : UI_WHITE;
+		if (m->hasItemLabel[i])
+			uiCText(&m->itemLabels[i], 13.0f, x + tw * 0.5f, y + h * 0.5f, 1, ink, tw - 10.0f);
+		else
+			uiText(buf, m->itemStr[i], 13.0f, x + tw * 0.5f, y + h * 0.5f, 1, ink, tw - 10.0f);
+		fskHit(x, y - 3.0f, tw, h + 6.0f, FSK_ITEM, (u32)i);
+	}
+	if (n > vis) {
+		uiArrow(8.0f + 6.0f, y + h * 0.5f, (float)M_PI, 5.0f, first > 0 ? UI_WHITE : UI_DIM);
+		uiArrow(BOTTOM_W - 8.0f - 6.0f, y + h * 0.5f, 0.0f, 5.0f, first + vis < n ? UI_WHITE : UI_DIM);
+		fskHit(0.0f, y - 3.0f, 8.0f + aw, h + 6.0f, FSK_KEY, KEY_LEFT);
+		fskHit(BOTTOM_W - 8.0f - aw, y - 3.0f, 8.0f + aw, h + 6.0f, FSK_KEY, KEY_RIGHT);
+	}
+}
+// The bank, left in the footer, in a career.
+static void uiFooterBank(C2D_TextBuf buf) {
+	if (!careerInProgress())
+		return;
+	char cash[32], bank[40];
+	formatCashGrouped(gProfile.cash, cash, sizeof(cash));
+	snprintf(bank, sizeof(bank), "$%s", cash);
+	uiLabel(buf, "BANK", 12.0f, BOTTOM_H - UI_FOOT_H * 0.5f, 0, UI_DIM);
+	uiText(buf, bank, 16.0f, 12.0f + uiMeasure(buf, "BANK", UI_LABEL_PX) + 6.0f, BOTTOM_H - UI_FOOT_H * 0.5f, 0,
+		UI_WHITE, 0.0f);
+}
+// The item's name as plain text (a parsed label has no string to give back,
+// so the item's own fallback stands in).
+static const char* uiItemName(const MenuState* m, int i) {
+	return (i >= 0 && i < m->itemCount) ? m->itemStr[i] : "";
+}
+
+// ---- Quick Race track select ----
+// UI_QRTrackSelect: retail's strip of track icons with the map and the
+// length / best time beside it, as the map on the left and the tracks as a
+// list on the right. UP / DOWN walk the list too (uiGridNav()).
+static bool uiTrackScreen(const MenuState* m) {
+	return m->hasTrackRows && m->navBottom && m->itemCount > 0;
+}
+static bool drawUiTrackSelect(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	static int s_top = 0;
+	if (!buf)
+		buf = C2D_TextBufNew(3072);
+	if (!buf || !g_uiFont || !uiTrackScreen(m))
+		return false;
+	const int n = m->itemCount, sel = m->selected;
+	if (sel < 0 || sel >= n)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "Track Select",
+		feHelpHash(m->screenName) != 0);
+	// ---- the map and the selected track's numbers ----
+	const float y0 = UI_HEAD_H + 6.0f, mapS = 116.0f, mx = 8.0f;
+	uiRoundRect(mx, y0, mapS, mapS, 3.0f, UI_Z, UI_DEEP);
+	uiRing(mx, y0, mapS, mapS, 3.0f, 1.0f, UI_Z + 0.005f, C2D_Color32(255, 255, 255, 40));
+	if (m->trackMap.valid && m->trackMap.image.subtex && m->trackMap.image.subtex->width > 0) {
+		const Tex3DS_SubTexture* st = m->trackMap.image.subtex;
+		const float s = (mapS - 8.0f) / fmaxf((float)st->width, (float)st->height);
+		C2D_DrawImageAt(m->trackMap.image, mx + (mapS - s * st->width) * 0.5f,
+			y0 + (mapS - s * st->height) * 0.5f, UI_Z + 0.01f, NULL, s, s);
+	}
+	float iy = y0 + mapS + 12.0f;
+	if (m->hasRaceTypeText) {
+		uiCText(&m->raceTypeText, 13.0f, mx, iy, 0, UI_ACCENT, mapS);
+		iy += 17.0f;
+	}
+	if (m->hasItemDistance[sel]) {
+		uiLabel(buf, "LENGTH", mx, iy, 0, UI_DIM);
+		uiCText(&m->itemDistanceText[sel], 14.0f, mx + mapS, iy, 2, UI_WHITE, mapS * 0.6f);
+		iy += 17.0f;
+	}
+	if (m->hasItemBest[sel]) {
+		uiLabel(buf, "BEST", mx, iy, 0, UI_DIM);
+		uiCText(&m->itemBestText[sel], 14.0f, mx + mapS, iy, 2, UI_WHITE, mapS * 0.6f);
+	}
+	// ---- the tracks ----
+	const float lx = mx + mapS + 8.0f, rowH = 28.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const int vis = (int)((bottom - y0) / rowH);
+	const int top = uiListTop(sel, n, vis, &s_top);
+	const float lw = W - lx - 8.0f - (n > vis ? 10.0f : 0.0f);
+	for (int k = 0; k < vis && top + k < n; k++) {
+		const int i = top + k;
+		UiRow r = { 0 };
+		r.t = m->hasItemLabel[i] ? &m->itemLabels[i] : NULL;
+		r.s = m->itemStr[i];
+		r.dim = m->itemLocked[i];
+		r.tag = m->itemLocked[i] ? "LOCKED" : NULL;
+		uiListRow(buf, &r, i, i == sel, lx, y0 + (float)k * rowH, lw, rowH - 4.0f, FSK_ITEM);
+	}
+	uiListBar(top, vis, n, y0, rowH);
+	const UiAct acts[1] = { { "Select", 'A', KEY_A, !m->itemLocked[sel] } };
+	uiSkinFooter(buf, acts, 1);
+	return true;
+}
+
+// ---- the performance shop's packages ----
+// UI_ChoosePerformancePackage: the packages as tabs (Customize, the levels,
+// Return To Stock); under them the package's parts and prices and its cost,
+// or, on Customize, the parts list (UI_BuyPerformanceParts, perfPartsSync())
+// as rows -- UP / DOWN and A, as retail's list over the strip.
+static bool uiPerfPackageScreen(const MenuState* m) {
+	return m->isPerfPackage && m->navBottom && m->itemCount > 0;
+}
+static bool drawUiPerfPackage(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	static int s_top = 0;
+	if (!buf)
+		buf = C2D_TextBufNew(3072);
+	if (!buf || !g_uiFont || !uiPerfPackageScreen(m))
+		return false;
+	const int sel = m->selected;
+	if (sel < 0 || sel >= m->itemCount)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "Performance",
+		feHelpHash(m->screenName) != 0);
+	const float ty = UI_HEAD_H + 6.0f, th = 24.0f;
+	uiItemTabs(buf, m, ty, th, 4);
+	const float y0 = ty + th + 8.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const PerfParts* pp = &g_perfParts;
+	const MenuItem* it = menuItemAt(m, sel);
+	const int mode = it ? it->modeValue : -1;
+	const char* aLabel = "Select";
+	if (pp->browsing && g_perfMenu.loaded) {
+		// ---- the parts list ----
+		const int n = perfPartsRows();
+		const float rowH = 30.0f;
+		const int vis = (int)((bottom - y0) / rowH);
+		const int top = uiListTop(pp->sel, n, vis, &s_top);
+		g_fskListSel = pp->sel;
+		const float rw = W - 16.0f - (n > vis ? 10.0f : 0.0f);
+		for (int k = 0; k < vis && top + k < n; k++) {
+			const int i = top + k;
+			UiRow r = { 0 };
+			r.s = pp->count > 0 ? pp->name[i] : "None";
+			r.tag = pp->count > 0 && pp->purchased[i] ? "OWNED" : NULL;
+			r.mark = pp->count > 0 && pp->purchased[i];
+			uiListRow(buf, &r, i, i == pp->sel, 8.0f, y0 + (float)k * rowH, rw, rowH - 4.0f, FSK_LIST);
+		}
+		uiListBar(top, vis, n, y0, rowH);
+		aLabel = "Install";
+	} else if (mode == PERFPKG_MODE_PACKAGE) {
+		// ---- the package: its parts, then the cost ----
+		const float rowH = 22.0f;
+		float y = y0;
+		int shown = 0;
+		for (int k = 0; k < PERFDB_MAX_PARTS && y + rowH <= bottom - 26.0f; k++) {
+			const int wn = m->pkName[k], wp = m->pkPrice[k];
+			if (wn < 0 || !m->hasText[wn] || m->layoutHidden[wn])
+				continue;
+			uiRoundRect(8.0f, y, W - 16.0f, rowH - 3.0f, 3.0f, UI_Z, UI_PANEL);
+			if (m->pkPurchased[k])
+				C2D_DrawCircleSolid(8.0f + 10.0f, y + (rowH - 3.0f) * 0.5f, UI_Z + 0.03f, 3.0f, UI_ACCENT);
+			uiCText(&m->texts[wn], 14.0f, 8.0f + 20.0f, y + (rowH - 3.0f) * 0.5f, 0,
+				m->pkPurchased[k] ? UI_DIM : UI_WHITE, W * 0.55f);
+			if (wp >= 0 && m->hasText[wp] && !m->layoutHidden[wp])
+				uiCText(&m->texts[wp], 14.0f, W - 18.0f, y + (rowH - 3.0f) * 0.5f, 2, UI_WHITE, W * 0.3f);
+			y += rowH;
+			shown++;
+		}
+		if (!shown)
+			uiText(buf, m->itemLocked[sel] ? "Locked" : uiItemName(m, sel), 16.0f, W * 0.5f,
+				(y0 + bottom) * 0.5f, 1, UI_DIM, W - 32.0f);
+		const float cy = bottom - 11.0f;
+		if (m->pkDiscount >= 0 && m->hasText[m->pkDiscount] && !m->layoutHidden[m->pkDiscount])
+			uiCText(&m->texts[m->pkDiscount], 12.0f, 12.0f, cy - 16.0f, 0, UI_ACCENT, W * 0.5f);
+		if (m->pkCostLabel >= 0 && m->hasText[m->pkCostLabel] && !m->layoutHidden[m->pkCostLabel])
+			uiCText(&m->texts[m->pkCostLabel], 13.0f, 12.0f, cy, 0, UI_DIM, W * 0.5f);
+		if (m->pkCost >= 0 && m->hasText[m->pkCost] && !m->layoutHidden[m->pkCost])
+			uiCText(&m->texts[m->pkCost], 17.0f, W - 12.0f, cy, 2, UI_ACCENT, W * 0.45f);
+		aLabel = m->itemLocked[sel] ? "Locked" : "Buy";
+	} else {
+		// Customize before its list is up, and Return To Stock: the option.
+		uiRowBar(8.0f, y0, W - 16.0f, bottom - y0, true);
+		uiText(buf, uiItemName(m, sel), 20.0f, W * 0.5f, (y0 + bottom) * 0.5f, 1, UI_WHITE, W - 40.0f);
+		fskHit(8.0f, y0, W - 16.0f, bottom - y0, FSK_KEY, KEY_A);
+	}
+	const UiAct acts[1] = { { aLabel, 'A', KEY_A, !m->itemLocked[sel] } };
+	uiSkinFooter(buf, acts, 1);
+	uiFooterBank(buf);
+	return true;
+}
+
+// ---- the paint shop ----
+// UI_Paint: the paint categories as tabs; with a list up, the brand between L
+// and R and the swatches in retail's rows of twenty, the current one ringed,
+// a tap walks to one (FSK_SWATCH), and the swatch's price in a career.
+static bool uiPaintScreen(const MenuState* m) {
+	return m->isPaint && m->navBottom && m->itemCount > 0;
+}
+static bool drawUiPaint(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	if (!buf || !g_uiFont || !uiPaintScreen(m))
+		return false;
+	const int sel = m->selected;
+	if (sel < 0 || sel >= m->itemCount)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "Paint",
+		feHelpHash(m->screenName) != 0);
+	const float ty = UI_HEAD_H + 6.0f, th = 24.0f;
+	const float y0 = ty + th + 8.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const PaintCat* c = paintCurrent(m);
+	const char* aLabel = "Choose";
+	if (g_paint.browsing && c && g_paint.count > 0) {
+		// ---- the brand ----
+		const char* brand = "";
+		for (int k = 0; k < g_paint.nnames; k++)
+			if (g_paint.nameBrand[k] == g_paint.brand)
+				brand = g_paint.name[k];
+		const float fw = W - 16.0f;
+		uiRoundRect(8.0f, ty, fw, th, th * 0.5f, UI_Z, UI_DEEP);
+		uiRing(8.0f, ty, fw, th, th * 0.5f, 1.0f, UI_Z + 0.005f, C2D_Color32(255, 255, 255, 61));
+		drawPadGlyph('L', 8.0f + 14.0f, ty + th * 0.5f, 13.0f, UI_Z + 0.04f);
+		drawPadGlyph('R', 8.0f + fw - 14.0f, ty + th * 0.5f, 13.0f, UI_Z + 0.04f);
+		uiText(buf, brand[0] ? brand : uiItemName(m, sel), 14.0f, W * 0.5f, ty + th * 0.5f, 1, UI_ACCENT,
+			fw - 60.0f);
+		fskHit(8.0f, ty - 3.0f, fw * 0.5f, th + 6.0f, FSK_KEY, KEY_L);
+		fskHit(8.0f + fw * 0.5f, ty - 3.0f, fw * 0.5f, th + 6.0f, FSK_KEY, KEY_R);
+		// ---- the swatches ----
+		const int n = g_paint.count, cols = PAINT_COLS, rows = (n + cols - 1) / cols;
+		const float gap = 2.0f, cw = (W - 16.0f - gap * (float)(cols - 1)) / (float)cols;
+		const float ch = fminf(30.0f, (bottom - 30.0f - y0 - gap * (float)(rows - 1)) / (float)(rows > 0 ? rows : 1));
+		for (int i = 0; i < n; i++) {
+			const PaintPart* p = &c->part[g_paint.list[i]];
+			const float x = 8.0f + (float)(i % cols) * (cw + gap), y = y0 + (float)(i / cols) * (ch + gap);
+			const u32 col = C2D_Color32(p->r, p->g, p->b, 255);
+			uiRoundRect(x, y, cw, ch, 2.0f, UI_Z + 0.01f, col);
+			if (i == g_paint.sel)
+				uiHighlight(x - 2.0f, y - 2.0f, cw + 4.0f, ch + 4.0f, 3.0f, UI_Z + 0.02f, UI_ACCENT);
+			fskHit(x - 1.0f, y - 1.0f, cw + 2.0f, ch + 2.0f, FSK_SWATCH, (u32)i);
+		}
+		// ---- the swatch's price ----
+		const PaintPart* sp = paintSelected(m);
+		const float iy = bottom - 12.0f;
+		char t[48];
+		snprintf(t, sizeof(t), "%d / %d", g_paint.sel + 1, n);
+		uiText(buf, t, 13.0f, 12.0f, iy, 0, UI_DIM, 0.0f);
+		if (sp && careerInProgress() && sp->price > 0) {
+			char cash[24];
+			formatCashGrouped((unsigned)sp->price, cash, sizeof(cash));
+			snprintf(t, sizeof(t), "$%s", cash);
+			uiText(buf, t, 16.0f, W - 12.0f, iy, 2, UI_WHITE, 0.0f);
+		}
+		aLabel = "Apply";
+	} else {
+		uiItemTabs(buf, m, ty, th, 4);
+		uiRowBar(8.0f, y0, W - 16.0f, bottom - y0, true);
+		uiText(buf, uiItemName(m, sel), 20.0f, W * 0.5f, (y0 + bottom) * 0.5f - 8.0f, 1,
+			m->itemLocked[sel] ? UI_DIM : UI_WHITE, W - 40.0f);
+		if (m->itemLocked[sel])
+			uiLabel(buf, "LOCKED", W * 0.5f, (y0 + bottom) * 0.5f + 14.0f, 1, UI_DIM);
+		fskHit(8.0f, y0, W - 16.0f, bottom - y0, FSK_KEY, KEY_A);
+	}
+	const UiAct acts[1] = { { aLabel, 'A', KEY_A, true } };
+	uiSkinFooter(buf, acts, 1);
+	uiFooterBank(buf);
+	return true;
+}
+
+// ---- the profile list ----
+// MC_List in the frontend (the Profile Manager's load / delete list): the
+// eight authored rows as the kit's rows, UP / DOWN and A, X for Create.
+static bool uiMcListScreen(const MenuState* m) {
+	return m->isMcList && m->hasListRows && m->listCount > 0 && m->navBottom;
+}
+static bool drawUiMcList(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(1024);
+	if (!buf || !g_uiFont || !uiMcListScreen(m))
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "Profiles",
+		feHelpHash(m->screenName) != 0);
+	const float y0 = UI_HEAD_H + 6.0f, rowH = 30.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const int vis = (int)((bottom - y0) / rowH), n = m->listCount;
+	g_fskListSel = m->listSel;
+	const float rw = W - 16.0f - (n > MCLIST_VISIBLE_ROWS ? 10.0f : 0.0f);
+	// Its window is the list's own (listTop, eight rows); the skin shows as
+	// many of those as fit, the current one always among them.
+	int first = m->listTop;
+	if (m->listSel >= first + vis)
+		first = m->listSel - vis + 1;
+	for (int k = 0; k < vis; k++) {
+		const int r = first + k, s = r - m->listTop;
+		if (r >= n || s < 0 || s >= MCLIST_VISIBLE_ROWS)
+			break;
+		const int wn = m->listCell[s][0], wd = m->listCell[s][1];
+		UiRow row = { 0 };
+		row.t = wn >= 0 && m->hasText[wn] ? &m->texts[wn] : NULL;
+		row.tagT = wd >= 0 && m->hasText[wd] ? &m->texts[wd] : NULL;
+		uiListRow(buf, &row, r, r == m->listSel, 8.0f, y0 + (float)k * rowH, rw, rowH - 4.0f, FSK_LIST);
+	}
+	uiListBar(first, vis, n, y0, rowH);
+	const UiAct acts[1] = { { "Select", 'A', KEY_A, true } };
+	uiSkinFooter(buf, acts, 1);
+	return true;
+}
+
+// ---- EA Trax ----
+// EA_Trax_Jukebox: a row a song -- its number, title and artist, and its
+// playability between arrows (LEFT / RIGHT on the current row) -- the play
+// order between L and R, A to preview and X to grab / release a song.
+static bool uiTraxScreen(const MenuState* m) {
+	return m->hasTraxRows && m->navBottom;
+}
+static bool drawUiTrax(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(1024);
+	if (!buf || !g_uiFont || !uiTraxScreen(m))
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "EA Trax",
+		feHelpHash(m->screenName) != 0);
+	// ---- the play order ----
+	const float ty = UI_HEAD_H + 6.0f, th = 22.0f, fw = W - 16.0f;
+	uiRoundRect(8.0f, ty, fw, th, th * 0.5f, UI_Z, UI_DEEP);
+	uiRing(8.0f, ty, fw, th, th * 0.5f, 1.0f, UI_Z + 0.005f, C2D_Color32(255, 255, 255, 61));
+	drawPadGlyph('L', 8.0f + 14.0f, ty + th * 0.5f, 12.0f, UI_Z + 0.04f);
+	drawPadGlyph('R', 8.0f + fw - 14.0f, ty + th * 0.5f, 12.0f, UI_Z + 0.04f);
+	const char* order = m->traxModeStr[gProfile.options.audio.playOrder ? 1 : 0];
+	uiText(buf, order[0] ? order : (gProfile.options.audio.playOrder ? "Random" : "Sequential"), 13.0f,
+		W * 0.5f, ty + th * 0.5f, 1, UI_ACCENT, fw - 60.0f);
+	fskHit(8.0f, ty - 3.0f, fw, th + 6.0f, FSK_KEY, KEY_R);
+	// ---- the songs ----
+	const float y0 = ty + th + 6.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const float rowH = (bottom - y0) / (float)EATRAX_VISIBLE_ROWS;
+	g_fskListSel = m->traxSel;
+	const float rw = W - 16.0f - 10.0f, valW = 74.0f;
+	for (int s = 0; s < EATRAX_VISIBLE_ROWS; s++) {
+		const int r = m->traxTop + s;
+		if (r >= OPTIONS_TRAX_SONGS)
+			break;
+		const float y = y0 + (float)s * rowH, h = rowH - 4.0f;
+		const bool cur = r == m->traxSel;
+		uiRowBar(8.0f, y, rw, h, cur);
+		if (m->traxGrabbed && s == m->traxGrabSlot)
+			uiRing(8.0f, y, rw, h, 3.0f, 1.5f, UI_Z + 0.02f, UI_ACCENT);
+		const int* cell = m->traxCell[s];
+		const float nx = 8.0f + 8.0f;
+		if (cell[0] >= 0 && m->hasText[cell[0]])
+			uiCText(&m->texts[cell[0]], 13.0f, nx, y + h * 0.5f, 0, UI_DIM, 22.0f);
+		const float tx = nx + 26.0f, tw = rw - 26.0f - valW - 22.0f;
+		if (cell[1] >= 0 && m->hasText[cell[1]])
+			uiCText(&m->texts[cell[1]], 14.0f, tx, y + h * 0.33f, 0, cur ? UI_ACCENT : UI_WHITE, tw);
+		if (cell[2] >= 0 && m->hasText[cell[2]])
+			uiCText(&m->texts[cell[2]], 12.0f, tx, y + h * 0.72f, 0, UI_DIM, tw);
+		const float vx = 8.0f + rw - 10.0f - valW;
+		const u32 ac = cur ? UI_ACCENT : UI_DIM;
+		uiArrow(vx + 5.0f, y + h * 0.5f, (float)M_PI, 4.5f, ac);
+		uiArrow(vx + valW - 5.0f, y + h * 0.5f, 0.0f, 4.5f, ac);
+		if (cell[4] >= 0 && m->hasText[cell[4]])
+			uiCText(&m->texts[cell[4]], 13.0f, vx + valW * 0.5f, y + h * 0.5f, 1, UI_WHITE, valW - 20.0f);
+		fskHit(8.0f, y, vx - 8.0f, h + 4.0f, FSK_LIST, (u32)r);
+		if (cur) {
+			fskHit(vx - 4.0f, y, valW * 0.5f + 4.0f, h + 4.0f, FSK_KEY, KEY_LEFT);
+			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, h + 4.0f, FSK_KEY, KEY_RIGHT);
+		} else {
+			fskHit(vx - 4.0f, y, valW + 14.0f, h + 4.0f, FSK_LIST, (u32)r);
+		}
+	}
+	uiListBar(m->traxTop, EATRAX_VISIBLE_ROWS, OPTIONS_TRAX_SONGS, y0, rowH);
+	const UiAct acts[2] = {
+		{ "Preview", 'A', KEY_A, true },
+		{ m->traxGrabbed ? "Release" : "Move", 'X', KEY_X, false },
+	};
+	uiSkinFooter(buf, acts, 2);
+	return true;
+}
+
+// ---- the performance parts' brands ----
+// UI_PerformanceBrandSelect: a row a part, its brand between arrows -- UP /
+// DOWN walk the rows, LEFT / RIGHT the brands, as the screen's own input.
+static bool drawUiPerfBrand(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	static int s_top = 0;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	const PerfBrandSel* pb = &g_perfBrand;
+	if (!buf || !g_uiFont || !m->isPerfBrand || !m->navBottom || pb->rows <= 0)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "Brands",
+		feHelpHash(m->screenName) != 0);
+	const float y0 = UI_HEAD_H + 6.0f, rowH = 31.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const int n = pb->rows, vis = (int)((bottom - y0) / rowH);
+	const int top = uiListTop(pb->sel, n, vis, &s_top);
+	g_fskListSel = pb->sel;
+	const float rx = 8.0f, rw = W - 16.0f - (n > vis ? 10.0f : 0.0f), valW = 130.0f;
+	for (int k = 0; k < vis && top + k < n; k++) {
+		const int r = top + k;
+		const float y = y0 + (float)k * rowH, h = rowH - 4.0f, cy = y + h * 0.5f;
+		const bool cur = r == pb->sel;
+		uiRowBar(rx, y, rw, h, cur);
+		uiText(buf, pb->name[r], 15.0f, rx + 10.0f, cy, 0, !pb->enabled[r] ? UI_DIM : cur ? UI_ACCENT : UI_WHITE,
+			rw - valW - 24.0f);
+		const float vx = rx + rw - 10.0f - valW;
+		const int bi = pb->index[r];
+		const char* brand = (bi >= 0 && bi < PERFDB_MAX_PART_BRANDS) ? pb->display[r][bi] : "";
+		if (pb->numBrands[r] > 1) {
+			const u32 ac = cur ? UI_ACCENT : UI_DIM;
+			uiArrow(vx + 6.0f, cy, (float)M_PI, 5.0f, ac);
+			uiArrow(vx + valW - 6.0f, cy, 0.0f, 5.0f, ac);
+		}
+		uiText(buf, brand, 14.0f, vx + valW * 0.5f, cy, 1, UI_WHITE, valW - 28.0f);
+		fskHit(rx, y, rw - valW - 10.0f, h + 4.0f, FSK_LIST, (u32)r);
+		if (cur) {
+			fskHit(vx - 4.0f, y, valW * 0.5f + 4.0f, h + 4.0f, FSK_KEY, KEY_LEFT);
+			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, h + 4.0f, FSK_KEY, KEY_RIGHT);
+		} else {
+			fskHit(vx - 4.0f, y, valW + 14.0f, h + 4.0f, FSK_LIST, (u32)r);
+		}
+	}
+	uiListBar(top, vis, n, y0, rowH);
+	const UiAct acts[1] = { { "Select", 'A', KEY_A, true } };
+	uiSkinFooter(buf, acts, 1);
+	uiFooterBank(buf);
+	return true;
+}
+
+// ---- the dyno: the torque / boost graph ----
+// UI_PerformanceTuning_Graph: the nine points as bars in the kit -- each the
+// point's tuneable range shaded and its value filled, the picked one lime
+// with its number. LEFT / RIGHT pick, UP / DOWN step (tuneInput()); a tap on
+// a bar picks it and on the picked one steps toward the tap, through
+// tuneGraphTouch(), which reads the rect this lays out (g_uiTg).
+static const C2D_Text* uiWidgetText(const MenuState* m, int wi) {
+	return (wi >= 0 && wi < FNG_MAX_WIDGETS && m->hasText[wi] && !m->layoutHidden[wi]) ? &m->texts[wi] : NULL;
+}
+static bool drawUiTuneGraph(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(1024);
+	if (!buf || !g_uiFont || !m->tuneGraph || !m->navBottom)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", uiWidgetText(m, tuneWidget(m, 0xCB9A2C64u)),
+		g_tgraph.type == CUSTTUNE_BOOST ? "Boost" : "Torque", false);
+	const int n = CUSTTUNE_CURVE_POINTS;
+	const float gx = 34.0f, gy = UI_HEAD_H + 22.0f, gw = W - gx - 10.0f, gh = H - UI_FOOT_H - 22.0f - gy;
+	g_uiTg.on = true;
+	g_uiTg.x = gx; g_uiTg.y = gy; g_uiTg.w = gw; g_uiTg.h = gh;
+	uiRoundRect(gx - 4.0f, gy - 4.0f, gw + 8.0f, gh + 8.0f, 3.0f, UI_Z, UI_PANEL);
+	float range = g_tgraph.gmax - g_tgraph.gmin;
+	if (range == 0.0f)
+		range = 1.0f;
+	// The scale: the graph's range in fifths.
+	for (int k = 0; k <= 5; k++) {
+		const float y = gy + gh - gh * (float)k / 5.0f;
+		C2D_DrawRectSolid(gx, y, UI_Z + 0.005f, gw, 1.0f, C2D_Color32(255, 255, 255, 22));
+		char t[16];
+		snprintf(t, sizeof(t), "%d", (int)(g_tgraph.gmin + range * (float)k / 5.0f + 0.5f));
+		uiText(buf, t, 10.0f, gx - 4.0f, y, 2, UI_DIM, 0.0f);
+	}
+	const float step = gw / (float)n, bw = step * 0.62f;
+	for (int i = 0; i < n; i++) {
+		const bool cur = i == g_tgraph.sel;
+		const float cx = gx + step * ((float)i + 0.5f);
+		const float yv = gy + gh - gh * (g_tgraph.cur[i] - g_tgraph.gmin) / range;
+		const float ymn = gy + gh - gh * (g_tgraph.tmin[i] - g_tgraph.gmin) / range;
+		const float ymx = gy + gh - gh * (g_tgraph.tmax[i] - g_tgraph.gmin) / range;
+		if (ymn > ymx)
+			uiRoundRect(cx - bw * 0.5f, ymx, bw, ymn - ymx, 2.0f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 34));
+		const float fh = gy + gh - yv;
+		if (fh > 0.5f)
+			uiRoundRect(cx - bw * 0.35f, yv, bw * 0.7f, fh, 2.0f, UI_Z + 0.015f,
+				cur ? C2D_Color32(202, 244, 138, 170) : C2D_Color32(150, 150, 150, 150));
+		C2D_DrawCircleSolid(cx, yv, UI_Z + 0.03f, cur ? 5.5f : 4.0f, cur ? UI_ACCENT : UI_WHITE);
+		if (cur) {
+			char t[16];
+			snprintf(t, sizeof(t), "%.0f", (double)g_tgraph.cur[i]);
+			uiText(buf, t, 13.0f, cx, fmaxf(gy + 6.0f, yv - 12.0f), 1, UI_ACCENT, 0.0f);
+		}
+	}
+	uiText(buf, "LEFT / RIGHT  point     UP / DOWN  value", 10.0f, W * 0.5f, UI_HEAD_H + 9.0f, 1, UI_DIM, 0.0f);
+	const UiAct acts[2] = { { "Tip", 'X', KEY_X, false }, { "Reset", 'Y', KEY_Y, false } };
+	uiSkinFooter(buf, acts, 2);
+	return true;
+}
+
+// ---- the dyno: the NOS graph ----
+// UI_PerformanceTuning_NOS: duration across against power up, the trade line
+// over the two tuneable ranges, the current pair's point and its slider
+// under it; LEFT / RIGHT (or a tap either side of the knob, tuneNosTouch()
+// reading g_uiNos) move it.
+static bool drawUiTuneNos(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(1024);
+	if (!buf || !g_uiFont || !m->tuneNos || !m->navBottom)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", NULL, "Nitrous", false);
+	const float gx = 20.0f, gy = UI_HEAD_H + 14.0f, gw = W - 40.0f, gh = H - UI_FOOT_H - 52.0f - gy;
+	uiRoundRect(gx - 4.0f, gy - 4.0f, gw + 8.0f, gh + 8.0f, 3.0f, UI_Z, UI_PANEL);
+	for (int k = 1; k < 5; k++) {
+		C2D_DrawRectSolid(gx, gy + gh * (float)k / 5.0f, UI_Z + 0.005f, gw, 1.0f, C2D_Color32(255, 255, 255, 18));
+		C2D_DrawRectSolid(gx + gw * (float)k / 5.0f, gy, UI_Z + 0.005f, 1.0f, gh, C2D_Color32(255, 255, 255, 18));
+	}
+	uiLabel(buf, "POWER", gx + 4.0f, gy + 8.0f, 0, UI_DIM);
+	uiLabel(buf, "DURATION", gx + gw - 4.0f, gy + gh - 8.0f, 2, UI_DIM);
+	const float x0 = gx + gw * g_tnos.mn16 / g_tnos.max16, x1 = gx + gw * g_tnos.mx16 / g_tnos.max16;
+	const float y0 = gy + gh - gh * g_tnos.mx17 / g_tnos.max17, y1 = gy + gh - gh * g_tnos.mn17 / g_tnos.max17;
+	C2D_DrawLine(x0, y0, C2D_Color32(230, 190, 60, 255), x1, y1, C2D_Color32(230, 190, 60, 255), 2.0f,
+		UI_Z + 0.01f);
+	const float px = gx + gw * g_tnos.cur16 / g_tnos.max16, py = gy + gh - gh * g_tnos.cur17 / g_tnos.max17;
+	C2D_DrawRectSolid(px - 0.5f, gy, UI_Z + 0.012f, 1.0f, gh, C2D_Color32(202, 244, 138, 110));
+	C2D_DrawRectSolid(gx, py - 0.5f, UI_Z + 0.012f, gw, 1.0f, C2D_Color32(202, 244, 138, 110));
+	C2D_DrawCircleSolid(px, py, UI_Z + 0.03f, 5.0f, UI_ACCENT);
+	// ---- the slider ----
+	const float sy = gy + gh + 22.0f, sx = gx + 22.0f, sw = gw - 44.0f;
+	g_uiNos.on = true;
+	g_uiNos.x = sx; g_uiNos.y = sy - 12.0f; g_uiNos.w = sw; g_uiNos.h = 24.0f;
+	g_uiNos.knob = sx + sw * g_tnos.frac[1];
+	uiRoundRect(sx, sy - 3.0f, sw, 6.0f, 3.0f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 30));
+	if (g_tnos.frac[2] > g_tnos.frac[0])
+		uiRoundRect(sx + sw * g_tnos.frac[0], sy - 3.0f, fmaxf(6.0f, sw * (g_tnos.frac[2] - g_tnos.frac[0])), 6.0f,
+			3.0f, UI_Z + 0.012f, C2D_Color32(255, 255, 255, 70));
+	C2D_DrawCircleSolid(g_uiNos.knob, sy, UI_Z + 0.02f, 6.5f, UI_ACCENT);
+	uiArrow(gx + 8.0f, sy, (float)M_PI, 6.0f, UI_WHITE);
+	uiArrow(gx + gw - 8.0f, sy, 0.0f, 6.0f, UI_WHITE);
+	fskHit(gx - 6.0f, sy - 14.0f, 26.0f, 28.0f, FSK_KEY, KEY_LEFT);
+	fskHit(gx + gw - 20.0f, sy - 14.0f, 26.0f, 28.0f, FSK_KEY, KEY_RIGHT);
+	const UiAct acts[2] = { { "Tip", 'X', KEY_X, false }, { "Reset", 'Y', KEY_Y, false } };
+	uiSkinFooter(buf, acts, 2);
+	return true;
+}
+
+// ---- the dyno: the run's chart ----
+// UI_PerformanceDyno_Chart: torque and power against rpm as drawTuneCurves()
+// works them out, in a plot of the kit's, with the progress line while the
+// pull runs and the peaks once it is in. A (or any tap) ends the pull, then
+// goes on to the results; B the hub (tuneInput()).
+static bool drawUiDynoChart(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(1024);
+	if (!buf || !g_uiFont || !m->tuneChart || !m->navBottom)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", NULL, "Dyno Run", false);
+	const bool done = g_dyno.done;
+	const float legendH = done ? 30.0f : 0.0f;
+	const float gx = 30.0f, gy = UI_HEAD_H + 10.0f, gw = W - 60.0f, gh = H - UI_FOOT_H - 18.0f - legendH - gy;
+	uiRoundRect(gx - 4.0f, gy - 4.0f, gw + 8.0f, gh + 8.0f, 3.0f, UI_Z, UI_PANEL);
+	const bool metric = unitsMetric();
+	const float hpMax = metric ? 447.42f : 600.0f, tqMax = metric ? 813.491f : 600.0f;
+	const u32 ct = C2D_Color32(220, 165, 30, 255), ch = C2D_Color32(40, 175, 205, 255);
+	for (int k = 0; k <= 5; k++) {
+		const float y = gy + gh - gh * (float)k / 5.0f;
+		C2D_DrawRectSolid(gx, y, UI_Z + 0.005f, gw, 1.0f, C2D_Color32(255, 255, 255, 20));
+		char t[16];
+		snprintf(t, sizeof(t), "%d", (int)((float)k * hpMax / 5.0f + 0.5f));
+		uiText(buf, t, 9.0f, gx - 3.0f, y, 2, ch, 0.0f);
+		snprintf(t, sizeof(t), "%d", (int)((float)k * tqMax / 5.0f + 0.5f));
+		uiText(buf, t, 9.0f, gx + gw + 3.0f, y, 0, ct, 0.0f);
+	}
+	for (int k = 1; k <= 9; k++) {
+		const float x = gx + gw * (float)k / 10.0f;
+		C2D_DrawRectSolid(x, gy, UI_Z + 0.005f, 1.0f, gh, C2D_Color32(255, 255, 255, 12));
+	}
+	uiText(buf, "RPM x1000", 9.0f, gx + gw, gy + gh + 9.0f, 2, UI_DIM, 0.0f);
+	const DynoRecord* r = &g_dynoLive;
+	const float p = dynoProgress();
+	const float upTo = done ? 1.0e9f : p * (r->limiter - 200.0f);
+	if (r->valid && r->limiter > r->idle && upTo >= r->idle) {
+		float px = 0.0f, pt = 0.0f, ph = 0.0f;
+		for (int k = 0; k <= 30; k++) {
+			float rpm = r->idle + (r->limiter - r->idle) * (float)k / 30.0f;
+			const bool last = rpm >= upTo;
+			if (last)
+				rpm = upTo;
+			const float tq = ridephys_table_get(r->torque, 9, r->idle, r->limiter, rpm) * 1000.0f;
+			float t = tq / tqMax * (metric ? 1.0f : 0.737562f);
+			float h = tq * rpm / 9550.0f / hpMax * (metric ? 1.0f : 1.34102f);
+			t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+			h = h < 0.0f ? 0.0f : h > 1.0f ? 1.0f : h;
+			const float x = gx + gw * rpm / 10000.0f, yt = gy + gh - gh * t, yh = gy + gh - gh * h;
+			if (k > 0) {
+				C2D_DrawLine(px, pt, ct, x, yt, ct, 2.0f, UI_Z + 0.02f);
+				C2D_DrawLine(px, ph, ch, x, yh, ch, 2.0f, UI_Z + 0.02f);
+			}
+			px = x; pt = yt; ph = yh;
+			if (last)
+				break;
+		}
+	}
+	if (!done && g_dyno.state != 0 && p < 1.0f && upTo > 0.0f) {
+		const float x = gx + gw * upTo / 10000.0f;
+		C2D_DrawLine(x, gy, C2D_Color32(255, 255, 0, 255), x, gy + gh, C2D_Color32(255, 255, 0, 255), 1.5f,
+			UI_Z + 0.025f);
+	}
+	if (done) {
+		const float ly = H - UI_FOOT_H - 6.0f - legendH * 0.5f;
+		const C2D_Text* tqT = uiWidgetText(m, tuneWidget(m, 0xD7D6DB1Du));
+		const C2D_Text* hpT = uiWidgetText(m, tuneWidget(m, 0x11AE2235u));
+		C2D_DrawRectSolid(10.0f, ly - 1.0f, UI_Z + 0.02f, 10.0f, 3.0f, ct);
+		if (tqT)
+			uiCText(tqT, 11.0f, 24.0f, ly, 0, UI_WHITE, W * 0.5f - 30.0f);
+		C2D_DrawRectSolid(W * 0.5f + 4.0f, ly - 1.0f, UI_Z + 0.02f, 10.0f, 3.0f, ch);
+		if (hpT)
+			uiCText(hpT, 11.0f, W * 0.5f + 18.0f, ly, 0, UI_WHITE, W * 0.5f - 24.0f);
+	}
+	const UiAct acts[1] = { { done ? "Results" : "Stop", 'A', KEY_A, true } };
+	uiSkinFooter(buf, acts, 1);
+	return true;
+}
+
+// ---- the dyno: the results ----
+// UI_PerformanceDyno_Results: the three runs (this one, the one before, the
+// first) side by side for the five stats tuneResultsSetup() filled in. A the
+// hub, B the chart.
+static bool drawUiDynoResults(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(1024);
+	if (!buf || !g_uiFont || !m->tuneResults || !m->navBottom)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Chart", NULL, "Dyno Results", false);
+	static const char* const kCol[3] = { "CURRENT_DATA_%d", "PREV_DATA_%d", "FR_DATA_%d" };
+	static const char* const kHead[3] = { "THIS RUN", "LAST RUN", "FIRST RUN" };
+	static const char* const kStat[5] = { "0-60", "0-100", "TOP SPEED", "TORQUE", "POWER" };
+	const float lx = 8.0f, lw = 62.0f, cw = (W - 16.0f - lw) / 3.0f;
+	const float y0 = UI_HEAD_H + 8.0f, hh = 16.0f;
+	for (int c = 0; c < 3; c++)
+		uiLabel(buf, kHead[c], lx + lw + cw * ((float)c + 0.5f), y0 + hh * 0.5f, 1, c == 0 ? UI_ACCENT : UI_DIM);
+	const float ry = y0 + hh + 4.0f, rh = (H - UI_FOOT_H - 6.0f - ry) / 5.0f;
+	for (int k = 0; k < 5; k++) {
+		const float y = ry + (float)k * rh;
+		uiRowBar(lx, y, W - 16.0f, rh - 3.0f, false);
+		uiLabel(buf, kStat[k], lx + 8.0f, y + (rh - 3.0f) * 0.5f, 0, UI_DIM);
+		for (int c = 0; c < 3; c++) {
+			const C2D_Text* t = uiWidgetText(m, tuneWidget(m, tgHash(kCol[c], k + 1)));
+			if (t)
+				uiCText(t, k >= 3 ? 10.0f : 13.0f, lx + lw + cw * ((float)c + 0.5f), y + (rh - 3.0f) * 0.5f, 1,
+					c == 0 ? UI_WHITE : UI_DIM, cw - 6.0f);
+		}
+	}
+	const UiAct acts[1] = { { "Done", 'A', KEY_A, true } };
+	uiSkinFooter(buf, acts, 1);
+	return true;
+}
+
+// ---- the garage's world map ----
+// UI_CareerWorldMap: the stage between the arrows (LEFT / RIGHT, ScrollRegion)
+// in the header's room, the region's events as rows on the left (UP / DOWN,
+// ScrollEvent; a tap walks there, on the current one A -- the race
+// question), the map's window on the right with the event's four facts
+// (rebuildWorldMapText()) under it. wmTouch() stands down while this is up.
+static bool drawUiCribMap(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	static int s_top = 0;
+	if (!buf)
+		buf = C2D_TextBufNew(3072);
+	const CribMap* cm = &g_cribMap;
+	if (!buf || !g_uiFont || !m->isWorldMap || !m->navBottom || cm->nodeCount <= 0)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", NULL, NULL, feHelpHash(m->screenName) != 0);
+	// ---- the stage ----
+	{
+		const float sx = 96.0f, sw = 130.0f, sy = 5.0f, sh = 26.0f;
+		const C2D_Text* st = uiWidgetText(m, m->wmRegionText);
+		uiRoundRect(sx, sy, sw, sh, sh * 0.5f, UI_Z + 0.01f, UI_DEEP);
+		if (st)
+			uiCText(st, 15.0f, sx + sw * 0.5f, sy + sh * 0.5f, 1, UI_ACCENT, sw - 40.0f);
+		const bool l = cribmap_region_arrow_shown(cm, 0), r = cribmap_region_arrow_shown(cm, 1);
+		uiArrow(sx + 11.0f, sy + sh * 0.5f, (float)M_PI, 5.0f, l ? UI_WHITE : C2D_Color32(255, 255, 255, 40));
+		uiArrow(sx + sw - 11.0f, sy + sh * 0.5f, 0.0f, 5.0f, r ? UI_WHITE : C2D_Color32(255, 255, 255, 40));
+		if (l)
+			fskHit(sx - 4.0f, 0.0f, sw * 0.5f + 4.0f, UI_HEAD_H, FSK_KEY, KEY_LEFT);
+		if (r)
+			fskHit(sx + sw * 0.5f, 0.0f, sw * 0.5f + 4.0f, UI_HEAD_H, FSK_KEY, KEY_RIGHT);
+	}
+	// ---- the events ----
+	const float y0 = UI_HEAD_H + 6.0f, rowH = 26.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const float lw = 150.0f;
+	const int n = cm->nodeCount, vis = (int)((bottom - y0) / rowH);
+	const int top = uiListTop(cm->current, n, vis, &s_top);
+	g_fskListSel = cm->current;
+	int typeCount[6] = { 0 };
+	int ordinal[CRIBMAP_MAX_NODES];
+	for (int k = 0; k < n; k++) {
+		const int t = cm->nodes[k].type >= 0 && cm->nodes[k].type <= 5 ? cm->nodes[k].type : 3;
+		ordinal[k] = cm->nodes[k].ev ? ++typeCount[t] : 0;
+	}
+	for (int k = 0; k < vis && top + k < n; k++) {
+		const int i = top + k;
+		const CribMapNode* nd = &cm->nodes[i];
+		char nm[64], utf[96];
+		if (!nd->ev) {
+			snprintf(utf, sizeof(utf), "Overview");
+		} else {
+			const int t = nd->type >= 0 && nd->type <= 5 ? nd->type : 3;
+			snprintf(nm, sizeof(nm), "%s %d", g_wmStr[WMS_RT0 + t][0] ? g_wmStr[WMS_RT0 + t] : "Race", ordinal[i]);
+			langTextToUtf8(nm, utf, sizeof(utf));
+		}
+		UiRow row = { 0 };
+		row.s = utf;
+		row.mark = nd->ev && nd->completed;
+		row.tag = nd->ev && nd->completed ? "DONE" : NULL;
+		row.tagInk = UI_ACCENT;
+		uiListRow(buf, &row, i, i == cm->current, 8.0f, y0 + (float)k * rowH, lw - (n > vis ? 10.0f : 0.0f),
+			rowH - 4.0f, FSK_LIST);
+	}
+	if (n > vis && vis > 0) {
+		const float sh = (float)vis * rowH - 4.0f, th = fmaxf(8.0f, sh * (float)vis / (float)n);
+		uiRoundRect(8.0f + lw - 6.0f, y0, 4.0f, sh, 2.0f, UI_Z, C2D_Color32(255, 255, 255, 26));
+		uiRoundRect(8.0f + lw - 6.0f, y0 + (sh - th) * (float)top / (float)(n - vis), 4.0f, th, 2.0f,
+			UI_Z + 0.01f, UI_ACCENT);
+	}
+	// ---- the map and the event's facts ----
+	const float mx = 8.0f + lw + 8.0f, mw = W - mx - 8.0f, mh = 92.0f;
+	uiRoundRect(mx, y0, mw, mh, 3.0f, UI_Z, UI_DEEP);
+	if (m->trackMap.valid && m->trackMap.image.subtex) {
+		const Tex3DS_SubTexture* s = m->trackMap.image.subtex;
+		Tex3DS_SubTexture win = *s;
+		win.left = s->left + (s->right - s->left) * cm->u0;
+		win.right = s->left + (s->right - s->left) * cm->u1;
+		win.top = s->top + (s->bottom - s->top) * cm->v0;
+		win.bottom = s->top + (s->bottom - s->top) * cm->v1;
+		const float side = fminf(mw, mh) - 4.0f;
+		win.width = (u16)side;
+		win.height = (u16)side;
+		C2D_Image im = m->trackMap.image;
+		im.subtex = &win;
+		C2D_DrawImageAt(im, mx + (mw - side) * 0.5f, y0 + 2.0f, UI_Z + 0.01f, NULL, 1.0f, 1.0f);
+	}
+	float fy = y0 + mh + 10.0f;
+	for (int r = 0; r < 4; r++) {
+		const C2D_Text* lt = uiWidgetText(m, m->wmLabel[r]);
+		const C2D_Text* vt = uiWidgetText(m, m->wmValue[r]);
+		if (!lt && !vt)
+			continue;
+		if (lt)
+			uiCText(lt, 11.0f, mx, fy, 0, UI_DIM, mw * 0.5f);
+		if (vt)
+			uiCText(vt, 12.0f, mx + mw, fy, 2, UI_WHITE, mw * 0.55f);
+		fy += 16.0f;
+	}
+	const bool race = cribmap_current_event(cm) != NULL;
+	const UiAct acts[1] = { { "Race", 'A', KEY_A, race } };
+	uiSkinFooter(buf, acts, race ? 1 : 0);
+	return true;
+}
+
+// ---- option pages: rows ----
+// UI_Options and the Quick Race option pages: the name on the left, the
+// value between arrows (or a slider) on the right; a tap on another row
+// walks there, on the current one's arrows is LEFT / RIGHT, on a button row
+// A. The dyno's and the LAN's rows keep theirs (their screens carry more).
+static bool uiRowsScreen(const MenuState* m) {
+	// PORT (the user, 2026-11-15): the LAN's option rows and the tuning
+	// sliders too; only the dyno's chart and results pages keep theirs.
+	return m->hasModeRows && m->navBottom && m->modeRowCount > 0 &&
+		!(m->modeIsTune && (m->tuneChart || m->tuneResults || m->tuneGraph || m->tuneNos));
+}
+static bool drawUiRows(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	static int s_top = 0;
+	static const MenuState* s_for = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	if (!buf || !g_uiFont || !uiRowsScreen(m))
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, NULL,
+		feHelpHash(m->screenName) != 0);
+	// The Quick Race pages go on with A; the options page saves on Back.
+	const bool foot = !m->modeIsOptions;
+	const float y0 = UI_HEAD_H + 6.0f, rowH = 31.0f, bottom = foot ? H - UI_FOOT_H - 4.0f : H - 4.0f;
+	const int n = m->modeRowCount, vis = (int)((bottom - y0) / rowH);
+	const int sel = m->modeRowSel;
+	if (s_for != m) {
+		s_for = m;
+		s_top = 0;
+	}
+	if (sel < s_top) s_top = sel;
+	if (sel >= s_top + vis) s_top = sel - vis + 1;
+	if (s_top > n - vis) s_top = n - vis;
+	if (s_top < 0) s_top = 0;
+	const float rx = 8.0f, rw = W - 16.0f - 10.0f, valW = 120.0f;
+	for (int k = 0; k < vis && s_top + k < n; k++) {
+		const int r = s_top + k;
+		const float y = y0 + (float)k * rowH, h = rowH - 4.0f, cy = y + h * 0.5f;
+		const bool cur = r == sel;
+		uiRowBar(rx, y, rw, h, cur);
+		const bool slider = m->modeIsOptions && m->optRows[r].slider;
+		const bool button = m->modeIsOptions && m->optRows[r].button;
+		const float nameW = button ? rw - 20.0f : rw - valW - 24.0f;
+		if (m->hasModeRowName[r])
+			uiCText(&m->modeRowName[r], 15.0f, rx + 10.0f, cy, 0, cur ? UI_ACCENT : UI_WHITE, nameW);
+		const float vx = rx + rw - 10.0f - valW;
+		if (slider) {
+			const float f = fmaxf(0.0f, fminf(1.0f, m->optSliderFrac[r]));
+			const float bx = vx + 8.0f, bw = valW - 16.0f;
+			uiRoundRect(bx, cy - 3.0f, bw, 6.0f, 3.0f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 41));
+			if (f > 0.0f)
+				uiRoundRect(bx, cy - 3.0f, fmaxf(6.0f, bw * f), 6.0f, 3.0f, UI_Z + 0.015f, UI_ACCENT);
+			C2D_DrawCircleSolid(bx + bw * f, cy, UI_Z + 0.02f, 6.0f, UI_WHITE);
+			fskHit(vx, y, valW * 0.5f, h, FSK_ROWL, (u32)r);
+			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, h, FSK_ROWR, (u32)r);
+		} else if (m->modeIsTune && r < OPTIONS_MAX_ROWS) {
+			// A tuning slider: the tuneable range shaded over the bar, the
+			// value's knob, the number above it.
+			const float bx = vx + 8.0f, bw = valW - 16.0f, by = cy + 5.0f;
+			const float* f = m->tuneFrac[r];
+			uiRoundRect(bx, by - 2.0f, bw, 4.0f, 2.0f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 30));
+			if (f[2] > f[0])
+				uiRoundRect(bx + bw * f[0], by - 2.0f, fmaxf(4.0f, bw * (f[2] - f[0])), 4.0f, 2.0f, UI_Z + 0.012f,
+					C2D_Color32(255, 255, 255, 70));
+			C2D_DrawCircleSolid(bx + bw * f[1], by, UI_Z + 0.02f, 4.5f, cur ? UI_ACCENT : UI_WHITE);
+			if (m->hasModeRowValue[r])
+				uiCText(&m->modeRowValue[r], 13.0f, vx + valW * 0.5f, cy - 6.0f, 1, UI_WHITE, valW - 16.0f);
+			fskHit(vx - 4.0f, y, valW * 0.5f + 4.0f, h, FSK_ROWL, (u32)r);
+			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, h, FSK_ROWR, (u32)r);
+		} else if (!button) {
+			const u32 ac = cur ? UI_ACCENT : UI_DIM;
+			uiArrow(vx + 6.0f, cy, (float)M_PI, 5.0f, ac);
+			uiArrow(vx + valW - 6.0f, cy, 0.0f, 5.0f, ac);
+			if (m->hasModeRowValue[r])
+				uiCText(&m->modeRowValue[r], 15.0f, vx + valW * 0.5f, cy, 1, UI_WHITE, valW - 28.0f);
+			fskHit(vx - 4.0f, y, valW * 0.5f + 4.0f, h, FSK_ROWL, (u32)r);
+			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, h, FSK_ROWR, (u32)r);
+		}
+		fskHit(rx, y, button ? rw : rw - valW - 10.0f, h, button ? FSK_ROWA : FSK_ROW, (u32)r);
+	}
+	if (n > vis && vis > 0) {
+		const float sh = (float)vis * rowH - 4.0f, th = sh * (float)vis / (float)n;
+		uiRoundRect(W - 12.0f, y0, 4.0f, sh, 2.0f, UI_Z, C2D_Color32(255, 255, 255, 26));
+		uiRoundRect(W - 12.0f, y0 + (sh - th) * (float)s_top / (float)(n - vis), 4.0f, th, 2.0f,
+			UI_Z + 0.01f, UI_ACCENT);
+	}
+	if (foot && m->modeIsTune) {
+		// TuningSlidersMenu: BUTTON1 resets the row, the tip on X.
+		static const UiAct kTune[2] = { { "Tip", 'X', KEY_X, false }, { "Reset", 'Y', KEY_Y, false } };
+		uiSkinFooter(buf, kTune, 2);
+	} else if (foot) {
+		static const UiAct kGo[1] = { { "Continue", 'A', KEY_A, true } };
+		uiSkinFooter(buf, kGo, 1);
+	}
+	return true;
+}
+
+// ---- the engage dialogs ----
+// UI_EngageRaceDialog: the race type, From, the subject, the length and the
+// purse in tiles, the message, Accept / Decline (retail opens on Decline).
+// UI_EngageEventDialog and UI_EngageShopDialog: a title, the message and
+// their buttons. Each button is the screen's own String (its label), drawn
+// on a pill; a tap on the current one is A, on the other LEFT / RIGHT.
+static const char* uiAfterColon(const char* s) {
+	const char* c = strstr(s, ": ");
+	return c ? c + 2 : s;
+}
+static bool drawUiEngage(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(4096);
+	if (!buf || !g_uiFont || !m->isEngageDlg || g_engageDlg.kind == ENGAGE_KIND_NONE)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = m->screenW > 0.0f ? m->screenW : BOTTOM_W, H = BOTTOM_H;
+	C2D_DrawRectSolid(0.0f, 0.0f, UI_Z - 0.1f, W, H, C2D_Color32(0, 0, 0, 140));
+	const bool race = g_engageDlg.kind == ENGAGE_KIND_RACE;
+	const bool event = g_engageDlg.kind == ENGAGE_KIND_CHALLENGE || g_engageDlg.kind == ENGAGE_KIND_SHOWCASE;
+	const float px = 8.0f, pw = W - 16.0f;
+	// The buttons on show.
+	int btn[3], nb = 0;
+	for (int k = 0; k < 3; k++) {
+		const int i = m->engageBtn[k];
+		if (i >= 0 && !m->layoutHidden[i])
+			btn[nb++] = k;
+	}
+	const char* body = g_engStr.body;
+	const float bodyPx = 14.0f, lh = 17.0f;
+	static char wrapped[1024];
+	int lines = body[0] ? uiWrap(buf, body, bodyPx, pw - 24.0f, wrapped, sizeof(wrapped)) : 0;
+	float ph, py;
+	if (race) {
+		py = 8.0f;
+		ph = H - 16.0f;
+	} else {
+		ph = 52.0f + (float)(lines < 6 ? lines : 6) * lh + 10.0f + (nb ? 36.0f + 12.0f : 0.0f);
+		py = floorf((H - ph) * 0.5f);
+	}
+	uiRoundRect(px, py, pw, ph, 6.0f, UI_Z, C2D_Color32(0, 0, 0, 219));
+	uiDialogRing(px, py, pw, ph);
+	float y;
+	if (race) {
+		// The type in lime with a bar, From on the right, the subject big.
+		uiRoundRect(px + 12.0f, py + 12.0f, 26.0f, 3.0f, 1.5f, UI_Z + 0.01f, UI_ACCENT);
+		char up[64];
+		snprintf(up, sizeof(up), "%s", g_engStr.type);
+		for (char* p = up; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+		uiLabel(buf, up, px + 44.0f, py + 14.0f, 0, UI_ACCENT);
+		char fr[96];
+		snprintf(fr, sizeof(fr), "%s", g_engStr.from);
+		for (char* p = fr; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+		uiLabel(buf, fr, px + pw - 12.0f, py + 14.0f, 2, UI_DIM);
+		uiText(buf, uiAfterColon(g_engStr.subject), 19.0f, px + 12.0f, py + 33.0f, 0, UI_WHITE, pw - 24.0f);
+		// The two numbers.
+		const float tw = (pw - 24.0f - 8.0f) * 0.5f, ty = py + 48.0f;
+		const char* k2[2] = { "DISTANCE", "PURSE" };
+		char v2[2][40];
+		snprintf(v2[0], sizeof(v2[0]), "%s", g_engStr.dist[0] ? g_engStr.dist : "--");
+		snprintf(v2[1], sizeof(v2[1]), "$%s", g_engStr.purse[0] ? g_engStr.purse : "0");
+		for (int i = 0; i < 2; i++) {
+			const float x = px + 12.0f + (float)i * (tw + 8.0f);
+			uiRowBar(x, ty, tw, 36.0f, false);
+			uiLabel(buf, k2[i], x + 10.0f, ty + 10.0f, 0, UI_ACCENT);
+			uiText(buf, v2[i], 17.0f, x + 10.0f, ty + 25.0f, 0, UI_WHITE, tw - 20.0f);
+		}
+		y = ty + 44.0f;
+	} else {
+		const char* title = event ? uiAfterColon(g_engStr.subject) : g_engStr.title;
+		uiLabel(buf, event ? (g_engageDlg.kind == ENGAGE_KIND_SHOWCASE ? "SHOWCASE" : "WORLD CHALLENGE")
+			: g_engageDlg.kind == ENGAGE_KIND_SHOP ? "SHOP" : "CHALLENGE", px + 12.0f, py + 14.0f, 0, UI_ACCENT);
+		if (event && g_engStr.from[0]) {
+			char fr[96];
+			snprintf(fr, sizeof(fr), "%s", g_engStr.from);
+			for (char* p = fr; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+			uiLabel(buf, fr, px + pw - 12.0f, py + 14.0f, 2, UI_DIM);
+		}
+		uiText(buf, title, 19.0f, px + 12.0f, py + 33.0f, 0, UI_WHITE, pw - 24.0f);
+		y = py + 50.0f;
+	}
+	// The message: what fits above the buttons, the size stepped down to fit.
+	const float by = nb ? py + ph - 12.0f - 36.0f : py + ph - 8.0f;
+	float bpx = bodyPx, blh = lh;
+	const float room = by - 8.0f - y;
+	while (lines > 0 && (float)lines * blh > room && bpx > 11.0f) {
+		bpx -= 1.0f;
+		blh -= 1.0f;
+		lines = uiWrap(buf, body, bpx, pw - 24.0f, wrapped, sizeof(wrapped));
+	}
+	char* line = wrapped;
+	for (int k = 0; k < lines && line && *line; k++) {
+		char* nl = strchr(line, '\n');
+		if (nl) *nl = '\0';
+		const float ly = y + blh * 0.5f + (float)k * blh;
+		if (ly + blh * 0.5f > by - 4.0f)
+			break;
+		uiText(buf, line, bpx, px + 12.0f, ly, 0, C2D_Color32(230, 230, 230, 255), pw - 24.0f);
+		line = nl ? nl + 1 : NULL;
+	}
+	// The buttons, the current one lit.
+	if (nb) {
+		const float gap = 10.0f, bw = nb == 1 ? fminf(160.0f, pw - 24.0f) : (pw - 24.0f - gap * (float)(nb - 1)) / (float)nb;
+		const float bx0 = nb == 1 ? px + (pw - bw) * 0.5f : px + 12.0f;
+		for (int j = 0; j < nb; j++) {
+			const int k = btn[j], wi = m->engageBtn[k];
+			const bool cur = k == m->engageSel;
+			const float bx = bx0 + (float)j * (bw + gap);
+			uiPill(bx, by, bw, 36.0f, cur, UI_Z + 0.015f);
+			const char glyph = cur ? 'A' : k == 1 ? 'B' : 0;
+			float tw = 0.0f;
+			if (m->hasText[wi]) {
+				float th2 = 0.0f;
+				textDims(&m->texts[wi], 16.0f / g_fontUnitPx, 16.0f / g_fontUnitPx, &tw, &th2);
+			}
+			const float gw = glyph ? 15.0f + 6.0f : 0.0f, x0 = bx + (bw - gw - fminf(tw, bw - 40.0f)) * 0.5f;
+			if (glyph)
+				drawPadGlyph(glyph, x0 + 7.5f, by + 18.0f, 15.0f, UI_Z + 0.04f);
+			if (m->hasText[wi])
+				uiCText(&m->texts[wi], 16.0f, x0 + gw, by + 18.0f, 0, cur ? UI_ACCENT : UI_WHITE, bw - 40.0f);
+			fskHit(bx - 3.0f, by - 4.0f, bw + 6.0f, 44.0f, FSK_BTN, (u32)k);
+		}
+	}
+	return true;
+}
+
+// ---- the Career Status overlay ----
+// UI_Status_Master and its page in one: the page's title with L / R in the
+// header, then the page -- the career's rows (the visual rating and the
+// completion on a line above them), the stage's progress in tiles, or the
+// stage's covers. g_status is the whole of it; the master and the page stay
+// loaded underneath for their input (statusInput()).
+static bool drawUiStatus(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(4096);
+	if (!buf || !g_uiFont || !m->isStatus)
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const StatusState* s = &g_status;
+	const CareerStats* st = &s->st;
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	// Header: Back, then the page switcher with its dots.
+	uiBand2(0.0f, UI_HEAD_H, true);
+	const float bw = uiMeasure(buf, "Back", 14.0f) + 13.0f + 6.0f + 28.0f;
+	uiButton(buf, 6.0f, 5.0f, bw, 26.0f, 'B', "Back", false, false);
+	fskHit(0.0f, 0.0f, 6.0f + bw + 4.0f, UI_HEAD_H, FSK_KEY, KEY_B);
+	const float rx = 6.0f + bw + 8.0f, rw = W - 6.0f - rx;
+	const int pages = s->pages > 0 ? s->pages : 1, pg = s->page;
+	if (pg > 0)
+		uiArrow(rx + 10.0f, 16.0f, (float)M_PI, 5.0f, UI_ACCENT);
+	if (pg < pages - 1)
+		uiArrow(rx + rw - 10.0f, 16.0f, 0.0f, 5.0f, UI_ACCENT);
+	if (pg >= 0 && pg < STATUS_PAGES)
+		uiText(buf, s->titles[pg], 16.0f, rx + rw * 0.5f, 15.0f, 1, UI_ACCENT, rw - 40.0f);
+	for (int i = 0; i < pages; i++)
+		C2D_DrawCircleSolid(rx + rw * 0.5f - (float)(pages - 1) * 5.0f + 10.0f * (float)i, 29.5f,
+			UI_Z + 0.03f, 1.8f, i == pg ? UI_ACCENT : C2D_Color32(255, 255, 255, 77));
+	fskHit(rx, 0.0f, rw * 0.5f, UI_HEAD_H, FSK_KEY, KEY_LEFT);
+	fskHit(rx + rw * 0.5f, 0.0f, rw * 0.5f, UI_HEAD_H, FSK_KEY, KEY_RIGHT);
+	const float top = UI_HEAD_H + 6.0f;
+	char v[48];
+	if (pg == 0) {
+		// The visual rating and the completion, one line.
+		uiChip(8.0f, top, W - 16.0f, 30.0f, 0);
+		const float lw = uiLabel(buf, "VISUAL", 16.0f, top + 15.0f, 0, UI_ACCENT);
+		const float stars = s->hasCar ? s->stars : 0.0f;
+		for (int i = 0; i < 10; i++)
+			uiStar(16.0f + lw + 12.0f + (float)i * 12.0f, top + 15.0f, 5.5f, stars - (float)i);
+		snprintf(v, sizeof(v), "%.0f %%", (double)(st->completed * 100.0f));
+		const float cw = uiText(buf, v, 17.0f, W - 16.0f, top + 15.0f, 2, UI_WHITE, 0.0f);
+		uiLabel(buf, "COMPLETE", W - 16.0f - cw - 6.0f, top + 15.0f, 2, UI_ACCENT);
+		// The rows, STATUS_SLOTS of them from the view's top.
+		const float y0 = top + 36.0f, rowH = UI_STATUS_ROW_H;
+		for (int k = 0; k < STATUS_SLOTS && s->top + k < s->count; k++) {
+			const StatusRow* r = &s->rows[s->top + k];
+			const float y = y0 + (float)k * rowH, cy = y + (rowH - 3.0f) * 0.5f;
+			if (r->title) {
+				const float tw = uiLabel(buf, r->label, 12.0f, cy + 1.0f, 0, UI_ACCENT);
+				C2D_DrawRectSolid(12.0f + tw + 8.0f, cy + 1.0f, UI_Z, W - 30.0f - tw - 8.0f, 1.0f,
+					C2D_Color32(255, 255, 255, 31));
+				continue;
+			}
+			uiRowBar(8.0f, y, W - 26.0f, rowH - 3.0f, false);
+			const float vw = uiText(buf, r->value, 14.0f, W - 26.0f, cy, 2, UI_WHITE, 0.0f);
+			float nameW = W - 26.0f - 16.0f - vw - 10.0f;
+			if (r->slider) {
+				const float bwid = 70.0f, bx = W - 26.0f - vw - 10.0f - bwid;
+				uiRoundRect(bx, cy - 2.0f, bwid, 4.0f, 2.0f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 36));
+				const float f = fmaxf(0.0f, fminf(1.0f, r->v));
+				if (f > 0.0f)
+					uiRoundRect(bx, cy - 2.0f, fmaxf(4.0f, bwid * f), 4.0f, 2.0f, UI_Z + 0.015f, UI_ACCENT);
+				nameW -= bwid + 8.0f;
+			}
+			uiText(buf, r->label, 14.0f, 16.0f, cy, 0, UI_WHITE, nameW);
+		}
+		if (s->count > STATUS_SLOTS) {
+			const float sh = (float)STATUS_SLOTS * rowH - 3.0f, th = sh * (float)STATUS_SLOTS / (float)s->count;
+			uiRoundRect(W - 12.0f, y0, 4.0f, sh, 2.0f, UI_Z, C2D_Color32(255, 255, 255, 26));
+			uiRoundRect(W - 12.0f, y0 + (sh - th) * (float)s->top / (float)(s->count - STATUS_SLOTS), 4.0f, th,
+				2.0f, UI_Z + 0.01f, UI_ACCENT);
+		}
+	} else if (pg == 1) {
+		if (st->stage == 0) {
+			uiChip(8.0f, top, W - 16.0f, 90.0f, 0);
+			uiTextBlock(buf, s->regLot, 15.0f, 18.0f, top + 18.0f, 19.0f, W - 36.0f, 0, UI_WHITE, 2);
+			uiTextBlock(buf, s->regGarage, 15.0f, 18.0f, top + 60.0f, 19.0f, W - 36.0f, 0, UI_WHITE, 2);
+		} else {
+			// The stage's completion big, its bar, then the tiles.
+			uiChip(8.0f, top, W - 16.0f, 50.0f, 0);
+			snprintf(v, sizeof(v), "STAGE %d", st->stage);
+			uiLabel(buf, v, 18.0f, top + 13.0f, 0, UI_ACCENT);
+			uiText(buf, s->reg[0], 24.0f, W - 18.0f, top + 17.0f, 2, UI_WHITE, 0.0f);
+			const float f = fmaxf(0.0f, fminf(1.0f, st->stageDone));
+			uiRoundRect(18.0f, top + 35.0f, W - 36.0f, 6.0f, 3.0f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 36));
+			if (f > 0.0f)
+				uiRoundRect(18.0f, top + 35.0f, fmaxf(6.0f, (W - 36.0f) * f), 6.0f, 3.0f, UI_Z + 0.015f, UI_ACCENT);
+			static const char* const kTile[4] = { "WORLD RACES", "SPONSOR RACES", "URL RACES", "DVDS WON" };
+			const int tiles = gProfile.stageCompleted[1] ? 4 : 1;
+			const float tw = (W - 16.0f - 8.0f) * 0.5f, th = 42.0f;
+			for (int i = 0; i < tiles; i++) {
+				const float x = 8.0f + (float)(i % 2) * (tw + 8.0f), y = top + 58.0f + (float)(i / 2) * (th + 8.0f);
+				uiRowBar(x, y, tw, th, false);
+				uiLabel(buf, kTile[i], x + 10.0f, y + 12.0f, 0, UI_ACCENT);
+				uiText(buf, s->reg[1 + i], 19.0f, x + 10.0f, y + 29.0f, 0, UI_WHITE, tw - 20.0f);
+			}
+		}
+	} else {
+		const int stage = st->stage;
+		const StatusStageDvds* ps = stage >= 0 && stage < PROFILE_NUM_STAGES ? &st->perStage[stage] : NULL;
+		const int count = ps ? ps->dvds : 0;
+		if (count == 0)
+			uiText(buf, "No covers this stage", 15.0f, W * 0.5f, top + 40.0f, 1, UI_DIM, 0.0f);
+		for (int i = 0; i < count && i < 4; i++) {
+			const float y = top + (float)i * 48.0f, cy = y + 21.0f;
+			uiRowBar(8.0f, y, W - 16.0f, 42.0f, false);
+			const bool won = ps->won[i];
+			C2D_DrawCircleSolid(30.0f, cy, UI_Z + 0.01f, 11.0f, won ? UI_ACCENT : C2D_Color32(255, 255, 255, 36));
+			if (won) {
+				C2D_DrawLine(24.5f, cy, UI_DARK_INK, 28.5f, cy + 4.0f, UI_DARK_INK, 2.2f, UI_Z + 0.02f);
+				C2D_DrawLine(28.5f, cy + 4.0f, UI_DARK_INK, 35.5f, cy - 4.0f, UI_DARK_INK, 2.2f, UI_Z + 0.02f);
+			}
+			uiText(buf, s->dvdName[i], 15.0f, 50.0f, cy - 7.0f, 0, UI_WHITE, W - 70.0f);
+			uiText(buf, s->dvdNeed[i], 12.0f, 50.0f, cy + 9.0f, 0, UI_DIM, W - 70.0f);
+		}
+	}
+	return true;
+}
+
+// ---- the help dialog ----
+// HelpDialog_*: the screen's controls, a row a line -- the row's button(s)
+// (g_feHelpKey) and what they do -- in GenericDialog's shape with OK. Any
+// tap closes it (feTouchKeys()).
+static bool drawUiHelp(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(3072);
+	if (!buf || !g_uiFont || !m->dlgBlurb[0])
+		return false;
+	C2D_TextBufClear(buf);
+	const float W = m->screenW > 0.0f ? m->screenW : BOTTOM_W, H = SCREEN_TOP_H;
+	C2D_DrawRectSolid(0.0f, 0.0f, UI_Z - 0.1f, W, H, C2D_Color32(0, 0, 0, 140));
+	char rows[FEHELP_MAX_ROWS][160];
+	int n = 0;
+	const char* p = m->dlgBlurb;
+	while (*p && n < FEHELP_MAX_ROWS) {
+		const char* e = p;
+		while (*e && *e != '\n')
+			e++;
+		snprintf(rows[n++], sizeof(rows[0]), "%.*s", (int)(e - p), p);
+		p = *e ? e + 1 : e;
+	}
+	const float pw = fminf(W - 20.0f, 340.0f), px = (W - pw) * 0.5f, rowH = 21.0f;
+	const float ph = 30.0f + (float)n * rowH + 10.0f + 36.0f + 12.0f, py = floorf((H - ph) * 0.5f);
+	uiRoundRect(px, py, pw, ph, 6.0f, UI_Z, C2D_Color32(0, 0, 0, 219));
+	uiDialogRing(px, py, pw, ph);
+	uiLabel(buf, "HELP", px + 14.0f, py + 16.0f, 0, UI_ACCENT);
+	for (int r = 0; r < n; r++) {
+		const float cy = py + 36.0f + (float)r * rowH;
+		float x = px + 16.0f;
+		for (int k = 0; k < 2 && r < g_feHelpRows; k++) {
+			const char key = g_feHelpKey[r][k];
+			if (!key || key == '-')
+				continue;
+			drawPadGlyph(key, x + 7.0f, cy, 14.0f, UI_Z + 0.04f);
+			x += 18.0f;
+		}
+		const float tx = px + 16.0f + 2.0f * 18.0f + 4.0f;
+		uiText(buf, rows[r], 15.0f, tx, cy, 0, UI_WHITE, px + pw - 14.0f - tx);
+	}
+	const float bwid = 140.0f, bx = px + (pw - bwid) * 0.5f, by = py + ph - 12.0f - 36.0f;
+	uiButton(buf, bx, by, bwid, 36.0f, 'B', "OK", true, false);
+	return true;
+}
+
+// The free-roam HUD over the map, in the U2-UI kit: status as tabs hung from
+// the top edges, zoom as boxes on the right, the destination as a black band
+// across the bottom whose top line takes the GPS target's colour.
+static void drawWorldChips(C2D_TextBuf buf, bool counting) {
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	// A soft shade down from the top edge so the tabs read over bright map.
+	C2D_DrawRectangle(0.0f, 0.0f, UI_Z - 0.05f, W, 40.0f,
+		C2D_Color32(0, 0, 0, 102), C2D_Color32(0, 0, 0, 102),
+		C2D_Color32(0, 0, 0, 0), C2D_Color32(0, 0, 0, 0));
+
+	// ---- status, top: the bank (or a world challenge's clock), messages ----
+	if (counting) {
+		drawWorldCountdown(buf);
+		uiStatChip(buf, 0.0f, 6.0f, "TIME", g_wcChipText, g_wcChipColor);
+	} else {
+		char cash[32], v[40];
+		formatCashGrouped(gProfile.cash, cash, sizeof(cash));
+		snprintf(v, sizeof(v), "$%s", cash);
+		const float w = uiStatChip(buf, 0.0f, 6.0f, "BANK", v, UI_WHITE);
+		uiHit(0.0f, 4.0f, w, UI_CHIP_H + 4.0f, HIT_BANK);
+	}
+	const int unread = (int)sms_count_unread(&gProfile);
+	static int lastUnread = -1;
+	if (lastUnread >= 0 && unread > lastUnread)
+		worldFeedPush("New SMS message", 0xE6E6E6u);
+	lastUnread = unread;
+	if (unread > 0) {
+		char n[12];
+		snprintf(n, sizeof(n), "%d", unread);
+		const float w = 18.0f + 16.0f + 7.0f + uiMeasure(buf, n, 19.0f) + 10.0f;
+		const float x = W - w, y = 6.0f, cy = y + UI_CHIP_H * 0.5f;
+		const u8 a = (u8)(150.0f + 105.0f * (0.5f + 0.5f * sinf((float)(osGetTime() % 1400) / 1400.0f * 6.2831853f)));
+		uiTab(x, y, w, UI_CHIP_H, 1, UI_PANEL);
+		drawEnvelope(x + 18.0f, cy - 16.0f * 0.68f * 0.5f, 16.0f, C2D_Color32(202, 244, 138, a));
+		uiText(buf, n, 19.0f, x + 41.0f, cy, 0, UI_ACCENT, 0.0f);
+		uiHit(x, 4.0f, w, UI_CHIP_H + 4.0f, HIT_SMS);
+	}
+
+	// ---- zoom, right edge: two 30 px boxes ----
+	const float zx = W - 36.0f;
+	for (int k = 0; k < 2; k++) {
+		const float y = 76.0f + 34.0f * (float)k, cx = zx + 15.0f, cy = y + 15.0f;
+		uiChip(zx, y, 30.0f, 30.0f, 0);
+		C2D_DrawRectSolid(cx - 6.0f, cy - 1.0f, UI_Z + 0.03f, 12.0f, 2.0f, UI_WHITE);
+		if (k == 0)
+			C2D_DrawRectSolid(cx - 1.0f, cy - 6.0f, UI_Z + 0.03f, 2.0f, 12.0f, UI_WHITE);
+		uiHit(zx - 4.0f, y - 2.0f, 40.0f, 34.0f, k == 0 ? HIT_ZOOM_IN : HIT_ZOOM_OUT);
+	}
+	if (minimap_panned(g_minimap)) {
+		const float w = uiMeasure(buf, "Recenter", 14.0f) + 28.0f, x = W - 6.0f - w, y = 148.0f;
+		uiButton(buf, x, y, w, 26.0f, 0, "Recenter", false, false);
+		uiHit(x - 2.0f, y - 3.0f, w + 4.0f, 32.0f, HIT_RECENTER);
+	}
+
+	// ---- action, bottom: where the GPS goes, or the nearest race ----
+	const int gpsM = g_gpsMarkerNow;
+	const bool gpsOn = gps_status() >= GPS_STATUS_SEARCHING && gps_status() <= GPS_STATUS_ACTIVE;
+	g_nearestEvent = -1;
+	float nd = 1e30f;
+	for (int i = 0; i < g_markerCount; i++) {
+		if (g_markers[i].element < MINIMAP_ELEM_CIRCUITEVENT || !g_markerZone[i])
+			continue;
+		const float dx = g_markers[i].worldX - g_worldPos[0], dy = g_markers[i].worldY - g_worldPos[1];
+		if (dx * dx + dy * dy < nd) {
+			nd = dx * dx + dy * dy;
+			g_nearestEvent = i;
+		}
+	}
+	const int dest = gpsOn ? gpsM : g_nearestEvent;
+	const float sh = 36.0f, sy = H - sh;
+	float feedBottom = H - 6.0f;
+	if (dest >= 0 || gpsOn) {
+		// Tracking: the target's own colour on the band's top line, lifted for
+		// the label and the compass.
+		const u32 track = gpsOn ? uiGpsColour() : UI_ACCENT;
+		const u32 ink = gpsOn ? uiLighten(track, 0.35f) : UI_ACCENT;
+		C2D_DrawRectSolid(0.0f, sy, UI_Z - 0.01f, W, sh, UI_DEEP);
+		C2D_DrawRectSolid(0.0f, sy, UI_Z - 0.005f, W, gpsOn ? 2.0f : 1.0f,
+			gpsOn ? track : C2D_Color32(255, 255, 255, 40));
+		const char* lab = gpsOn ? "GPS" : "NEAREST";
+		const float cy = sy + sh * 0.5f + 1.0f;
+		const float lw = uiLabel(buf, lab, 10.0f, cy, 0, ink);
+		float right = W - 8.0f;
+		if (gpsOn) {
+			const float bx = right - 28.0f, by = sy + 5.0f;
+			uiChip(bx, by, 28.0f, 28.0f, 0);
+			C2D_DrawLine(bx + 9.0f, by + 9.0f, UI_WHITE, bx + 19.0f, by + 19.0f, UI_WHITE, 1.8f, UI_Z + 0.03f);
+			C2D_DrawLine(bx + 19.0f, by + 9.0f, UI_WHITE, bx + 9.0f, by + 19.0f, UI_WHITE, 1.8f, UI_Z + 0.03f);
+			uiHit(bx - 6.0f, sy, 28.0f + 14.0f, sh, HIT_STRIP_CANCEL);
+			right = bx - 10.0f;
+		} else {
+			const float bw = uiMeasure(buf, "Set GPS", 14.0f) + 28.0f, bx = right - bw;
+			uiButton(buf, bx, sy + 5.0f, bw, 28.0f, 0, "Set GPS", true, false);
+			uiHit(bx - 4.0f, sy, bw + 8.0f, sh, HIT_STRIP_GPS);
+			right = bx - 10.0f;
+		}
+		const float nameX = 10.0f + lw + 8.0f;
+		if (dest >= 0) {
+			const float dx = g_markers[dest].worldX - g_worldPos[0];
+			const float dy = g_markers[dest].worldY - g_worldPos[1];
+			char d[24];
+			uiDistance(sqrtf(dx * dx + dy * dy), d, sizeof(d));
+			const float dw = uiText(buf, d, 16.0f, right, cy, 2, UI_WHITE, 0.0f);
+			// The way to it, as the map shows it.
+			float cxp, cyp, txp, typ;
+			minimap_world_to_panel(g_minimap, g_worldPos[0], g_worldPos[1], &cxp, &cyp);
+			minimap_world_to_panel(g_minimap, g_markers[dest].worldX, g_markers[dest].worldY, &txp, &typ);
+			uiArrow(right - dw - 11.0f, cy, atan2f(typ - cyp, txp - cxp), 6.0f, ink);
+			uiText(buf, g_markerTitle[dest], 15.0f, nameX, cy, 0, UI_WHITE, right - dw - 24.0f - nameX);
+		} else {
+			uiText(buf, "Searching...", 15.0f, nameX, cy, 0, UI_WHITE, right - nameX);
+		}
+		feedBottom = sy - 8.0f;
+	}
+	drawWorldFeed(buf, 0.0f, feedBottom);
+
+	// ---- a tapped marker's card: the dialog's look, small ----
+	if (g_mmSel >= g_markerCount)
+		g_mmSel = -1;
+	if (g_mmSel >= 0) {
+		const int i = g_mmSel;
+		const float cw = 200.0f, ch = 82.0f, cx = (W - cw) * 0.5f, cy = 50.0f;
+		const bool shop = g_markers[i].element < MINIMAP_ELEM_CIRCUITEVENT;
+		uiRoundRect(cx, cy, cw, ch, 6.0f, UI_Z, UI_DEEP);
+		uiDialogRing(cx, cy, cw, ch);
+		uiRoundRect(cx + 9.0f, cy + 7.0f, 22.0f, 3.0f, 1.5f, UI_Z + 0.01f, uiMarkerColour(i));
+		uiLabel(buf, shop ? "SHOP" : "EVENT", cx + 37.0f, cy + 9.0f, 0, UI_DIM);
+		uiText(buf, g_markerTitle[i], 16.0f, cx + 10.0f, cy + 26.0f, 0, UI_WHITE, cw - 20.0f);
+		uiHit(cx, cy, cw, ch, HIT_CARD);
+		const float bw = uiMeasure(buf, "Set GPS", 14.0f) + 13.0f + 6.0f + 28.0f;
+		const float bx = cx + cw - bw - 8.0f, by = cy + ch - 34.0f;
+		uiText(buf, g_markerInfo[i], 13.0f, cx + 10.0f, cy + 44.0f, 0, UI_DIM, cw - 20.0f);
+		if (g_markerZone[i] && gps_loaded()) {
+			uiButton(buf, bx, by, bw, 28.0f, 'A', "Set GPS", true, false);
+			uiHit(bx - 4.0f, by - 4.0f, bw + 8.0f, 36.0f, HIT_CARD_GPS);
+		}
+	}
+}
+
+// The race panel down the left: position, lap and time with the lap's
+// progress, then the standings with name and gap together.
+#define RACE_PANEL_W 122.0f
+static const char* uiOrdinal(int n) {
+	if (n % 100 >= 11 && n % 100 <= 13) return "th";
+	switch (n % 10) { case 1: return "st"; case 2: return "nd"; case 3: return "rd"; default: return "th"; }
+}
+
+// PORT: the finish on the race map -- a chequered flag at Race's finish line
+// (a circuit's is its start line), pinned to the map's edge while it is off
+// it, so the way home always shows.
+static void drawRaceFinish(const Race* r, float mx, float my, float mw, float mh) {
+	if (!g_minimap || (r->finishLine[0] == 0.0f && r->finishLine[1] == 0.0f))
+		return;
+	float x, y;
+	minimap_world_to_panel(g_minimap, r->finishLine[0], r->finishLine[1], &x, &y);
+	const float e = 11.0f;
+	if (x < mx + e) x = mx + e;
+	if (x > mx + mw - e) x = mx + mw - e;
+	if (y < my + e) y = my + e;
+	if (y > my + mh - e) y = my + mh - e;
+	// A dark tile, a white rim, a 4 x 4 check.
+	uiRoundRect(x - 9.0f, y - 9.0f, 18.0f, 18.0f, 3.0f, UI_Z, UI_WHITE);
+	uiRoundRect(x - 8.0f, y - 8.0f, 16.0f, 16.0f, 2.5f, UI_Z + 0.005f, UI_PANEL_SOLID);
+	for (int j = 0; j < 4; j++)
+		for (int i = 0; i < 4; i++)
+			if (((i + j) & 1) == 0)
+				C2D_DrawRectSolid(x - 6.0f + 3.0f * (float)i, y - 6.0f + 3.0f * (float)j, UI_Z + 0.01f,
+					3.0f, 3.0f, UI_WHITE);
+}
+
+static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
+	const float W = RACE_PANEL_W, pad = 9.0f;
+	// U2-UI: black, a hairline where it meets the map.
+	C2D_DrawRectSolid(0.0f, 0.0f, UI_Z - 0.01f, W, BOTTOM_H, C2D_Color32(0, 0, 0, 219));
+	C2D_DrawRectSolid(W - 1.0f, 0.0f, UI_Z - 0.005f, 1.0f, BOTTOM_H, C2D_Color32(255, 255, 255, 51));
+	const Race* r = st->race;
+	float y = 8.0f;
+
+	// Position: the place big, its suffix hung from the numeral's cap line,
+	// the field on its baseline.
+	const int pos = st->drift ? st->driftPos : race_position(r, 0);
+	const int of = st->drift ? st->driftCount : race_car_count(r);
+	if (st->racePos && pos > 0 && of > 1) {
+		uiLabel(buf, "POSITION", pad, y + 4.0f, 0, UI_ACCENT);
+		y += 12.0f;
+		const float base = y + uiCapPx(44.0f) + 2.0f;
+		char n[8], o[8];
+		snprintf(n, sizeof(n), "%d", pos);
+		snprintf(o, sizeof(o), "/%d", of);
+		const float nw = uiTextBase(buf, n, 44.0f, pad - 1.0f, base, 0, UI_WHITE, 0.0f);
+		const float sw = uiTextBase(buf, uiOrdinal(pos), 17.0f, pad + nw + 1.0f,
+			base - uiCapPx(44.0f) + uiCapPx(17.0f), 0, UI_WHITE, 0.0f);
+		uiTextBase(buf, o, 19.0f, pad + nw + sw + 4.0f, base, 0, UI_DIM, 0.0f);
+		y = base + 9.0f;
+	}
+
+	// Lap and time, then the lap's progress and the best lap.
+	C2D_DrawRectSolid(pad, y, UI_Z + 0.01f, W - 2.0f * pad, 1.0f, UI_RIM);
+	y += 6.0f;
+	char t[24];
+	race_print_time(race_clock(r), 4, t);
+	if (r->laps > 1) {
+		int lap = r->car.lap < 1 ? 1 : r->car.lap;
+		if (lap > r->laps) lap = r->laps;
+		char l[16];
+		snprintf(l, sizeof(l), "%d/%d", lap, r->laps);
+		uiLabel(buf, "LAP", pad, y + 4.0f, 0, UI_ACCENT);
+		uiLabel(buf, "TIME", W - pad, y + 4.0f, 2, UI_ACCENT);
+		uiText(buf, l, 18.0f, pad, y + 18.0f, 0, UI_WHITE, 0.0f);
+		uiText(buf, t, 18.0f, W - pad, y + 18.0f, 2, UI_WHITE, 0.0f);
+	} else {
+		uiLabel(buf, "TIME", pad, y + 4.0f, 0, UI_ACCENT);
+		uiText(buf, t, 18.0f, pad, y + 18.0f, 0, UI_WHITE, 0.0f);
+	}
+	y += 31.0f;
+	float frac = r->car.lapExact - floorf(r->car.lapExact);
+	if (r->car.lap < 0 || frac < 0.0f) frac = 0.0f;
+	if (r->car.finished) frac = 1.0f;
+	uiRoundRect(pad, y, W - 2.0f * pad, 4.0f, 2.0f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 30));
+	if (frac > 0.0f)
+		uiRoundRect(pad, y, (W - 2.0f * pad) * frac, 4.0f, 2.0f, UI_Z + 0.015f, UI_ACCENT);
+	y += 8.0f;
+	if (r->laps > 1 && race_best_lap_time(r) > 0) {
+		char bl[32], bt[24];
+		race_print_time(race_best_lap_time(r), 4, bt);
+		snprintf(bl, sizeof(bl), "BEST %s", bt);
+		uiText(buf, bl, 12.0f, W - pad, y + 5.0f, 2, UI_DIM, 0.0f);
+	}
+	y += 15.0f;
+
+	// The standings, one row a car on one centre line: the place tile, the
+	// name, the gap -- red for a car ahead, green behind.
+	if (!st->leaderboard || !g_hud)
+		return;
+	HudStandingRow rows[1 + RACE_MAX_AI];
+	const int n = hud_race_standings(g_hud, st, rows, 1 + RACE_MAX_AI);
+	if (n <= 1)
+		return;
+	C2D_DrawRectSolid(pad, y, UI_Z + 0.01f, W - 2.0f * pad, 1.0f, UI_RIM);
+	y += 6.0f;
+	uiLabel(buf, st->drift ? "SCORES" : "STANDINGS", pad, y + 4.0f, 0, UI_ACCENT);
+	y += 12.0f;
+	int meRow = -1;
+	for (int i = 0; i < n; i++)
+		if (rows[i].me) meRow = i;
+	// U2-UI list rows: grey bars, yours wearing the highlight.
+	const float rowH = 20.0f;
+	for (int i = 0; i < n && y + rowH <= BOTTOM_H - 2.0f; i++) {
+		const HudStandingRow* rw = &rows[i];
+		const float cy = y + (rowH - 2.0f) * 0.5f;
+		uiRowBar(pad - 5.0f, y, W - 2.0f * pad + 8.0f, rowH - 2.0f, rw->me);
+		char p[4];
+		snprintf(p, sizeof(p), "%d", rw->place);
+		uiText(buf, p, 13.0f, pad + 4.0f, cy, 1, rw->me ? UI_ACCENT : UI_DIM, 0.0f);
+		char nm[32];
+		if (rw->name && rw->name[0])
+			snprintf(nm, sizeof(nm), "%s", rw->name);
+		else
+			snprintf(nm, sizeof(nm), "Racer %d", rw->place);
+		const u32 gc = st->drift ? UI_DIM : (meRow >= 0 && i < meRow ? UI_AHEAD : UI_BEHIND);
+		const float fw = rw->figure[0] ? uiText(buf, rw->figure, 12.0f, W - pad, cy, 2, gc, 0.0f) : 0.0f;
+		uiText(buf, nm, 15.0f, pad + 17.0f, cy, 0, rw->me ? UI_ACCENT : UI_WHITE,
+			W - pad - 17.0f - pad - fw - 4.0f);
+		y += rowH;
+	}
+}
 
 static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	C2D_TextBufClear(buf);
+	// Last frame's buttons answer this frame's tap, then the draw lays them
+	// out again.
+	worldHandleTap();
+	g_uiHitN = 0;
+	g_gpsMarkerNow = g_raceRun.on ? -1 : worldGpsMarker();
 
 	// FEngHud::DetermineHudFeatures (0x802158F8) while the prologue has
 	// control: its mask is only the four Stage0 queries' bits, so the bank
@@ -56162,17 +60440,12 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	const bool stage0 = stage0HasControl();
 	const bool showMap = !stage0 || stage0ShowMinimap();
 
-	// ---- the bank readout, or a world challenge's clock in its place ----
-	if (!g_raceRun.on && !stage0) {
-		if (g_wc.active && g_wc.state == WC_STATE_COUNTING)
-			drawWorldCountdown(buf);
-		else
-			drawWorldBank(buf);
-	}
-
 	// ---- the minimap ----
-	const float mapY = g_raceRun.on ? 0.0f : WBOT_BANK_H;
-	const float mapW = g_raceRun.on ? WBOT_RACE_MAP_W : BOTTOM_W;
+	// PORT: full-bleed. Free roam's chips float over it; a race's panel takes
+	// the left and the map the rest.
+	const float mapY = 0.0f;
+	const float mapX = g_raceRun.on ? RACE_PANEL_W : 0.0f;
+	const float mapW = BOTTOM_W - mapX;
 	const float mapH = BOTTOM_H - mapY;
 	// In a race the radar carries the field and not the city: retail's
 	// RaceCoordinator puts an AIRACER element (minimap.h element 3, the orange
@@ -56208,10 +60481,31 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	float gpsIcon[2] = { 0.0f, 0.0f };
 	gps.engaged = gpsSt >= GPS_STATUS_SEARCHING && gpsSt <= GPS_STATUS_ACTIVE;
 	gps.stageZero = g_careerStage == 0;
-	gps.icon = gps_icon(gpsIcon);
+	// PORT: no GPS rings while a race runs -- the pulsing circle only
+	// distracts there (the user on hardware, 2026-11-13).
+	gps.icon = !g_raceRun.on && gps_icon(gpsIcon);
 	gps.iconX = gpsIcon[0];
 	gps.iconY = gpsIcon[1];
 	gps.ms = (u32)osGetTime();
+	// PORT: the path itself, refreshed a few times a second (the walk is
+	// over the road network), in the tracked target's colour.
+	static float s_route[512][2];
+	static int s_routeN = 0;
+	static u64 s_routeAt = 0;
+	gps.route = NULL;
+	gps.routeN = 0;
+	if (!g_raceRun.on && gps_follow_state() == 1) {
+		const u64 nowMs = osGetTime();
+		if (nowMs - s_routeAt > 250) {
+			s_routeAt = nowMs;
+			s_routeN = gps_route_polyline(g_worldPos, s_route, 512, 6.0f);
+		}
+		gps.route = (const float (*)[2])s_route;
+		gps.routeN = s_routeN;
+		gps.routeRgba = uiLighten(uiGpsColour(), 0.15f);
+	} else {
+		s_routeN = 0;
+	}
 	// IsRenderable: with the GPS engaged in a stage, a zone's marker shows
 	// only while it is the GPS's own.
 	static MinimapMarker gpsMarks[8];
@@ -56267,11 +60561,24 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	const OptGameplay* gp = &gProfile.options.gameplay;
 	const u8 mapMode = g_raceRun.on ? gp->raceMap : gp->exploreMap;
 	minimap_set_gps_colour(options_gps_colour_rgb(gp->gpsColour));   // #471
+	// PORT: tracking a marker, the rings take its colour (uiGpsColour()).
+	if (g_gpsMarkerNow >= 0)
+		minimap_set_gps_colour(uiRgb(uiLighten(uiGpsColour(), 0.15f)));
+	// PORT: free roam fills the panel under the bar with a square map; a
+	// race keeps the round one beside its stats.
+	minimap_set_square(true);
+	if (g_minimap && showMap)
+		worldMapTouch(mapX, mapY, mapW, mapH);
 	if (g_minimap && showMap)
 		minimap_draw(g_minimap, g_worldPos[0], g_worldPos[1], g_worldYaw,
-			0.0f, mapY, mapW, mapH,
+			mapX, mapY, mapW, mapH,
 			mapMode <= MINIMAP_MODE_ROTATE ? (MinimapMode)mapMode : MINIMAP_MODE_DEFAULT,
 			marks, markCount, &gps);
+	// The way back from a pan, in the map's bottom-right corner.
+	if (g_raceRun.on || stage0)
+		g_mmSel = -1;
+	if (!g_raceRun.on && !stage0)
+		drawWorldChips(buf, g_wc.active && g_wc.state == WC_STATE_COUNTING);
 	// GPS_Search_Group: on the top screen since #487 (drawWorldGpsSearch).
 	if (showMap && !minimap_have_map(g_minimap)) {
 		// Name the file instead of leaving the panel empty -- buildSetupMessage()'s
@@ -56325,8 +60632,10 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 				st.driftRows = k + 1;
 			}
 		}
-		hud_draw_race_stats(g_hud, &st, g_uiFont, g_fontUnitPx, mapW, 0.0f,
-			BOTTOM_W - mapW);
+		drawRacePanel(buf, &st);
+		// The finish flag (drawRaceFinish) is off: on hardware it covered the
+		// cars and drew the eye (the user, 2026-11-13).
+		(void)drawRaceFinish;
 	}
 
 	// ---- the bank pickup's indicator, over the map under the row ----
@@ -58222,12 +62531,155 @@ static u32 lanTouchKeys(MenuState* m, char* b, size_t cap) {
 	return 0;
 }
 
+// ---- the LAN screens ----
+// PORT (the user, 2026-11-15: every lower-screen menu in the kit): the four
+// LAN packages -- the server list, the name entry, the lobby and the game
+// room -- drawn from the same widgets lanRefresh() fills, the screen's legend
+// as the footer's pills. Taps stand for what lanTouchKeys() made of the
+// authored widgets: a row selects (a second tap is A), a lobby button is
+// itself and A, the room's option button A on slot 0.
+static bool uiLanScreen(const MenuState* m) {
+	return m->lanKind != LANK_NONE && m->navBottom && !g_feDialog.up;
+}
+// The legend (lanLegendAdd()) as footer pills, from the right.
+static void uiLanFooter(const MenuState* m) {
+	uiBand2(BOTTOM_H - UI_FOOT_H, UI_FOOT_H, false);
+	float x = BOTTOM_W - 8.0f;
+	const float y = BOTTOM_H - UI_FOOT_H + 6.0f, h = 30.0f, px = 14.0f, sc = px / g_fontUnitPx;
+	for (int k = 0; k < m->lanLegN && k < LAN_LEGEND_MAX; k++) {
+		float tw = 0.0f, th = 0.0f;
+		textDims(&m->lanLegend[k], sc, sc, &tw, &th);
+		tw = fminf(tw, 120.0f);
+		const float w = fmaxf(70.0f, tw + 13.0f + 6.0f + 28.0f);
+		x -= w;
+		if (x < 4.0f)
+			break;
+		const bool lit = m->lanLegKey[k] == 'A';
+		uiPill(x, y, w, h, lit, UI_Z + 0.015f);
+		const float x0 = x + (w - (13.0f + 6.0f + tw)) * 0.5f;
+		drawPadGlyph(m->lanLegKey[k], x0 + 6.5f, y + h * 0.5f, 13.0f, UI_Z + 0.04f);
+		uiCText(&m->lanLegend[k], px, x0 + 19.0f, y + h * 0.5f, 0, lit ? UI_ACCENT : UI_WHITE, tw);
+		fskHit(x - 3.0f, y - 4.0f, w + 6.0f, 38.0f, FSK_KEY, lanKeyOf(m->lanLegKey[k]));
+		x -= 8.0f;
+	}
+}
+static const C2D_Text* uiLanText(const MenuState* m, int wi) {
+	return (wi >= 0 && wi < FNG_MAX_WIDGETS && m->hasText[wi]) ? &m->texts[wi] : NULL;
+}
+static bool drawUiLan(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	static int s_top = 0;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	if (!buf || !g_uiFont || !uiLanScreen(m))
+		return false;
+	C2D_TextBufClear(buf);
+	fskBegin(m);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	static const char* const kTitle[] = { "", "LAN Servers", "LAN Name", "LAN Lobby", "Game Room" };
+	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL,
+		kTitle[m->lanKind < 5 ? m->lanKind : 0], false);
+	float y0 = UI_HEAD_H + 6.0f;
+	const float bottom = H - UI_FOOT_H - 4.0f;
+	g_fskListSel = m->lanSel;
+	switch (m->lanKind) {
+	case LANK_LOBBY: {
+		// ---- Create Game, Join Game, Refresh, Filter ----
+		static const char* const kBtn[4] = { "Create", "Join", "Refresh", "Filter" };
+		const float gap = 4.0f, bw = (W - 16.0f - 3.0f * gap) / 4.0f, bh = 24.0f;
+		for (int k = 0; k < 4; k++) {
+			const float x = 8.0f + (float)k * (bw + gap);
+			uiButton(buf, x, y0, bw, bh, 0, kBtn[k], k == m->lanBtn, false);
+			fskHit(x, y0 - 3.0f, bw, bh + 6.0f, FSK_LANBTN, (u32)k);
+		}
+		y0 += bh + 6.0f;
+	}
+	/* fall through */
+	case LANK_SERVERS: {
+		const int have = m->lanKind == LANK_SERVERS ? g_lanServerCount : g_lan.numGames;
+		const int n = have < LAN_LIST_ROWS ? have : LAN_LIST_ROWS;
+		if (n <= 0) {
+			uiText(buf, m->lanKind == LANK_SERVERS ? "Looking for servers..." : "No games yet", 15.0f,
+				W * 0.5f, (y0 + bottom) * 0.5f, 1, UI_DIM, W - 32.0f);
+			break;
+		}
+		const float rowH = 28.0f;
+		const int vis = (int)((bottom - y0) / rowH);
+		const int top = uiListTop(m->lanSel, n, vis, &s_top);
+		const float rw = W - 16.0f - (n > vis ? 10.0f : 0.0f);
+		for (int k = 0; k < vis && top + k < n; k++) {
+			const int r = top + k;
+			UiRow row = { 0 };
+			row.t = uiLanText(m, m->lanRowText[r][0]);
+			row.tagT = uiLanText(m, m->lanRowText[r][2]);
+			row.s = row.t ? NULL : "?";
+			uiListRow(buf, &row, r, r == m->lanSel, 8.0f, y0 + (float)k * rowH, rw, rowH - 4.0f, FSK_LANROW);
+		}
+		uiListBar(top, vis, n, y0, rowH);
+		break;
+	}
+	case LANK_NAME: {
+		const float fy = (y0 + bottom) * 0.5f - 22.0f, fh = 36.0f;
+		uiLabel(buf, "YOUR NAME", 12.0f, fy - 12.0f, 0, UI_DIM);
+		uiRowBar(8.0f, fy, W - 16.0f, fh, true);
+		const C2D_Text* t = uiLanText(m, m->lanField);
+		if (t)
+			uiCText(t, 18.0f, W * 0.5f, fy + fh * 0.5f, 1, UI_WHITE, W - 40.0f);
+		else
+			uiText(buf, "Tap to type a name", 15.0f, W * 0.5f, fy + fh * 0.5f, 1, UI_DIM, W - 40.0f);
+		fskHit(8.0f, fy - 4.0f, W - 16.0f, fh + 8.0f, FSK_KEY, KEY_X);
+		break;
+	}
+	case LANK_ROOM: {
+		// ---- the racers, left; the race and Host Options, right ----
+		const float lw = 180.0f, rowH = (bottom - y0) / (float)LAN_ROOM_SLOTS;
+		for (int k = 0; k < LAN_ROOM_SLOTS; k++) {
+			UiRow row = { 0 };
+			row.t = uiLanText(m, m->lanRowText[k][0]);
+			row.s = row.t ? NULL : "Open";
+			row.dim = row.t == NULL;
+			row.mark = m->lanReady[k] >= 0 && !m->layoutHidden[m->lanReady[k]] && m->lanSlotConsole[k] >= 0;
+			uiListRow(buf, &row, k, k == m->lanSel && k > 0, 8.0f, y0 + (float)k * rowH, lw, rowH - 4.0f,
+				k > 0 ? FSK_LANROW : 0);
+		}
+		const float ix = 8.0f + lw + 8.0f, iw = W - ix - 8.0f;
+		uiRoundRect(ix, y0, iw, bottom - y0, 3.0f, UI_Z, UI_PANEL);
+		static const char* const kInfo[3] = { "TRACK", "LAPS", "DIRECTION" };
+		const int iw3[3] = { m->lanTrack, m->lanLaps, m->lanDir };
+		float iy = y0 + 12.0f;
+		for (int k = 0; k < 3; k++) {
+			uiLabel(buf, kInfo[k], ix + 8.0f, iy, 0, UI_DIM);
+			const C2D_Text* t = uiLanText(m, iw3[k]);
+			if (t)
+				uiCText(t, 14.0f, ix + 8.0f, iy + 15.0f, 0, UI_WHITE, iw - 16.0f);
+			iy += 36.0f;
+		}
+		const C2D_Text* cd = uiLanText(m, m->lanCountdown);
+		if (cd)
+			uiCText(cd, 16.0f, ix + iw * 0.5f, bottom - 50.0f, 1, UI_ACCENT, iw - 12.0f);
+		if (m->lanOptBtn >= 0) {
+			const float by = bottom - 32.0f;
+			uiButton(buf, ix + 6.0f, by, iw - 12.0f, 26.0f, 'A', "Options", m->lanSel == 0, false);
+			fskHit(ix + 6.0f, by - 3.0f, iw - 12.0f, 32.0f, FSK_LANOPT, 0);
+		}
+		break;
+	}
+	default:
+		break;
+	}
+	uiLanFooter(m);
+	return true;
+}
+
 // The LAN screens' button legend along the bottom screen's foot (the PC's
 // are keyboard screens with no pad prompts): each badge and its word, and
 // each pair a touch target (lanTouchKeys()).
 static void drawLanLegend(MenuState* m) {
 	g_lanLegCount = 0;
-	if (!m->lanKind || g_feDialog.up || m->lanLegN <= 0)
+	// A U2-UI skin draws its own footer (the car select's X / A).
+	if (!m->lanKind || g_feDialog.up || m->lanLegN <= 0 || fskLive(m))
 		return;
 	const float h = 13.0f, cy = 228.0f;
 	float x = 8.0f;
@@ -58781,6 +63233,7 @@ int main(int argc, char* argv[])
 	// Set even when the config fails a later check (a bad GameDir), so the log
 	// can say why; with no config at all it stays off.
 	dbglog_start(cfg.debugLogging);
+	devcmd_init(haveConfig && cfg.devCommands, dlog);
 	g_dbgExitDirty = haveConfig && cfg.dbgExitDirty;
 	g_cfgMain = haveConfig ? &cfg : NULL;
 	// The local wireless link's soak (#321a, wirelesstest.h), in place of the
@@ -60605,10 +65058,17 @@ int main(int argc, char* argv[])
 				// (0x9120409E / 0xB5971BF1) wrap only when the panel's wrap
 				// flag is set, and no IconScroller sets it (see
 				// ICONSCROLL_WIDTH).
+				// PORT: the lower screen's grid of tiles (drawUiIconGrid()) walks
+				// in two dimensions: UP / DOWN go to the tile above / below.
 				int dir = 0;
 				if (kDown & KEY_LEFT)  dir = -1;
 				if (kDown & KEY_RIGHT) dir = +1;
-				const int next = menu.selected + dir;
+				int next = menu.selected + dir;
+				const int gnext = (kDown & (KEY_LEFT | KEY_RIGHT | KEY_UP | KEY_DOWN)) ? uiGridNav(&menu, kDown) : -1;
+				if (gnext >= 0) {
+					next = gnext;
+					dir = next != menu.selected;
+				}
 				if (dir != 0 && next >= 0 && next < menu.itemCount) {
 					menu.selected = next;
 					feNoteLastButton(&menu);   // FEngSetLastButton
@@ -62043,7 +66503,13 @@ int main(int argc, char* argv[])
 					int dir = 0;
 					if (kDown & KEY_LEFT)  dir = -1;
 					if (kDown & KEY_RIGHT) dir = +1;
-					const int next = menu.selected + dir;
+					int next = menu.selected + dir;
+					const int gnext = (kDown & (KEY_LEFT | KEY_RIGHT | KEY_UP | KEY_DOWN)) ?
+						uiGridNav(&menu, kDown) : -1;
+					if (gnext >= 0) {
+						next = gnext;
+						dir = next != menu.selected;
+					}
 					if (dir != 0 && next >= 0 && next < menu.itemCount) {
 						menu.selected = next;
 						feNoteLastButton(&menu);   // FEngSetLastButton
@@ -62374,6 +66840,9 @@ int main(int argc, char* argv[])
 				for (WorldUiMode m = WORLD_UI_PAUSE; !simHold && m <= WORLD_UI_STATUS; m++) {
 					if (controls_menu_phys(kDown) & worldUiKey(m)) { want = m; break; }
 				}
+				if (!simHold && want == WORLD_UI_NONE && g_touchOpenUi != WORLD_UI_NONE)
+					want = g_touchOpenUi;
+				g_touchOpenUi = WORLD_UI_NONE;
 				// DbgSleepAt (PORT, a test aid, not retail): Azahar has no lid,
 				// so this many seconds into the world the hook is run as the
 				// system would run it, around a 3 s stall.
@@ -64542,7 +69011,7 @@ int main(int argc, char* argv[])
 				// The LAN screens' button legend (drawLanLegend()).
 				drawLanLegend(&menu);
 				// The parts list, over the package screen (perfPartsSync()).
-				if (menu.isPerfPackage && g_perfParts.browsing && g_perfMenu.loaded) {
+				if (menu.isPerfPackage && g_perfParts.browsing && g_perfMenu.loaded && !fskLive(&menu)) {
 					menuClipBegin(&g_perfMenu);
 					drawMenu(&g_perfMenu, fngStageFrames);
 				}
@@ -64638,6 +69107,14 @@ int main(int argc, char* argv[])
 			// The whole panel, bank strip and minimap included, while the
 			// dialog is up.
 			profBegin(PROF_MENU2D);
+			// PORT: the kit's carbon backdrop under it, only where the panel
+			// would otherwise be the bare black clear with nothing at all
+			// behind the box (the user on hardware, 2026-11-14). Not under the
+			// tuning screens (the dyno room's copy is there) nor the replay
+			// (its logo); screens that fill the panel draw over it anyway.
+			scissorReset();
+			if (worldUi != WORLD_UI_TUNE && worldUi != WORLD_UI_REPLAY)
+				uiScreenBackdrop(BOTTOM_W, BOTTOM_H);
 			menuClipBegin(&menu);
 			// The tuning screens are IconScrollerMenus (#417): the strip
 			// and its option title, as the pause screen's on the top one.
@@ -64692,6 +69169,7 @@ int main(int argc, char* argv[])
 			// menu it is modal over still on the top screen.
 			C2D_TextBufClear(worldTextBuf);
 			profBegin(PROF_MENU2D);
+			uiScreenBackdrop(BOTTOM_W, BOTTOM_H);
 			dlgMenu.screenW = SCREEN_BOT_W;
 			menuClipBegin(&dlgMenu);
 			drawMenu(&dlgMenu, fngStageFrames);

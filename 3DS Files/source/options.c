@@ -310,6 +310,8 @@ static void buildGameplay(const OptTarget* t, RowSink* sink) {
 	// PORT (#471, the user's own): the GPS arrow's and the minimap rings'
 	// colour, per profile. English.bin has no key for it.
 	addTextRow(sink, OPT_GPS_COLOUR, "GPS Color", false);
+	// PORT (the user's): shifting on the shoulder triggers in a drag.
+	addTextRow(sink, OPT_DRAG_TRIGGER_SHIFT, "Drag Shift: ZL/ZR", false);
 }
 
 // SPEED2.EXE:0x4B7CD0 -- twelve rows for player [0x836364], none of them gated
@@ -612,6 +614,10 @@ void options_row_value(const OptTarget* t, OptKind kind, OptValue* out) {
 		out->text = options_gps_colour_name(g->gpsColour);
 		break;
 
+	case OPT_DRAG_TRIGGER_SHIFT: // PORT
+		out->valueHash = g->dragTriggerShift ? VAL_ON : VAL_OFF;
+		break;
+
 	case OPT_SPEEDO_UNITS: // 0x49AEE0
 		out->valueHash = g->speedoUnits ? VAL_KMH : VAL_MPH;
 		break;
@@ -821,6 +827,10 @@ bool options_adjust(const OptTarget* t, OptKind kind, bool right) {
 			t->display->b.carDamage = t->display->b.carDamage ? 0 : 1;
 		break;
 
+	case OPT_DRAG_TRIGGER_SHIFT: // PORT: an On / Off toggle
+		g->dragTriggerShift = g->dragTriggerShift ? 0 : 1;
+		break;
+
 	case OPT_GPS_COLOUR: // PORT (#471), wrapping
 		g->gpsColour = (u8)wrapStep(g->gpsColour < OPTIONS_GPS_COLOURS ? g->gpsColour : 0,
 			OPTIONS_GPS_COLOURS - 1, right);
@@ -962,6 +972,7 @@ OptAccept options_accept(const OptTarget* t, OptKind kind) {
 	case OPT_STEREO:
 	case OPT_STEREO_STYLE:
 	case OPT_GPS_COLOUR: // PORT (#471)
+	case OPT_DRAG_TRIGGER_SHIFT:
 		options_adjust(t, kind, true);
 		return OPTACCEPT_CHANGED;
 	default:

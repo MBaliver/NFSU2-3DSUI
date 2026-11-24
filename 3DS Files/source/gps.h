@@ -115,6 +115,14 @@ int  gps_status(void);
 bool gps_is_target(const float target[3]);
 // The icon position while started; false when the GPS is idle.
 bool gps_icon(float out[2]);
+// PORT: the found path as a polyline for the lower screen's map -- the road
+// from the car to the goal, replayed from the search's result the way
+// GetClosestRoutePoint walks it (signposts taken or passed by its
+// decisions), a point at least `stepM` metres from the last, the goal last.
+// Writes at most `max` points, (x, y) in world metres; 0 while the GPS is not
+// following a path or the free-roam network is not the one selected. Walks
+// the route network, so call it a few times a second, not every frame.
+int gps_route_polyline(const float carPos[2], float (*out)[2], int max, float stepM);
 // RealController +0x3EC, the follow's eGPSState: 0 off, 1 following, 3 no
 // path. MinimapWrapper::UpdateGPS hides the searching group while it reads 1
 // or 2.
