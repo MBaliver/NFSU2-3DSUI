@@ -398,6 +398,76 @@ static const PortStrDef kStr[PS_COUNT] = {
 	[PS_BTN_DPAD_RIGHT] = { 0, 0, { "D-Pad Right", "Croix droite", "Steuerkreuz rechts",
 		"Croce destra", "Cruceta derecha", "D-pad rechts", "Styrkors h\xC3\xB6ger",
 		"Styrekors h\xC3\xB8jre" } },
+	// loading: the lower screen under Loading.fng and the boot profile screens
+	[PS_LOAD_LOADING] = { 0, 0, { "Loading", "Chargement", "Wird geladen", "Caricamento", "Cargando",
+		"Laden", "Laddar", "Indl\xC3\xA6ser" } },
+	[PS_LOAD_TIP] = { 0xCBBCB1C5u, 0, { "Tip", "Astuce", "Tipp", "Consiglio", "Consejo", "Tip", "Tips",
+		"Tip" } },
+	[PS_LOAD_CONTROLS] = { 0xD77A22D8u, 0, { "Controls", "Commandes", "Steuerung", "Controlli",
+		"Controles", "Besturing", "Kontroller", "Kommandoer" } },
+	[PS_LOAD_FREE_ROAM] = { 0x303BB325u, 0, { "Free Roam", "Parcours libre", "Freie Fahrt",
+		"Esplorazione libera", "Circulaci\xC3\xB3n libre", "Vrij rijden", "Fri k\xC3\xB6rning",
+		"Fri k\xC3\xB8rsel" } },
+	[PS_LOAD_CIRCUIT] = { 0x268D063Cu, 0, { "Circuit", "Circuit", "Rundkurs", "Circuito", "Circuito",
+		"Circuitrace", "Bana", "Circuit" } },
+	[PS_LOAD_SPRINT] = { 0x9EC5F82Fu, 0, { "Sprint", "Sprint", "Sprint", "Sprint", "Sprint", "Sprint",
+		"Sprint", "Sprint" } },
+	[PS_LOAD_DRAG] = { 0x35102EDFu, 0, { "Drag", "Drag", "Drag", "Sparo", "Aceleraci\xC3\xB3n", "Drag",
+		"Dragrace", "Drag" } },
+	[PS_LOAD_DRIFT] = { 0x3A10A7C2u, 0, { "Drift", "Drift", "Drift", "D\xC3\xA9rapage", "Derrape",
+		"Drift", "Drift", "Drift" } },
+	[PS_LOAD_STREET_X] = { 0x0FDA6758u, 0, { "Street X", "Street X", "Street X", "Street X", "Calle X",
+		"Street X", "Street X", "Street X" } },
+	[PS_LOAD_URL] = { 0x80B8267Cu, 0, { "URL", "CCU", "URL", "URL", "URL", "URL", "URL", "URL" } },
+	[PS_LOAD_OUTRUN] = { 0x613D3106u, 0, { "Outrun", "Poursuite", "Outrun", "Inseguimento",
+		"Persecuci\xC3\xB3n", "Outrun", "Outrun-race", "Outrun" } },
+	[PS_LOAD_TEST_RUN] = { 0xF62234EFu, 0, { "Test Run", "Tour d'essai", "Testfahrt", "Corsa di prova",
+		"Carrera de prueba", "Testrace", "Testrunda", "Testl\xC3\xB8" "b" } },
+	[PS_LOAD_ACCELERATE] = { 0x619B23B0u, 0, { "Accelerate", "Acc\xC3\xA9l\xC3\xA9rer",
+		"Beschleunigen", "Acceleratore", "Acelerar", "Gas geven", "Accelerera", "Accelerer" } },
+	[PS_LOAD_BRAKE] = { 0x6AB80AFAu, 0, { "Brake / Reverse", "Freiner/Reculer",
+		"Bremsen / R\xC3\xBC" "ckw\xC3\xA4rts", "Freno/Retro", "Frenar/Marcha atr\xC3\xA1s",
+		"Remmen / achteruit", "Bromsa/Backa", "Brems / Bak" } },
+	[PS_LOAD_STEER] = { 0xECD20F7Fu, 0, { "Steer", "Direction", "Lenken", "Sterzo", "Girar", "Sturen",
+		"Styr", "Styring" } },
+	[PS_LOAD_NITROUS] = { 0x5E5C5F2Eu, 0, { "Nitrous", "Nitro", "Nitro", "N2O", "Nitroso", "Nitro",
+		"Lustgas", "Nitro" } },
+	[PS_LOAD_HANDBRAKE] = { 0xB70FF4A4u, 0, { "Handbrake", "Frein \xC3\xA0 main", "Handbremse",
+		"Freno a mano", "Freno de mano", "Handrem", "Handbroms", "H\xC3\xA5ndbremse" } },
+	[PS_LOAD_SHIFT_UP] = { 0xDC1CD97Du, 0, { "Shift Up", "Rapport sup\xC3\xA9rieur", "Hochschalten",
+		"Marcia +", "Subir marcha", "Opschakelen", "V\xC3\xA4xla upp", "Skift op" } },
+	[PS_LOAD_SHIFT_DOWN] = { 0x56AFE190u, 0, { "Shift Down", "Rapport inf\xC3\xA9rieur",
+		"Runterschalten", "Marcia -", "Bajar marcha", "Terugschakelen", "V\xC3\xA4xla ned",
+		"Skift ned" } },
+	[PS_LOAD_CAMERA] = { 0xD38DF194u, 0, { "Change Camera", "Changer cam\xC3\xA9ra", "Kamera wechseln",
+		"Cambia visuale", "Cambiar c\xC3\xA1mara", "Andere camera", "Byt kamera",
+		"Skift kameravinkel" } },
+	[PS_LOAD_LOOK_BACK] = { 0x13121940u, 0, { "Look Back", "R\xC3\xA9tro", "Zur\xC3\xBC" "ckblicken",
+		"Guarda indietro", "Mirar atr\xC3\xA1s", "Achterom kijken", "Titta bak\xC3\xA5t",
+		"Se bagud" } },
+	[PS_LOAD_RESET_CAR] = { 0x1CEDC132u, 0, { "Reset Car", "R\xC3\xA9tablir voiture",
+		"Wagen zur\xC3\xBC" "cksetzen", "Ripristina auto", "Reiniciar coche", "Wagen resetten",
+		"\xC3\x85terst\xC3\xA4ll bil", "Gendan bil" } },
+	[PS_LOAD_ENTER_SHOP] = { 0xAB1032FAu, 0, { "Enter Shop / Challenge Opponent",
+		"Acc\xC3\xA9" "der atelier/ Acc\xC3\xA9" "der \xC3\xA9preuve",
+		"Betreten / Gegner herausfordern", "Entra in negozio/ Sfida avversario",
+		"Entrar en tienda/ Desafiar a oponente", "Shop ingaan / Tegenstander uitdagen",
+		"K\xC3\xB6r in/ Utmana motst\xC3\xA5ndare", "Bes\xC3\xB8g butik / Udfordr modstander" } },
+	[PS_LOAD_WORLD_MAP] = { 0x6026C91Fu, 0, { "World Map", "Carte du monde", "Weltkarte",
+		"Mappa generale", "Mapa del mundo", "Wereldkaart", "V\xC3\xA4rldskarta", "Verdenskort" } },
+	[PS_LOAD_CAREER_STATS] = { 0x70A30056u, 0, { "Career Statistics", "Statut carri\xC3\xA8re",
+		"Karriere-Statistik", "Statistiche carriera", "Estad\xC3\xADsticas de carrera",
+		"Carri\xC3\xA8restatistieken", "Karri\xC3\xA4rstatistik", "Karrierestatus" } },
+	[PS_LOAD_SMS] = { 0x6EF09D0Du, 0, { "Display SMS", "Afficher SMS", "SMS anzeigen", "Mostra SMS",
+		"Mostrar SMS", "Sms tonen", "Visa SMS", "Vis SMS" } },
+	[PS_BOOT_LOAD] = { 0x0018ECFFu, 0, { "Load", "Charger", "Laden", "Carica", "Cargar", "Laden",
+		"Ladda", "Indl\xC3\xA6s" } },
+	[PS_BOOT_CREATE] = { 0x55423473u, 0, { "Create", "Cr\xC3\xA9" "er", "Erstellen", "Crea", "Crear",
+		"Aanmaken", "Skapa", "Opret" } },
+	[PS_BOOT_NO_PROFILE] = { 0xCF4F80C2u, 0, { "No Profile", "Aucun profil", "Kein Profil",
+		"Nessun profilo", "Sin perfil", "Geen profiel", "Ingen profil", "Ingen profil" } },
+	[PS_BOOT_CHANGE] = { 0x548B4385u, 0, { "Change", "Changer", "\xC3\x84ndern", "Cambia", "Cambiar",
+		"Wijzigen", "\xC3\x84ndra", "Skift" } },
 };
 
 // Room for a resolved retail string and for any entry's capitals; the longest
@@ -504,6 +574,77 @@ void portstr_upper(char* s) {
 		upperImpl(s, false);
 }
 
+// The loading screen's tips (portstr.h): ENGAGE_TIPS_<NAME>_SUBJECT / _BODY,
+// keyed as eventdb_feng_hash() keys them. The four without a record of their
+// own are the race-type hints the same tables carry beside them; they borrow
+// the subject of their record's family or go without one.
+typedef struct {
+	u32 subject, body;   // retail keys, subject 0 = none
+	unsigned kinds;      // PS_TIP_*
+} PortTipDef;
+
+static const PortTipDef kTips[] = {
+	{ 0x53679B54u, 0x21707032u, PS_TIP_RACE },                    // BBRK, basic braking
+	{ 0x40D7A271u, 0x4B27846Fu, PS_TIP_RACE },                    // SLBRK, straight line braking
+	{ 0x6A88B9A0u, 0xFEC151FEu, PS_TIP_RACE },                    // SLWIN, slow in - fast out
+	{ 0xAE735E44u, 0x04A99922u, PS_TIP_RACE },                    // TRLBRK, trail braking
+	{ 0x037304ECu, 0xDDA280CAu, PS_TIP_RACE | PS_TIP_TUNE },      // ENGBRK, engine braking
+	{ 0x4C8770BEu, 0x2EF02DDCu, PS_TIP_RACE | PS_TIP_DRAG | PS_TIP_FREE },   // RCEBRKR
+	{ 0xD92EF843u, 0x46905B81u, PS_TIP_RACE | PS_TIP_FREE },      // WEATHER
+	{ 0x9354D1C2u, 0x907D8D60u, PS_TIP_STREET_X },                // STREETX
+	{ 0x9354D1C2u, 0xB372757Au, PS_TIP_STREET_X },                // Street X, the short tracks
+	{ 0,           0x4C22CEECu, PS_TIP_URL },                     // URL
+	{ 0x227EBA64u, 0x56756942u, PS_TIP_DRAG },                    // DRAFT, drag drafting
+	{ 0,           0x31E50D09u, PS_TIP_DRAG },                    // drag lane change
+	{ 0,           0x7B04ECC5u, PS_TIP_DRAG | PS_TIP_TUNE },      // perfect shift points
+	{ 0x4D64646Cu, 0xB884104Au, PS_TIP_DRIFT },                   // DRIFT, the bonus areas
+	{ 0x4D64646Cu, 0x6E86D064u, PS_TIP_DRIFT },                   // drift scoring
+	{ 0x586CA736u, 0x92243754u, PS_TIP_DRIFT },                   // ORGANIC
+	{ 0,           0x6E11E175u, PS_TIP_DRIFT },                   // downhill drift
+	{ 0x6452D482u, 0xD8BC8820u, PS_TIP_OUTRUN },                  // ORSTRAT
+	{ 0xC923C8FFu, 0xF2DC85BDu, PS_TIP_FREE },                    // HIDDEN
+	{ 0xC0398786u, 0x0B9479A4u, PS_TIP_FREE },                    // SMS
+	{ 0xF9B92E68u, 0xCA50BBC6u, PS_TIP_FREE },                    // MAG
+	{ 0x5BE4A3BAu, 0xAD75E258u, PS_TIP_FREE },                    // MAG2
+	{ 0xD707383Du, 0x0FCE0DBBu, PS_TIP_FREE },                    // NEW, new parts SMS
+	{ 0x70DF6656u, 0x73DA4A74u, PS_TIP_FREE | PS_TIP_TUNE },      // RBRKR, Racebreaker
+	{ 0xA85772B3u, 0x36D56BF1u, PS_TIP_TUNE },                    // REALTUNE
+	{ 0,           0x46B41BB8u, PS_TIP_TUNE },                    // nitrous tuning
+};
+#define PORT_TIPS ((int)(sizeof(kTips) / sizeof(kTips[0])))
+static char* s_tipSubject[PORT_TIPS];
+static char* s_tipBody[PORT_TIPS];
+
+static char* tipCopy(const LangTable* lang, u32 hash) {
+	const char* r = lang && hash ? langbin_lookup(lang, hash) : NULL;
+	return r && r[0] ? strdup(r) : NULL;
+}
+
+static void tipsResolve(const LangTable* lang) {
+	for (int i = 0; i < PORT_TIPS; i++) {
+		free(s_tipSubject[i]);
+		free(s_tipBody[i]);
+		s_tipSubject[i] = tipCopy(lang, kTips[i].subject);
+		s_tipBody[i] = tipCopy(lang, kTips[i].body);
+	}
+}
+
+int portstr_tip_count(void) {
+	return PORT_TIPS;
+}
+
+unsigned portstr_tip_kinds(int i) {
+	return i >= 0 && i < PORT_TIPS ? kTips[i].kinds : 0u;
+}
+
+const char* portstr_tip_subject(int i) {
+	return i >= 0 && i < PORT_TIPS && s_tipSubject[i] ? s_tipSubject[i] : "";
+}
+
+const char* portstr_tip_body(int i) {
+	return i >= 0 && i < PORT_TIPS && s_tipBody[i] ? s_tipBody[i] : "";
+}
+
 void portstr_set_language(int langIndex, const char* langBinPath) {
 	if (langIndex < 0 || langIndex >= PORT_LANG_COUNT)
 		langIndex = 0;
@@ -530,6 +671,7 @@ void portstr_set_language(int langIndex, const char* langBinPath) {
 		copyUtf8(s_caps[i], s_cur[i], sizeof(s_caps[i]));
 		upperImpl(s_caps[i], strchr(d->t[0], '%') != NULL);
 	}
+	tipsResolve(have ? &lang : NULL);
 	if (have)
 		langbin_free(&lang);
 }

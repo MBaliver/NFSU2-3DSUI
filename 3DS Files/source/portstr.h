@@ -232,6 +232,38 @@ typedef enum {
 	PS_BTN_DPAD_DOWN,
 	PS_BTN_DPAD_LEFT,
 	PS_BTN_DPAD_RIGHT,
+	// loading: the lower screen under Loading.fng (event, controls, tip) and
+	// the boot profile screens in the kit
+	PS_LOAD_LOADING,
+	PS_LOAD_TIP,
+	PS_LOAD_CONTROLS,
+	PS_LOAD_FREE_ROAM,
+	PS_LOAD_CIRCUIT,
+	PS_LOAD_SPRINT,
+	PS_LOAD_DRAG,
+	PS_LOAD_DRIFT,
+	PS_LOAD_STREET_X,
+	PS_LOAD_URL,
+	PS_LOAD_OUTRUN,
+	PS_LOAD_TEST_RUN,
+	PS_LOAD_ACCELERATE,
+	PS_LOAD_BRAKE,
+	PS_LOAD_STEER,
+	PS_LOAD_NITROUS,
+	PS_LOAD_HANDBRAKE,
+	PS_LOAD_SHIFT_UP,
+	PS_LOAD_SHIFT_DOWN,
+	PS_LOAD_CAMERA,
+	PS_LOAD_LOOK_BACK,
+	PS_LOAD_RESET_CAR,
+	PS_LOAD_ENTER_SHOP,
+	PS_LOAD_WORLD_MAP,
+	PS_LOAD_CAREER_STATS,
+	PS_LOAD_SMS,
+	PS_BOOT_LOAD,
+	PS_BOOT_CREATE,
+	PS_BOOT_NO_PROFILE,
+	PS_BOOT_CHANGE,
 	PS_COUNT
 } PortStr;
 
@@ -251,3 +283,26 @@ const char* portstr_caps(PortStr id);
 // as German print does. y-diaeresis stays too (its capital is outside
 // Latin-1, and none of the eight languages needs it).
 void portstr_upper(char* s);
+
+// PORT: the loading screen's tips. Retail ships no loading tips, but its
+// career data has ~40 "Game Tips" SMS records (ENGAGE_TIPS_*, the mailbox's
+// Game Tips category), each a subject and a body in every language table;
+// the ones that read right on this port (no PC keys, no shop directions) are
+// resolved here with the rest, when the language changes, so a load never
+// reads a table. Each tip says which events it suits (PS_TIP_*).
+enum {
+	PS_TIP_RACE     = 1 << 0,   // grip racing: circuit, sprint, Street X, URL, Outrun
+	PS_TIP_DRAG     = 1 << 1,
+	PS_TIP_DRIFT    = 1 << 2,
+	PS_TIP_STREET_X = 1 << 3,
+	PS_TIP_URL      = 1 << 4,
+	PS_TIP_OUTRUN   = 1 << 5,
+	PS_TIP_FREE     = 1 << 6,   // free roam
+	PS_TIP_TUNE     = 1 << 7,   // the dyno and its test run
+};
+int portstr_tip_count(void);
+unsigned portstr_tip_kinds(int i);
+// UTF-8, '^' the table's line break; "" when the tip has none (subject) or the
+// table would not load (body: skip the tip).
+const char* portstr_tip_subject(int i);
+const char* portstr_tip_body(int i);

@@ -7647,16 +7647,19 @@ static void mcMainParseTexts(MenuState* m) {
 
 // Puts MC_Main.fng in `phase`: DoSaveFlow(2)'s question, which opens on No,
 // or ShowKeyboard's name entry with an empty field.
-// The name entry is drawn on the touch screen and the question on the top one
-// (TASKS.md #285): the user moved the name entry alone of the boot flow's
-// screens. A screen loaded for the frontend (navBottom) is down there anyway.
+// The name entry is drawn on the touch screen (TASKS.md #285), and so is the
+// boot's new-profile question now (PORT: every choice is on the lower screen,
+// in the kit -- drawUiMcAsk()), the top keeping MC_Background's title art. A
+// screen loaded for the frontend (navBottom) is down there anyway; the save
+// confirm (MCMAIN_SAVE) goes where its caller's screen is.
 static void mcMainSetPhase(MenuState* m, int phase) {
 	if (!m->isMcMain)
 		return;
 	m->mcPhase = phase;
 	m->mcConfirm = false;
 	m->mcName[0] = '\0';
-	m->screenW = (phase == MCMAIN_NAME || m->navBottom) ? SCREEN_BOT_W : SCREEN_TOP_W;
+	m->screenW = (phase == MCMAIN_NAME || phase == MCMAIN_ASK || m->navBottom)
+		? SCREEN_BOT_W : SCREEN_TOP_W;
 	m->touchBottomWhole = m->screenW == SCREEN_BOT_W;
 	mcMainParseTexts(m);
 	const bool ask = mcMainAsking(m);
@@ -10021,6 +10024,16 @@ static int g_uiDlgHitN = 0;
 // The same for MC_Main's question (drawUiMcAsk()).
 static UiDlgHit g_mcDlgHit[2];
 static int g_mcDlgHitN = 0;
+// And for its name entry (drawUiMcName()), live while that skin keeps drawing
+// the menu (mcNameSkinLive()).
+enum { MCNAME_HIT_ACCEPT, MCNAME_HIT_BACK, MCNAME_HIT_FIELD };
+static UiDlgHit g_mcNameHit[3];
+static int g_mcNameHitN = 0;
+static const MenuState* g_mcNameSkin = NULL;
+static u64 g_mcNameSkinMs = 0;
+static bool mcNameSkinLive(const MenuState* m) {
+	return m && g_mcNameSkin == m && osGetTime() - g_mcNameSkinMs < 250u;
+}
 
 static bool feDialogOwns(u32 objHash) {
 	return objHash == FEDLG_BLURB_HASH || objHash == FEDLG_LABEL1_HASH ||
@@ -26490,6 +26503,11 @@ static bool g_feDialogToBottom = false;
 static bool menuNavOnBottom(const MenuState* m) {
 	if (g_feDialogToBottom && m->isFeDialog)
 		return true;
+	// PORT: the profile list is a choice, and every choice is on the lower
+	// screen -- the boot's Load list too, not only the profile manager's
+	// (drawUiMcList()); the top screen keeps MC_Background's art.
+	if (m->isMcList)
+		return true;
 	// The dyno's tuning screens and their questions (#417) are frontend
 	// menus shown over the world: the frontend's lower-panel layout, not the
 	// top screen's fitting.
@@ -29335,7 +29353,8 @@ static char padGlyphAt(const MenuState* m, int i) {
 // centred Strings (Sj 1, top-anchored), so each badge goes to the left of its
 // word at the word's own height.
 static void drawMcMainLegend(const MenuState* m) {
-	if (!m->isMcMain || !m->mcConfirm)
+	// The kit's name entry wears its own badges (drawUiMcName()).
+	if (!m->isMcMain || !m->mcConfirm || mcNameSkinLive(m))
 		return;
 	static const char keys[2] = { 'A', 'B' };
 	for (int k = 0; k < 2; k++) {
@@ -31052,6 +31071,7 @@ static bool uiTrackScreen(const MenuState* m);
 static bool drawUiPerfPackage(const MenuState* m);
 static bool drawUiPaint(const MenuState* m);
 static bool drawUiMcList(const MenuState* m);
+static bool drawUiMcName(const MenuState* m);
 static bool drawUiTrax(const MenuState* m);
 static bool drawUiLan(const MenuState* m);
 static bool drawUiPerfBrand(const MenuState* m);
@@ -31085,6 +31105,9 @@ static void drawMenu(const MenuState* m, int animFrame) {
 		return;
 	// PORT: MC_Main's question on the lower screen in the same dialog.
 	if (skinOk && m->isMcMain && drawUiMcAsk(m))
+		return;
+	// PORT: and its name entry (drawUiMcName()).
+	if (skinOk && m->isMcMain && drawUiMcName(m))
 		return;
 	// PORT: the rest of the lower screen in the same kit (the user's mockup,
 	// 2026-11-14): the help dialog, the icon hubs, the option pages, the
@@ -35932,6 +35955,87 @@ static void lanWorldFrame(void);
 // starts (mapRaceBegin()).
 static EventRec g_mapEvent;
 static bool g_mapEventPending = false;
+
+// PORT: what the lower screen under Loading.fng is about (drawLoadingBottom()):
+// the event the load is for, its controls in the player's binding and the
+// game's own tips that suit it. Every way into a load knows where it goes
+// before it starts, so each sets this first (loadCtxSet()): world entry, a
+// race's start, restart or next track, the way back to free roam, the end NIS
+// and the way out to the frontend. The tips are picked here, out of the pool
+// portstr resolved when the language was set, so the pumped frames only draw.
+enum { LOADK_NONE, LOADK_FREE_ROAM, LOADK_RACE, LOADK_TUNE };
+#define LOAD_TIPS_MAX 32
+typedef struct {
+	int kind;            // LOADK_*
+	int evType, evCls;   // LOADK_RACE: the event's EVENT_TYPE_* / EVENT_CLASS_*
+	bool outrun;
+	int tips[LOAD_TIPS_MAX];   // the pool, the event's own first
+	int tipN;
+	int tip0;            // where the rotation starts, one of the event's own
+	s8 tipFit[LOAD_TIPS_MAX];  // 0 not wrapped yet, 1 fits the panel, -1 too long
+	u64 t0;              // osGetTime() when set
+} LoadCtx;
+static LoadCtx g_loadCtx;
+// The loading panel's own text buffer, made here and not in a pumped frame:
+// world entry is the tightest point of the heap.
+static C2D_TextBuf g_loadBuf;
+
+static void loadCtxSet(int kind, const EventRec* ev, bool outrun) {
+	LoadCtx* c = &g_loadCtx;
+	memset(c, 0, sizeof(*c));
+	if (kind == LOADK_RACE && !ev)
+		kind = LOADK_NONE;
+	// A tuning test run is a race on the dyno's track (#417).
+	if (kind == LOADK_RACE && (g_tune.on || g_tune.pending))
+		kind = LOADK_TUNE;
+	c->kind = kind;
+	c->evType = ev ? ev->type : -1;
+	c->evCls = ev ? ev->cls : -1;
+	c->outrun = outrun;
+	c->t0 = osGetTime();
+	if (!g_loadBuf)
+		g_loadBuf = C2D_TextBufNew(1024);
+	// The event's own tips, then the grip-racing ones where those apply too.
+	unsigned own = PS_TIP_RACE | PS_TIP_FREE, also = 0;
+	if (kind == LOADK_RACE) {
+		// The class first: a URL event is grip racing whatever its type
+		// (raceStartTrack()'s drag / drift / short track tests).
+		if (ev->cls == EVENT_CLASS_URL)
+			own = PS_TIP_URL, also = PS_TIP_RACE;
+		else if (ev->type == EVENT_TYPE_DRAG)
+			own = PS_TIP_DRAG;
+		else if (ev->type == EVENT_TYPE_DRIFT)
+			own = PS_TIP_DRIFT;
+		else if (ev->type == EVENT_TYPE_STREET)
+			own = PS_TIP_STREET_X, also = PS_TIP_RACE;
+		else if (outrun)
+			own = PS_TIP_OUTRUN, also = PS_TIP_RACE;
+		else
+			own = PS_TIP_RACE;
+	} else if (kind == LOADK_FREE_ROAM) {
+		own = PS_TIP_FREE;
+	} else if (kind == LOADK_TUNE) {
+		own = PS_TIP_TUNE;
+	}
+	int nOwn = 0;
+	for (int pass = 0; pass < 2; pass++) {
+		const unsigned mask = pass ? also & ~own : own;
+		for (int i = 0; mask && i < portstr_tip_count() && c->tipN < LOAD_TIPS_MAX; i++) {
+			const unsigned k = portstr_tip_kinds(i);
+			if (!(k & mask) || (pass && (k & own)) || !portstr_tip_body(i)[0])
+				continue;
+			c->tips[c->tipN++] = i;
+		}
+		if (!pass)
+			nOwn = c->tipN;
+	}
+	c->tip0 = nOwn > 0 ? (int)((svcGetSystemTick() >> 4) % (u64)nOwn) : 0;
+	char b[128];
+	snprintf(b, sizeof(b), "loading: lower screen -- kind %d, event type %d class %d%s, %d tip(s), "
+		"first %d", kind, c->evType, c->evCls, outrun ? ", outrun" : "", c->tipN,
+		c->tipN ? c->tips[c->tip0] : -1);
+	dlog(b);
+}
 // The frontend package a finished Quick Race leaves the world for, picked up
 // by the world loop: PostRaceMenu::QuitGame (0x800F3590) ->
 // CalculateFirstFrontendScreenToSeeAfterQuitRace (0x801322A0), which for game
@@ -43938,6 +44042,8 @@ static bool raceStartTrack(int i) {
 	// route (race.c's raceLive()), and no AI.
 	const bool outrun = g_lanRaceOn && g_lanRace.outrun;
 	char b[256], path[600], rel[64];
+	// PORT: the loading screen below shows this event's controls and tips.
+	loadCtxSet(LOADK_RACE, ev, outrun);
 	if (laps <= 0) {
 		snprintf(b, sizeof(b), "race: %s track %d has %d laps -- not a race, not starting",
 			ev->name, track, laps);
@@ -44550,6 +44656,8 @@ static void raceFinishEvent(bool commit, bool mayWrite, bool stay) {
 		dlog(b);
 		return;
 	}
+	// PORT: the loading screen's panel is free roam's (or the dyno's) from here.
+	loadCtxSet(g_tune.on ? LOADK_TUNE : LOADK_FREE_ROAM, NULL, false);
 	if (g_tune.on) {
 		// A tuning test run's end (#417 D): nothing to commit; the car back
 		// on its dyno spot, free roam's groups and map as the dyno had them.
@@ -54381,6 +54489,9 @@ typedef struct {
 #define TRACE_FRAMES 3
 static int g_traceFrames;
 
+// The lower screen under a loading screen (g_loadCtx), with the kit below.
+static void drawLoadingBottom(void);
+
 // One loading frame, submitted on its own. worldEnter() is called from inside
 // the main loop's C3D_FrameBegin, so that frame is closed before the first tick
 // and a fresh one opened after the last -- the same rule the swkbd call follows
@@ -54407,7 +54518,8 @@ static void worldLoadFrame(WorldLoadUi* ui, u8 beginFlags) {
 		scissorReset();
 	}
 	sceneBegin(ui->bottom);
-	drawBottomLogo();
+	// PORT: the event's controls and a tip in the logo's place.
+	drawLoadingBottom();
 	C3D_FrameEnd(0);
 	gpuwatch_mark_queue();
 	ui->frame++;
@@ -55054,6 +55166,8 @@ static bool endNisStart(const Config* cfg, RaceRun* rr, C3D_RenderTarget* top, C
 	// Loading.fng over the load, as BeginLoading(5) puts it up.
 	WorldLoadUi ui = { top, bottom, loadingScreenResident(cfg), 0 };
 	const bool loadUp = ui.screen != NULL;
+	// PORT: the race is over and the post-race screens come next: tips alone.
+	loadCtxSet(LOADK_NONE, NULL, false);
 	if (loadUp) {
 		g_loadingScreen.scriptT0 = osGetTime();
 		C3D_FrameEnd(0);
@@ -55659,7 +55773,8 @@ static void igMoviePlay(const Config* cfg, WorldLoadUi* ui) {
 					movieH);
 			}
 			sceneBegin(ui->bottom);
-			drawBottomLogo();
+			// PORT: the loading panel, as under Loading.fng (worldLoadFrame()).
+			drawLoadingBottom();
 			C3D_FrameEnd(0);
 			gpuwatch_mark_queue();
 			frames++;
@@ -57859,8 +57974,9 @@ static bool drawUiDialog(const MenuState* m) {
 // load confirms -- as the same dialog: its title, its message, Yes / No (or
 // OK alone for "No profiles were found."). Its own layout was the PC's
 // 640x480 panel squeezed onto 320x240: a wide grey box, small text and
-// buttons that barely showed. The boot question stays on the top screen in
-// the retail look. A tap on a button is that button (mcMainTouchKeys()).
+// buttons that barely showed. The boot's question is here too (PORT,
+// mcMainSetPhase()), under MC_Background's art on the top screen. A tap on a
+// button is that button (mcMainTouchKeys()).
 static bool drawUiMcAsk(const MenuState* m) {
 	static C2D_TextBuf buf = NULL;
 	if (!buf)
@@ -58418,6 +58534,360 @@ static void uiSkinFooter(C2D_TextBuf buf, const UiAct* a, int n) {
 		x -= 8.0f;
 	}
 }
+// ===========================================================================
+// PORT: the lower screen under a loading screen (worldLoadFrame(),
+// igMoviePlay()), in place of the NFSU2 logo it had: the event the load is
+// for, its controls in the player's binding (controls.h) and one of the game's
+// own tips (portstr.h), the next every LOAD_TIP_MS. It is drawn from inside
+// loads (loadpump.h): ~30 frames a second while files are read and none in a
+// long CPU stretch, so everything moves by the clock, and nothing is loaded --
+// the text buffer is loadCtxSet()'s, the badges come off the resident button
+// sheet (a sheet not up yet gets the buttons' names instead).
+// ===========================================================================
+#define LOAD_TIP_MS  9000u
+#define LOAD_FADE_MS 250u
+#define LOAD_HEAD_H  28.0f
+
+typedef struct { PortStr label; u32 action; bool wide; } LoadCtl;
+
+static bool loadCtxDrag(const LoadCtx* c) {
+	return c->kind == LOADK_RACE && c->evCls != EVENT_CLASS_URL && c->evType == EVENT_TYPE_DRAG;
+}
+
+// The event's title: its race type, free roam or the dyno's test run.
+static const char* loadCtxTitle(const LoadCtx* c) {
+	switch (c->kind) {
+	case LOADK_FREE_ROAM: return portstr(PS_LOAD_FREE_ROAM);
+	case LOADK_TUNE:      return portstr(PS_LOAD_TEST_RUN);
+	case LOADK_RACE:
+		if (c->evCls == EVENT_CLASS_URL) return portstr(PS_LOAD_URL);
+		if (c->outrun) return portstr(PS_LOAD_OUTRUN);
+		switch (c->evType) {
+		case EVENT_TYPE_CIRCUIT: return portstr(PS_LOAD_CIRCUIT);
+		case EVENT_TYPE_SPRINT:  return portstr(PS_LOAD_SPRINT);
+		case EVENT_TYPE_STREET:  return portstr(PS_LOAD_STREET_X);
+		case EVENT_TYPE_DRAG:    return portstr(PS_LOAD_DRAG);
+		case EVENT_TYPE_DRIFT:   return portstr(PS_LOAD_DRIFT);
+		default: break;
+		}
+		break;
+	default:
+		break;
+	}
+	return portstr(PS_LOAD_LOADING);
+}
+
+// The actions that matter in the event, three rows of two in reading order:
+// a drag shifts and changes lanes (the steering), a drift slides on the
+// handbrake with no nitrous, free roam has the city's own buttons.
+static int loadCtlList(const LoadCtx* c, const LoadCtl** out) {
+	static const LoadCtl kRace[] = {
+		{ PS_LOAD_ACCELERATE, OPT_ACT_ACCELERATE, false }, { PS_LOAD_BRAKE, OPT_ACT_BRAKE, false },
+		{ PS_LOAD_NITROUS, OPT_ACT_NITROUS, false }, { PS_LOAD_HANDBRAKE, OPT_ACT_HANDBRAKE, false },
+		{ PS_LOAD_LOOK_BACK, OPT_ACT_LOOK_BACK, false }, { PS_LOAD_RESET_CAR, OPT_ACT_RESET_CAR, false },
+	};
+	static const LoadCtl kDrag[] = {
+		{ PS_LOAD_ACCELERATE, OPT_ACT_ACCELERATE, false }, { PS_LOAD_SHIFT_UP, OPT_ACT_SHIFT_UP, false },
+		{ PS_LOAD_NITROUS, OPT_ACT_NITROUS, false }, { PS_LOAD_SHIFT_DOWN, OPT_ACT_SHIFT_DOWN, false },
+		{ PS_LOAD_STEER, OPT_ACT_STEER, false }, { PS_LOAD_CAMERA, OPT_ACT_CHANGE_CAMERA, false },
+	};
+	static const LoadCtl kDrift[] = {
+		{ PS_LOAD_ACCELERATE, OPT_ACT_ACCELERATE, false }, { PS_LOAD_BRAKE, OPT_ACT_BRAKE, false },
+		{ PS_LOAD_HANDBRAKE, OPT_ACT_HANDBRAKE, false }, { PS_LOAD_STEER, OPT_ACT_STEER, false },
+		{ PS_LOAD_RESET_CAR, OPT_ACT_RESET_CAR, false }, { PS_LOAD_CAMERA, OPT_ACT_CHANGE_CAMERA, false },
+	};
+	static const LoadCtl kTune[] = {
+		{ PS_LOAD_ACCELERATE, OPT_ACT_ACCELERATE, false }, { PS_LOAD_BRAKE, OPT_ACT_BRAKE, false },
+		{ PS_LOAD_SHIFT_UP, OPT_ACT_SHIFT_UP, false }, { PS_LOAD_SHIFT_DOWN, OPT_ACT_SHIFT_DOWN, false },
+		{ PS_LOAD_NITROUS, OPT_ACT_NITROUS, false }, { PS_LOAD_CAMERA, OPT_ACT_CHANGE_CAMERA, false },
+	};
+	static const LoadCtl kFree[] = {
+		{ PS_LOAD_WORLD_MAP, OPT_ACT_WORLD_MAP, false }, { PS_LOAD_SMS, OPT_ACT_DISPLAY_SMS, false },
+		{ PS_LOAD_CAREER_STATS, OPT_ACT_CAREER_STATS, false }, { PS_LOAD_NITROUS, OPT_ACT_NITROUS, false },
+		{ PS_LOAD_ENTER_SHOP, OPT_ACT_ENTER_SHOP, true },
+	};
+	#define LOAD_CTLS(a) (*out = (a), (int)(sizeof(a) / sizeof((a)[0])))
+	switch (c->kind) {
+	case LOADK_FREE_ROAM: return LOAD_CTLS(kFree);
+	case LOADK_TUNE:      return LOAD_CTLS(kTune);
+	case LOADK_RACE:
+		if (loadCtxDrag(c))
+			return LOAD_CTLS(kDrag);
+		if (c->evCls != EVENT_CLASS_URL && c->evType == EVENT_TYPE_DRIFT)
+			return LOAD_CTLS(kDrift);
+		return LOAD_CTLS(kRace);
+	default:
+		break;
+	}
+	#undef LOAD_CTLS
+	*out = NULL;
+	return 0;
+}
+
+// One control at (x, cy), `w` wide: the badge of the button it is on -- the
+// Circle Pad for the steering, the +Control Pad with an arrow for a D-pad
+// slot, a dash for none -- and its name, squeezed to fit. A drag with the
+// Drag Shift option adds ZR / ZL beside the shift buttons (playerInput()).
+static void loadCtlDraw(C2D_TextBuf buf, const LoadCtl* ctl, float x, float cy, float w, float k) {
+	const float gh = 15.0f;
+	const int slot = ctl->action == OPT_ACT_STEER ? CONTROLS_STICK_SLOT
+		: controlsSlotOfAction(ctl->action);
+	char g[2];
+	int ng = 0;
+	if (slot == CONTROLS_STICK_SLOT)
+		g[ng++] = 'c';
+	else if (slot >= 3 && slot <= 6)
+		g[ng++] = 'd';
+	else if (slot >= 0 && padGlyphOfSlot(slot))
+		g[ng++] = padGlyphOfSlot(slot);
+	if (loadCtxDrag(&g_loadCtx) && gProfile.options.gameplay.dragTriggerShift &&
+			(ctl->action == OPT_ACT_SHIFT_UP || ctl->action == OPT_ACT_SHIFT_DOWN))
+		g[ng++] = ctl->action == OPT_ACT_SHIFT_UP ? 'r' : 'l';
+	float gx = x;
+	if (g_padSheetState == 1) {
+		for (int i = 0; i < ng; i++) {
+			drawPadGlyphRaw(g[i], gx + gh * 0.5f, cy, gh, UI_Z + 0.04f);
+			gx += gh + 4.0f;
+			if (g[i] == 'd') {
+				// The pad's direction, in the accent beside the badge.
+				const float a = slot == 3 ? -(float)M_PI * 0.5f : slot == 4 ? (float)M_PI * 0.5f
+					: slot == 5 ? (float)M_PI : 0.0f;
+				uiArrow(gx + 2.0f, cy, a, 4.0f, uiAlpha(UI_ACCENT, k));
+				gx += 9.0f;
+			}
+		}
+	} else if (slot >= 0) {
+		gx += uiText(buf, controls_slot_name(slot), 12.0f, gx, cy, 0, uiAlpha(UI_ACCENT, k), 0.0f) + 4.0f;
+	}
+	if (gx == x)
+		gx += uiText(buf, "-", 14.0f, x + 4.0f, cy, 0, uiAlpha(UI_DIM, k), 0.0f) + 10.0f;
+	// The table's '^' (Enter Shop /^Challenge Opponent) is its line break.
+	char lb[96];
+	snprintf(lb, sizeof(lb), "%s", portstr(ctl->label));
+	for (char* p = lb; *p; p++)
+		if (*p == '^')
+			*p = ' ';
+	C2D_Text t;
+	C2D_TextFontParse(&t, g_uiFont, buf, lb);
+	C2D_TextOptimize(&t);
+	uiCText(&t, 14.0f, gx + 2.0f, cy, 0, uiAlpha(UI_WHITE, k), x + w - gx - 2.0f);
+}
+
+// A tip's words wrapped to `maxW`, as uiWrap() does, but the buffer cleared
+// before every measure: a 300-character body measures a few thousand glyphs
+// on its way, which no one frame's buffer holds.
+static float loadMeasure(C2D_TextBuf buf, const char* s, float px) {
+	C2D_TextBufClear(buf);
+	return uiMeasure(buf, s, px);
+}
+static int loadWrap(C2D_TextBuf buf, const char* src, float px, float maxW, char* out, size_t cap) {
+	size_t o = 0;
+	int lines = 0;
+	char line[200] = "";
+	out[0] = '\0';
+	const char* p = src;
+	for (;;) {
+		while (*p == ' ')
+			p++;
+		const char* e = p;
+		while (*e && *e != ' ' && *e != '\n' && *e != '^')
+			e++;
+		if (e > p) {
+			char cand[200];
+			snprintf(cand, sizeof(cand), "%s%s%.*s", line, line[0] ? " " : "", (int)(e - p), p);
+			if (line[0] && loadMeasure(buf, cand, px) > maxW) {
+				o += (size_t)snprintf(out + o, o < cap ? cap - o : 0, "%s%s", lines ? "\n" : "", line);
+				lines++;
+				snprintf(line, sizeof(line), "%.*s", (int)(e - p), p);
+			} else {
+				snprintf(line, sizeof(line), "%s", cand);
+			}
+		}
+		if (*e == '\n' || *e == '^' || !*e) {
+			if (line[0]) {
+				o += (size_t)snprintf(out + o, o < cap ? cap - o : 0, "%s%s", lines ? "\n" : "", line);
+				lines++;
+				line[0] = '\0';
+			}
+			if (!*e)
+				break;
+			e++;
+		}
+		p = e;
+		if (o >= cap)
+			break;
+	}
+	return lines;
+}
+
+static void drawLoadingBottom(void) {
+	LoadCtx* c = &g_loadCtx;
+	C2D_TextBuf buf = g_loadBuf;
+	if (!buf || !g_uiFont) {
+		drawBottomLogo();
+		return;
+	}
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	const u64 now = osGetTime();
+	const u64 el = now - c->t0;
+	// ---- the tip on show: the rotation's slot, past any too long to fit ----
+	const LoadCtl* ctls = NULL;
+	const int nc = loadCtlList(c, &ctls);
+	const float tipY = nc > 0 ? 120.0f : LOAD_HEAD_H + 6.0f, tipH = H - 4.0f - tipY;
+	const float bodyY = tipY + 29.0f, lh = 16.0f, bodyW = W - 16.0f - 20.0f;
+	const int maxLines = (int)((tipY + tipH - 7.0f - bodyY) / lh) + 1;
+	static char wrapped[768];
+	static int wrapTip = -1, wrapLines = 0;
+	static u64 wrapT0 = 0;
+	int pick = -1;
+	if (c->tipN > 0) {
+		const int slot = (int)(el / LOAD_TIP_MS);
+		for (int tries = 0; tries < c->tipN && pick < 0; tries++) {
+			const int p = (c->tip0 + slot + tries) % c->tipN;
+			if (c->tipFit[p] < 0)
+				continue;
+			if (wrapTip != c->tips[p] || wrapT0 != c->t0) {
+				wrapLines = loadWrap(buf, portstr_tip_body(c->tips[p]), 14.0f, bodyW, wrapped,
+					sizeof(wrapped));
+				wrapTip = c->tips[p];
+				wrapT0 = c->t0;
+				c->tipFit[p] = wrapLines > 0 && wrapLines <= maxLines ? 1 : -1;
+			}
+			if (c->tipFit[p] > 0)
+				pick = c->tips[p];
+		}
+	}
+	C2D_TextBufClear(buf);
+	// The tip fades in and, when another follows, out.
+	float k = 1.0f;
+	if (c->tipN > 1) {
+		const u64 t = el % LOAD_TIP_MS;
+		k = fminf(1.0f, fminf((float)t / (float)LOAD_FADE_MS,
+			(float)(LOAD_TIP_MS - t) / (float)LOAD_FADE_MS));
+	} else {
+		k = fminf(1.0f, (float)el / (float)LOAD_FADE_MS);
+	}
+	uiScreenBackdrop(W, H);
+	// ---- the header: the event, and the loading dots ----
+	uiBand2(0.0f, LOAD_HEAD_H, true);
+	uiText(buf, loadCtxTitle(c), 18.0f, 10.0f, LOAD_HEAD_H * 0.5f, 0, UI_ACCENT, 180.0f);
+	{
+		// Five dots, a lit one walking left to right with a fading tail --
+		// U2_loading_Circle's beat on the top screen, kept short.
+		const int lit = (int)((el / 120u) % 5u);
+		float dx = W - 12.0f - 4.0f * 9.0f;
+		for (int i = 0; i < 5; i++, dx += 9.0f) {
+			const int back = (lit - i + 5) % 5;
+			const u8 a = back == 0 ? 255 : back == 1 ? 150 : 60;
+			C2D_DrawCircleSolid(dx, LOAD_HEAD_H * 0.5f, UI_Z + 0.03f, 2.5f,
+				C2D_Color32(202, 244, 138, a));
+		}
+		if (c->kind != LOADK_NONE)
+			uiText(buf, portstr(PS_LOAD_LOADING), 12.0f, W - 12.0f - 4.0f * 9.0f - 10.0f,
+				LOAD_HEAD_H * 0.5f, 2, UI_DIM, 0.0f);
+	}
+	// ---- the controls ----
+	if (nc > 0) {
+		const float py = LOAD_HEAD_H + 6.0f, ph = 80.0f;
+		uiChip(8.0f, py, W - 16.0f, ph, 0);
+		uiLabel(buf, portstr(PS_LOAD_CONTROLS), 16.0f, py + 11.0f, 0, UI_ACCENT);
+		const float colW = (W - 32.0f - 8.0f) * 0.5f;
+		int row = 0, col = 0;
+		for (int i = 0; i < nc && row < 3; i++) {
+			if (ctls[i].wide && col) {
+				row++;
+				col = 0;
+				if (row >= 3)
+					break;
+			}
+			const float cx = 16.0f + (float)col * (colW + 8.0f);
+			const float cy = py + 30.0f + (float)row * 20.0f;
+			loadCtlDraw(buf, &ctls[i], cx, cy, ctls[i].wide ? W - 32.0f : colW, 1.0f);
+			if (ctls[i].wide || col) {
+				row++;
+				col = 0;
+			} else {
+				col = 1;
+			}
+		}
+	}
+	// ---- the tip ----
+	uiChip(8.0f, tipY, W - 16.0f, tipH, 0);
+	if (pick < 0) {
+		drawBottomLogoAt(tipY + tipH * 0.5f, W * 0.7f);
+		return;
+	}
+	const float lw = uiText(buf, portstr(PS_LOAD_TIP), UI_LABEL_PX, 16.0f, tipY + 11.0f, 0,
+		uiAlpha(UI_ACCENT, k), 0.0f);
+	const char* subj = portstr_tip_subject(pick);
+	if (subj[0])
+		uiText(buf, subj, 14.0f, 16.0f + lw + 8.0f, tipY + 11.0f, 0, uiAlpha(UI_WHITE, k),
+			W - 16.0f - 10.0f - (16.0f + lw + 8.0f));
+	// The cache stays whole for the next frame; the lines are cut in a copy.
+	char keep[768];
+	snprintf(keep, sizeof(keep), "%s", wrapped);
+	char* line = keep;
+	for (int n = 0; n < wrapLines && n < maxLines && line && *line; n++) {
+		char* nl = strchr(line, '\n');
+		if (nl)
+			*nl = '\0';
+		uiText(buf, line, 14.0f, 18.0f, bodyY + (float)n * lh, 0, uiAlpha(UI_WHITE, k), bodyW);
+		line = nl ? nl + 1 : NULL;
+	}
+}
+
+// ===========================================================================
+// PORT: MC_Main's name entry on the lower screen in the kit. Its own layout was
+// the PC's 640x480 panel stretched over 320x240 (#285). Here: the title, the
+// caption over a field with the typed name (or "NAME" before there is one)
+// and, once the keyboard has handed a name back, Accept (A) and Back (B) as
+// the dialog's pills, with Change (X) in the field -- a tap anywhere on the
+// field types it again, as X does. The input stays the name entry's own
+// (BOOT_PROFILE_NAME_ENTRY): its taps come back through g_mcNameHit.
+// ===========================================================================
+static bool drawUiMcName(const MenuState* m) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(1024);
+	if (!buf || !g_uiFont || !m->isMcMain || m->mcPhase != MCMAIN_NAME || m->screenW != SCREEN_BOT_W)
+		return false;
+	C2D_TextBufClear(buf);
+	g_mcNameSkin = m;
+	g_mcNameSkinMs = osGetTime();
+	g_mcNameHitN = 0;
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	uiSkinHeader(buf, NULL, NULL, m->mcText[MCT_TITLE_NAME], false);
+	// ---- the field ----
+	const float fx = 16.0f, fy = 84.0f, fw = W - 32.0f, fh = 48.0f;
+	uiLabel(buf, m->mcText[MCT_CAPTION], fx + 2.0f, fy - 12.0f, 0, UI_ACCENT);
+	uiRoundRect(fx, fy, fw, fh, 6.0f, UI_Z, UI_DEEP);
+	uiRing(fx, fy, fw, fh, 6.0f, 1.5f, UI_Z + 0.006f, UI_FRAME);
+	float nameW = fw - 24.0f;
+	if (m->mcConfirm) {
+		const char* ch = portstr(PS_BOOT_CHANGE);
+		const float bw = uiMeasure(buf, ch, 14.0f) + 13.0f + 6.0f + 28.0f;
+		const float bx = fx + fw - bw - 10.0f;
+		uiButton(buf, bx, fy + (fh - 30.0f) * 0.5f, bw, 30.0f, 'X', ch, false, false);
+		nameW = bx - fx - 22.0f;
+		g_mcNameHit[g_mcNameHitN++] = (UiDlgHit){ { fx, fy - 6.0f, fw, fh + 12.0f }, MCNAME_HIT_FIELD };
+	}
+	if (m->mcName[0])
+		uiText(buf, m->mcName, 20.0f, fx + 12.0f, fy + fh * 0.5f, 0, UI_WHITE, nameW);
+	else
+		uiText(buf, m->mcText[MCT_FIELD], 20.0f, fx + 12.0f, fy + fh * 0.5f, 0, UI_DIM, nameW);
+	// ---- Accept / Back ----
+	if (m->mcConfirm) {
+		const float gap = 10.0f, bw = (W - 32.0f - gap) * 0.5f, by = H - 12.0f - 36.0f;
+		uiButton(buf, 16.0f, by, bw, 36.0f, 'A', m->mcText[MCT_ACCEPT], false, true);
+		uiButton(buf, 16.0f + bw + gap, by, bw, 36.0f, 'B', m->mcText[MCT_BACK], false, false);
+		g_mcNameHit[g_mcNameHitN++] = (UiDlgHit){ { 13.0f, by - 4.0f, bw + 6.0f, 44.0f }, MCNAME_HIT_ACCEPT };
+		g_mcNameHit[g_mcNameHitN++] = (UiDlgHit){ { 16.0f + bw + gap - 3.0f, by - 4.0f, bw + 6.0f, 44.0f },
+			MCNAME_HIT_BACK };
+	}
+	return true;
+}
+
 // A five-point star, `k` of it lit from the left (0..1).
 static void uiStar(float cx, float cy, float r, float k) {
 	const u32 off = C2D_Color32(255, 255, 255, 46), on = UI_ACCENT;
@@ -59405,8 +59875,13 @@ static bool drawUiMcList(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_PROFILES),
-		feHelpHash(m->screenName) != 0);
+	// PORT: the boot's Load list (BOOT_PROFILE_SELECT, before the frontend's
+	// lower panel is: g_feNavBottom) has its own ways out -- B goes on with no
+	// profile, X creates one -- and no Help.
+	const bool boot = !g_feNavBottom;
+	uiSkinHeader(buf, boot ? portstr(PS_BOOT_NO_PROFILE) : portstr(PS_BACK),
+		m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_PROFILES),
+		!boot && feHelpHash(m->screenName) != 0);
 	const float y0 = UI_HEAD_H + 6.0f, rowH = 30.0f, bottom = H - UI_FOOT_H - 4.0f;
 	const int vis = (int)((bottom - y0) / rowH), n = m->listCount;
 	g_fskListSel = m->listSel;
@@ -59427,6 +59902,12 @@ static bool drawUiMcList(const MenuState* m) {
 		uiListRow(buf, &row, r, r == m->listSel, 8.0f, y0 + (float)k * rowH, rw, rowH - 4.0f, FSK_LIST);
 	}
 	uiListBar(first, vis, n, y0, rowH);
+	if (boot) {
+		const UiAct acts[2] = { { portstr(PS_BOOT_LOAD), 'A', KEY_A, true },
+			{ portstr(PS_BOOT_CREATE), 'X', KEY_X, false } };
+		uiSkinFooter(buf, acts, 2);
+		return true;
+	}
 	const UiAct acts[1] = { { portstr(PS_SELECT), 'A', KEY_A, true } };
 	uiSkinFooter(buf, acts, 1);
 	return true;
@@ -64857,6 +65338,10 @@ int main(int argc, char* argv[])
 			// eight authored OPTION_* rows over an arbitrarily long bList; this
 			// port keeps the same eight-row window over g_profileEntries and
 			// pages it the same way the jukebox rows page.
+			// PORT: on the lower screen in the kit (drawUiMcList()), a tap is
+			// the keys it stands for: a row, Load (A), Create (X), No Profile (B).
+			if (menu.navBottom)
+				kDown |= feTouchKeys(&menu, &dlgMenu, kDown);
 			int vdir = 0;
 			if (kDown & KEY_UP)   vdir = -1;
 			if (kDown & KEY_DOWN) vdir = +1;
@@ -65042,7 +65527,25 @@ int main(int argc, char* argv[])
 				// The field's line, a little either side of the authored
 				// String, which has no box of its own to hit.
 				bool tapField = false;
-				if (touchTapped() && menu.mcField >= 0) {
+				if (touchTapped() && mcNameSkinLive(&menu)) {
+					// PORT: the kit's field, Accept and Back (drawUiMcName()).
+					const float tx = (float)g_touch.x, ty = (float)g_touch.y;
+					for (int k = 0; k < g_mcNameHitN; k++) {
+						const float* r = g_mcNameHit[k].r;
+						if (tx < r[0] || tx >= r[0] + r[2] || ty < r[1] || ty >= r[1] + r[3])
+							continue;
+						const int id = g_mcNameHit[k].button;
+						if (id == MCNAME_HIT_FIELD)
+							tapField = true;
+						else
+							kDown |= id == MCNAME_HIT_ACCEPT ? KEY_A : KEY_B;
+						char tb[80];
+						snprintf(tb, sizeof(tb), "fe touch: name entry %s tapped",
+							id == MCNAME_HIT_FIELD ? "field" : id == MCNAME_HIT_ACCEPT ? "Accept" : "Back");
+						dlog(tb);
+						break;
+					}
+				} else if (touchTapped() && menu.mcField >= 0) {
 					const float fy = menuWidgetY(&menu, menu.mcField);
 					tapField = (float)g_touch.y >= fy - FE_TOUCH_MIN_PX * 0.5f &&
 						(float)g_touch.y <= fy + FE_TOUCH_MIN_PX;
@@ -66283,6 +66786,18 @@ int main(int argc, char* argv[])
 				// are 60 KB of widget tree apiece and there is no reason for two
 				// to be resident when only one is ever on screen.
 				WorldLoadUi loadUi = { targetTop, targetBottom, &menu, 0 };
+				// PORT: what the world opens on, for the panel under the
+				// loading screen: the dyno, a race the frontend set up (Quick
+				// Race, LAN -- mode 8 an Outrun -- or the crib's world map) or
+				// free roam (a Quick Race's Free Run too).
+				if (g_tune.pending)
+					loadCtxSet(LOADK_TUNE, NULL, false);
+				else if (g_qr.pending && !g_qr.freeRun)
+					loadCtxSet(LOADK_RACE, &g_qr.ev, lanStart && g_lanGo.set.mode == 8);
+				else if (g_mapEventPending)
+					loadCtxSet(LOADK_RACE, &g_mapEvent, false);
+				else
+					loadCtxSet(LOADK_FREE_ROAM, NULL, false);
 				bool haveLoadUi = loadingUp || (haveConfig &&
 					loadFngScreen(&cfg, LOADING_FNG, true, &menu));
 				if (!haveLoadUi)
@@ -67944,6 +68459,8 @@ int main(int argc, char* argv[])
 				// inside them (loadpump.h), the dots where their script is.
 				WorldLoadUi leaveUi = { targetTop, targetBottom,
 					haveConfig ? loadingScreenResident(&cfg) : NULL, 0 };
+				// PORT: the frontend has no driving: the panel below has tips alone.
+				loadCtxSet(LOADK_NONE, NULL, false);
 				const bool leaveLoadUp = leaveUi.screen != NULL;
 				if (leaveLoadUp)
 					g_loadingScreen.scriptT0 = osGetTime();
@@ -69608,13 +70125,16 @@ int main(int argc, char* argv[])
 			menu.loaded && worldUiOnBottom(&menu);
 		if (bootState == BOOT_WORLD && worldUi != WORLD_UI_NONE && menu.loaded)
 			menu.screenW = worldDialog ? BOTTOM_W : SCREEN_TOP_W;
-		// MC_Main.fng's name entry is on the lower panel (#285), over its own
-		// copy of the memory-card parent; the top screen keeps that parent.
-		// So is Start New Career's question, laid out for the frontend's lower
-		// panel (mcMainSetPhase()); the boot one stays on the top screen.
-		const bool nameBottom = menu.loaded && menu.isMcMain &&
+		// MC_Main.fng's name entry is on the lower panel (#285); the top
+		// screen keeps the memory-card parent's title art. So is its question,
+		// Start New Career's and the boot's (mcMainSetPhase()), and PORT: the
+		// boot's profile list, laid out for the lower panel like the profile
+		// manager's (menuNavOnBottom()) -- all of them in the kit.
+		const bool nameBottom = menu.loaded &&
+			((menu.isMcMain &&
 			((bootState == BOOT_PROFILE_NAME_ENTRY && menu.mcPhase == MCMAIN_NAME) ||
-			(bootState == BOOT_PROFILE_PROMPT && menu.screenW == SCREEN_BOT_W));
+			(bootState == BOOT_PROFILE_PROMPT && menu.screenW == SCREEN_BOT_W))) ||
+			(bootState == BOOT_PROFILE_SELECT && menu.isMcList && menu.navBottom));
 		if (nameBottom && mcBackMenu.loaded) {
 			sceneBegin(targetTop);
 			mcBackMenu.screenW = SCREEN_TOP_W;
@@ -69623,8 +70143,8 @@ int main(int argc, char* argv[])
 			scissorReset();
 		}
 		if ((bootState == BOOT_FNG_STAGE || bootState == BOOT_TITLE ||
-				((bootState == BOOT_PROFILE_PROMPT || bootState == BOOT_PROFILE_NAME_ENTRY) &&
-				!nameBottom) || bootState == BOOT_PROFILE_SELECT ||
+				((bootState == BOOT_PROFILE_PROMPT || bootState == BOOT_PROFILE_NAME_ENTRY ||
+				bootState == BOOT_PROFILE_SELECT) && !nameBottom) ||
 				bootState == BOOT_MENU ||
 				(bootState == BOOT_WORLD && worldUi != WORLD_UI_NONE && !worldDialog)) && menu.loaded &&
 				!(g_feSkip & FS_BOTTOM)) {
@@ -69900,7 +70420,10 @@ int main(int argc, char* argv[])
 			profEnd(PROF_MENU2D);
 		} else if (nameBottom) {
 			profBegin(PROF_MENU2D);
-			if (mcBackMenu.loaded) {
+			// The parent's art under the raw .fng only: the kit's screens
+			// (drawUiMcAsk(), drawUiMcName(), drawUiMcList()) cover the panel
+			// with their own backdrop, and the top screen has the art.
+			if (mcBackMenu.loaded && !g_uiFont) {
 				mcBackMenu.screenW = SCREEN_BOT_W;
 				menuClipBegin(&mcBackMenu);
 				drawMenu(&mcBackMenu, fngStageFrames);
