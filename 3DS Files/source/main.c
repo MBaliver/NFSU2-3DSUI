@@ -9115,9 +9115,11 @@ typedef struct {
 	int   wMark[REPLAY_MARKS_MAX];
 	bool  baseHidden[FNG_MAX_WIDGETS];
 	u8    baseColor[3][4];  // PLAY, PAUSE, SLOW as authored
+	bool  scrubbing;        // touch-drag on the 3DS timeline bar
 } ReplayUi;
 static ReplayUi g_replayUi = { .pov = -1 };
 static void replayRaceBegin(void);
+static void drawUiReplay(void);
 
 // The Strings ReplayMenu prints itself, which the loader leaves blank.
 static bool replayOwns(u32 objHash) {
@@ -46372,29 +46374,50 @@ static WorldUiMode replayUiExit(const Config* cfg, MenuState* menu) {
 	return u->fromPostRace ? WORLD_UI_POSTRACE : WORLD_UI_PAUSE;
 }
 
-// ReplayMenu's NotificationMessage on the pad, the icons taking a tap as
-// their buttons, then the playback's frame. True: Exit.
+// ReplayMenu's NotificationMessage on the pad, the 3DS touch deck's big
+// buttons and scrubbable timeline bar, then the playback's frame. True: Exit.
 static bool replayUiInput(MenuState* m, u32 kDown, float dt) {
 	ReplayUi* u = &g_replayUi;
 	char b[128];
+	const float s = replay_start(), e = replay_end();
+	// Touch-drag scrubbing on the timeline card (y 44..102, track x 22..298).
+	if (!u->hidden && e > s + 1e-3f) {
+		if (g_touch.down && g_touch.x >= 10 && g_touch.x <= 310 && g_touch.y >= 44 && g_touch.y <= 104)
+			u->scrubbing = true;
+		if (!g_touch.held)
+			u->scrubbing = false;
+		if (u->scrubbing && g_touch.held) {
+			float f = ((float)g_touch.x - 22.0f) / (298.0f - 22.0f);
+			if (f < 0.0f) f = 0.0f;
+			if (f > 1.0f) f = 1.0f;
+			u->t = s + f * (e - s);
+			u->prevT = u->t;
+		}
+	} else {
+		u->scrubbing = false;
+	}
 	int tx, ty;
-	if (touchTapAt(&tx, &ty)) {
-		if (u->hidden)
+	if (!u->scrubbing && touchTapAt(&tx, &ty)) {
+		if (u->hidden) {
 			kDown |= KEY_X;
-		else if (menuTouchHitsWidget(m, u->wSkipB, WM_TOUCH_MIN_PX, tx, ty))
-			kDown |= KEY_L;
-		else if (menuTouchHitsWidget(m, u->paused ? u->wPause : u->wPlay, WM_TOUCH_MIN_PX, tx, ty))
-			kDown |= KEY_A;
-		else if (menuTouchHitsWidget(m, u->wSlow, WM_TOUCH_MIN_PX, tx, ty))
-			kDown |= KEY_Y;
-		else if (menuTouchHitsWidget(m, u->wSkipF, WM_TOUCH_MIN_PX, tx, ty))
-			kDown |= KEY_R;
-		else if (menuTouchHitsWidget(m, u->wCam, WM_TOUCH_MIN_PX, tx, ty))
-			kDown |= KEY_B;
-		else if (menuTouchHitsWidget(m, u->wExit, WM_TOUCH_MIN_PX, tx, ty))
-			kDown |= KEY_START;
-		else if (menuTouchHitsWidget(m, u->wHide, WM_TOUCH_MIN_PX, tx, ty))
-			kDown |= KEY_X;
+		} else if (ty < 38) {
+			if (tx < 110)
+				kDown |= KEY_START;  // Exit
+			else if (tx > 210)
+				kDown |= KEY_X;      // Hide
+		} else if (ty >= 110 && ty <= 166) {
+			if (tx < 96)
+				kDown |= KEY_L;      // Jump Back
+			else if (tx > 224)
+				kDown |= KEY_R;      // Jump Forward
+			else
+				kDown |= KEY_A;      // Play / Pause
+		} else if (ty >= 172 && ty <= 232) {
+			if (tx < 160)
+				kDown |= KEY_Y;      // Slow-Mo
+			else
+				kDown |= KEY_B;      // Camera
+		}
 	}
 	const u32 keys = KEY_A | KEY_B | KEY_X | KEY_Y | KEY_L | KEY_R | KEY_START;
 	if (u->hidden && (kDown & keys)) {
@@ -46402,7 +46425,6 @@ static bool replayUiInput(MenuState* m, u32 kDown, float dt) {
 		kDown = 0;
 		dlog("replay: Hide -- the screen back");
 	}
-	const float s = replay_start(), e = replay_end();
 	if (kDown & KEY_START) {   // 0xB5AF2461, StartExiting
 		return true;
 	} else if (kDown & KEY_A) {   // 0x0C407210, TogglePause
@@ -46448,7 +46470,7 @@ static bool replayUiInput(MenuState* m, u32 kDown, float dt) {
 	// The frame: the time on, the race posed there, and the world around it
 	// stepped by as much, as worldInput()'s tail and the effects do.
 	float step = 0.0f;
-	if (!u->paused) {
+	if (!u->paused && !u->scrubbing) {
 		step = dt * (u->slow ? REPLAY_SLOW_RATE : 1.0f);
 		u->t += step;
 		if (u->t >= e) {
@@ -61262,6 +61284,112 @@ static void drawUiPostRace(MenuState* m) {
 	}
 }
 
+// PORT: full 3DS touch-screen Replay Deck in the U2-UI kit (replaces the tiny
+// squished PC bar with a scrubbable timeline and large legible transport/camera buttons).
+static void drawUiReplay(void) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	const ReplayUi* u = &g_replayUi;
+	if (u->hidden || !buf || !g_uiFont) {
+		drawBottomLogo();
+		return;
+	}
+	C2D_TextBufClear(buf);
+	scissorReset();
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+
+	// ---- header: Exit (START), Replay / Lap, Hide (X) ----
+	uiBand2(0.0f, UI_HEAD_H, true);
+	const char* exitLbl = portstr(PS_BACK);
+	const float exitW = uiMeasure(buf, exitLbl, 14.0f) + 13.0f + 6.0f + 26.0f;
+	uiButton(buf, 6.0f, 5.0f, exitW, 26.0f, 't', exitLbl, false, false);
+	const char* hideLbl = u->label[1][0] ? u->label[1] : "Hide";
+	const float hideW = uiMeasure(buf, hideLbl, 14.0f) + 13.0f + 6.0f + 26.0f;
+	uiButton(buf, W - 6.0f - hideW, 5.0f, hideW, 26.0f, 'X', hideLbl, false, false);
+	char hdr[40];
+	if (u->shown[1][0] && u->shown[2][0])
+		snprintf(hdr, sizeof(hdr), "%s %s/%s", u->label[0][0] ? u->label[0] : "Lap", u->shown[1], u->shown[2]);
+	else
+		snprintf(hdr, sizeof(hdr), "Replay");
+	uiText(buf, hdr, 17.0f, W * 0.5f, 18.0f, 1, UI_ACCENT, W - exitW - hideW - 24.0f);
+
+	// ---- scrubbable timeline card (y 44..102) ----
+	const float s = replay_start(), e = replay_end();
+	const float span = e > s + 1e-3f ? e - s : 1.0f;
+	float frac = (u->t - s) / span;
+	if (frac < 0.0f) frac = 0.0f;
+	if (frac > 1.0f) frac = 1.0f;
+	uiChip(10.0f, 44.0f, W - 20.0f, 58.0f, 0);
+	const char* stLbl = u->paused ? "PAUSED" : u->slow ? "0.25x SLOW" : "PLAYING";
+	uiLabel(buf, stLbl, 22.0f, 58.0f, 0, (u->paused || u->slow) ? UI_ACCENT : UI_DIM);
+	char curT[20], endT[20], tLine[48];
+	race_print_time((s32)((u->t - s) * 4000.0f), 4, curT);
+	race_print_time((s32)((e - s) * 4000.0f), 4, endT);
+	snprintf(tLine, sizeof(tLine), "%s / %s", curT, endT);
+	uiText(buf, tLine, 16.0f, W - 22.0f, 58.0f, 2, UI_WHITE, 0.0f);
+	// Track + marks + fill + draggable thumb
+	const float tx0 = 22.0f, tw = W - 44.0f, ty = 81.0f, th = 8.0f;
+	uiRoundRect(tx0, ty, tw, th, 4.0f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 36));
+	if (frac > 0.0f)
+		uiRoundRect(tx0, ty, tw * frac, th, 4.0f, UI_Z + 0.015f, UI_ACCENT);
+	for (int k = 0; k < u->nMarks; k++) {
+		const float mf = (u->marks[k] - s) / span;
+		if (mf > 0.01f && mf < 0.99f)
+			C2D_DrawRectSolid(tx0 + tw * mf - 1.0f, ty - 2.0f, UI_Z + 0.02f, 2.0f, th + 4.0f,
+				C2D_Color32(255, 255, 255, 160));
+	}
+	const float kx = tx0 + tw * frac, ky = ty + th * 0.5f;
+	C2D_DrawCircleSolid(kx, ky, UI_Z + 0.025f, u->scrubbing ? 9.0f : 7.0f, UI_WHITE);
+	C2D_DrawCircleSolid(kx, ky, UI_Z + 0.03f, u->scrubbing ? 5.0f : 3.5f, UI_ACCENT);
+
+	// ---- transport row (y 112..164): Jump Back (L), Play/Pause (A), Jump Fwd (R) ----
+	const float r1y = 112.0f, r1h = 52.0f, r1cy = r1y + r1h * 0.5f;
+	// Jump Back (L)
+	uiPill(10.0f, r1y, 82.0f, r1h, false, UI_Z + 0.015f);
+	if (g_padSheetState == 1)
+		drawPadGlyphRaw('L', 30.0f, r1cy, 15.0f, UI_Z + 0.04f);
+	C2D_DrawRectSolid(48.0f, r1cy - 6.0f, UI_Z + 0.03f, 2.5f, 12.0f, UI_WHITE);
+	C2D_DrawTriangle(60.0f, r1cy - 6.0f, UI_WHITE, 60.0f, r1cy + 6.0f, UI_WHITE,
+		51.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
+	C2D_DrawTriangle(70.0f, r1cy - 6.0f, UI_WHITE, 70.0f, r1cy + 6.0f, UI_WHITE,
+		61.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
+
+	// Play / Pause (A) -- center primary
+	uiPill(100.0f, r1y, 120.0f, r1h, true, UI_Z + 0.015f);
+	if (g_padSheetState == 1)
+		drawPadGlyphRaw('A', 124.0f, r1cy, 16.0f, UI_Z + 0.04f);
+	if (u->paused) {
+		C2D_DrawTriangle(144.0f, r1cy - 7.0f, UI_ACCENT, 144.0f, r1cy + 7.0f, UI_ACCENT,
+			156.0f, r1cy, UI_ACCENT, UI_Z + 0.03f);
+		uiText(buf, "Play", 16.0f, 164.0f, r1cy, 0, UI_ACCENT, 48.0f);
+	} else {
+		C2D_DrawRectSolid(144.0f, r1cy - 7.0f, UI_Z + 0.03f, 3.5f, 14.0f, UI_ACCENT);
+		C2D_DrawRectSolid(151.0f, r1cy - 7.0f, UI_Z + 0.03f, 3.5f, 14.0f, UI_ACCENT);
+		uiText(buf, "Pause", 16.0f, 162.0f, r1cy, 0, UI_ACCENT, 50.0f);
+	}
+
+	// Jump Forward (R)
+	uiPill(228.0f, r1y, 82.0f, r1h, false, UI_Z + 0.015f);
+	C2D_DrawTriangle(244.0f, r1cy - 6.0f, UI_WHITE, 244.0f, r1cy + 6.0f, UI_WHITE,
+		253.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
+	C2D_DrawTriangle(254.0f, r1cy - 6.0f, UI_WHITE, 254.0f, r1cy + 6.0f, UI_WHITE,
+		263.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
+	C2D_DrawRectSolid(264.0f, r1cy - 6.0f, UI_Z + 0.03f, 2.5f, 12.0f, UI_WHITE);
+	if (g_padSheetState == 1)
+		drawPadGlyphRaw('R', 288.0f, r1cy, 15.0f, UI_Z + 0.04f);
+
+	// ---- bottom utility row (y 174..226): Slow-Mo (Y) & Camera (B) ----
+	const float r2y = 174.0f, r2h = 52.0f, r2w = (W - 28.0f) * 0.5f;
+	uiButton(buf, 10.0f, r2y, r2w, r2h, 'Y', u->slow ? "Slow 0.25x" : "Slow-Mo", u->slow, u->slow);
+	static const char* const kCamNames[6] = {
+		"Cam: Auto", "Cam: Bumper", "Cam: Hood", "Cam: Near", "Cam: Far", "Cam: High"
+	};
+	const char* camTxt = (u->camIdx >= 0 && u->camIdx < 6) ? kCamNames[u->camIdx] : "Camera";
+	uiButton(buf, 18.0f + r2w, r2y, r2w, r2h, 'B', camTxt, false, false);
+}
+
 // A tap on the post-race page: the keys its target stands for. While a
 // confirm is up it is the dialog's (drawUiDialog()'s buttons via
 // feTouchKeys()), and the page under it takes nothing.
@@ -70468,10 +70596,12 @@ int main(int argc, char* argv[])
 			g_tuneBackdrop = false;
 			if (worldUi == WORLD_UI_TUNE || worldUi == WORLD_UI_PAUSE)
 				carouselTick(&menu, frameDt);
-			// The replay's panel under the NFSU2 logo (replayUiFit()).
-			if (worldUi == WORLD_UI_REPLAY)
-				drawBottomLogoAt(REPLAY_LOGO_CY, REPLAY_LOGO_W);
-			drawMenu(&menu, fngStageFrames);
+			// PORT: full 3DS touch Replay Deck instead of the tiny PC bar.
+			if (worldUi == WORLD_UI_REPLAY) {
+				drawUiReplay();
+			} else {
+				drawMenu(&menu, fngStageFrames);
+			}
 			if (worldUi == WORLD_UI_TUNE || worldUi == WORLD_UI_PAUSE)
 				drawCarousel(&menu);
 			// The world map's own GenericDialog, over it on the same panel,
