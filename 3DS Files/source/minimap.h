@@ -410,6 +410,25 @@ void minimap_set_view_zoom(Minimap* m, float z);
 float minimap_view_zoom(const Minimap* m);
 bool minimap_world_to_panel(const Minimap* m, float wx, float wy, float* sx, float* sy);
 
+// PORT: a second view of the same map (the pause's, on the top screen). The
+// pan, the zoom, the last draw's placement (minimap_world_to_panel(), the
+// pan's pixel scale) and the panel's shape are one view's; a caller that
+// draws another view takes them with minimap_view_get() first and puts them
+// back with minimap_view_set() after, so the bottom panel's touch and pan
+// find their own.
+typedef struct {
+	float panX, panY, lastAngle, lastPerArt, lastCarX, lastCarY, viewZoom;
+	float lastCx, lastCy, lastViewX, lastViewY, lastX0, lastY0, lastX1, lastY1;
+	bool  drawn, square;
+} MinimapView;
+void minimap_view_get(const Minimap* m, MinimapView* v);
+void minimap_view_set(Minimap* m, const MinimapView* v);
+
+// PORT: the logical size of the target minimap_draw() draws into, for its
+// scissor: 320x240 (the bottom screen) by default, 400x240 for the top one.
+// 0 restores the default.
+void minimap_set_screen(float w, float h);
+
 void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 	float x, float y, float w, float h, MinimapMode mode,
 	const MinimapMarker* markers, int markerCount, const MinimapGps* gps);
