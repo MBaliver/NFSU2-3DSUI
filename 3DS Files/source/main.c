@@ -27476,10 +27476,16 @@ static int g_fskListSel;
 // Where the dyno's graph skins laid out their plots (drawUiTuneGraph(),
 // drawUiTuneNos()), for tuneGraphTouch() and tuneNosTouch() while one is live.
 static struct { bool on; float x, y, w, h, knob; } g_uiTg, g_uiNos;
+static bool g_fskScrollOn = false;
+static bool g_fskScrolling = false;
+static float g_fskScrollY0 = 0.0f, g_fskScrollH = 0.0f;
+static int g_fskScrollN = 0, g_fskScrollVis = 0;
+
 static void fskBegin(const MenuState* m) {
 	g_fskMenu = m;
 	g_fskMs = osGetTime();
 	g_fskN = 0;
+	g_fskScrollOn = false;
 }
 static void fskHit(float x, float y, float w, float h, int kind, u32 arg) {
 	if (g_fskN < FSK_MAX)
@@ -27491,7 +27497,51 @@ static bool fskLive(const MenuState* m) {
 // A tap on the live skin: the keys it stands for (or a queued walk to the
 // tapped item / row). Later hits are on top, so they are tried first.
 static u32 fskTouchKeys(MenuState* m, char* b, size_t cap) {
-	if (!fskLive(m) || !touchTapped())
+	if (!fskLive(m)) {
+		g_fskScrolling = false;
+		return 0;
+	}
+	// Interactive scrollbar: click or drag on the right-edge track jumps to
+	// the proportional item in the list.
+	if (g_fskScrollOn && g_fskScrollN > g_fskScrollVis && g_fskScrollH > 1.0f) {
+		if (g_touch.down && g_touch.x >= SCREEN_BOT_W - 22 &&
+				g_touch.y >= g_fskScrollY0 - 4.0f && g_touch.y <= g_fskScrollY0 + g_fskScrollH + 4.0f)
+			g_fskScrolling = true;
+		if (!g_touch.held)
+			g_fskScrolling = false;
+		if (g_fskScrolling && g_touch.held) {
+			float f = ((float)g_touch.y - g_fskScrollY0) / g_fskScrollH;
+			if (f < 0.0f) f = 0.0f;
+			if (f > 1.0f) f = 1.0f;
+			int tgt = (int)floorf(f * (float)(g_fskScrollN - 1) + 0.5f);
+			if (tgt < 0) tgt = 0;
+			if (tgt >= g_fskScrollN) tgt = g_fskScrollN - 1;
+			if (m->hasModeRows && m->modeRowCount > 0) {
+				if (tgt != m->modeRowSel) {
+					if (tgt > 0) { m->modeRowSel = tgt - 1; return KEY_DOWN; }
+					m->modeRowSel = 1; return KEY_UP;
+				}
+			} else if (m->isBodyShop && g_bodyShop.browsing) {
+				if (tgt != g_bodyShop.sel) {
+					if (tgt > 0) { g_bodyShop.sel = tgt - 1; return KEY_DOWN; }
+					g_bodyShop.sel = 1; return KEY_UP;
+				}
+			} else if (m->isMcList && m->listCount > 0) {
+				if (tgt != m->listSel) {
+					if (tgt > 0) { m->listSel = tgt - 1; return KEY_DOWN; }
+					m->listSel = 1; return KEY_UP;
+				}
+			} else if (m->lanKind) {
+				m->lanSel = tgt;
+			} else if (tgt != g_fskListSel) {
+				feTouchQueue(tgt > g_fskListSel ? KEY_DOWN : KEY_UP, abs(tgt - g_fskListSel));
+			}
+			return 0;
+		}
+	} else {
+		g_fskScrolling = false;
+	}
+	if (!touchTapped())
 		return 0;
 	const float x = (float)g_touch.x, y = (float)g_touch.y;
 	for (int k = g_fskN - 1; k >= 0; k--) {
@@ -59656,6 +59706,11 @@ static void uiListBar(int top, int vis, int n, float y0, float rowH) {
 	uiRoundRect(BOTTOM_W - 12.0f, y0, 4.0f, sh, 2.0f, UI_Z, C2D_Color32(255, 255, 255, 26));
 	uiRoundRect(BOTTOM_W - 12.0f, y0 + (sh - th) * (float)top / (float)(n - vis), 4.0f, th, 2.0f,
 		UI_Z + 0.01f, UI_ACCENT);
+	g_fskScrollOn = true;
+	g_fskScrollY0 = y0;
+	g_fskScrollH = sh;
+	g_fskScrollN = n;
+	g_fskScrollVis = vis;
 }
 // A strip of tabs, the screen's own options (an IconScroller's items): the
 // current one lit, the locked ones dim, a tap walks there (FSK_ITEM). Up to
@@ -60569,12 +60624,7 @@ static bool drawUiRows(const MenuState* m) {
 		}
 		fskHit(rx, y, button ? rw : rw - valW - 10.0f, h, button ? FSK_ROWA : FSK_ROW, (u32)r);
 	}
-	if (n > vis && vis > 0) {
-		const float sh = (float)vis * rowH - 4.0f, th = sh * (float)vis / (float)n;
-		uiRoundRect(W - 12.0f, y0, 4.0f, sh, 2.0f, UI_Z, C2D_Color32(255, 255, 255, 26));
-		uiRoundRect(W - 12.0f, y0 + (sh - th) * (float)s_top / (float)(n - vis), 4.0f, th, 2.0f,
-			UI_Z + 0.01f, UI_ACCENT);
-	}
+	uiListBar(s_top, vis, n, y0, rowH);
 	if (foot && m->modeIsTune) {
 		// TuningSlidersMenu: BUTTON1 resets the row, the tip on X.
 		const UiAct kTune[2] = { { portstr(PS_TIP), 'X', KEY_X, false }, { portstr(PS_RESET), 'Y', KEY_Y, false } };
