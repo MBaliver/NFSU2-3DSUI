@@ -61703,20 +61703,35 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 		drawWorldStatus(buf);
 }
 
-// PORT (the user, 2026-11-24): while a modal/pause menu pauses the 3D world
-// and asks for interaction on the lower panel, the top screen dims the 3D
-// scene and shows a compact indicator at the bottom edge pointing attention
-// down to the touch screen.
-static void drawPauseTop(WorldUiMode ui) {
+// PORT (the user, 2026-11-24): while a modal/pause menu or boot profile prompt
+// asks for interaction on the lower panel, dim the top screen and show a
+// compact indicator at the bottom edge pointing attention down to the touch screen.
+static void drawTopDownCue(const char* label, u8 dimAlpha) {
 	static C2D_TextBuf buf = NULL;
 	if (!buf)
 		buf = C2D_TextBufNew(256);
 	scissorReset();
 	const float W = SCREEN_TOP_W, H = SCREEN_TOP_H;
-	C2D_DrawRectSolid(0.0f, 0.0f, 0.05f, W, H, C2D_Color32(0, 0, 0, 128));
-	if (!buf || !g_uiFont)
+	if (dimAlpha > 0)
+		C2D_DrawRectSolid(0.0f, 0.0f, 0.05f, W, H, C2D_Color32(0, 0, 0, dimAlpha));
+	if (!buf || !g_uiFont || !label || !label[0])
 		return;
 	C2D_TextBufClear(buf);
+	const float lw = uiMeasure(buf, label, UI_LABEL_PX);
+	const float ph = 20.0f, pw = lw + 38.0f;
+	const float px = floorf((W - pw) * 0.5f), py = H - ph - 6.0f, cy = py + ph * 0.5f;
+	uiRoundRect(px, py, pw, ph, ph * 0.5f, UI_Z, C2D_Color32(0, 0, 0, 210));
+	uiPill(px, py, pw, ph, true, UI_Z + 0.005f);
+	// Downward chevrons flanking the label, pointing attention to the bottom screen.
+	const float lx = px + 11.0f, rx = px + pw - 11.0f;
+	C2D_DrawTriangle(lx - 3.5f, cy - 2.0f, UI_ACCENT, lx + 3.5f, cy - 2.0f, UI_ACCENT,
+		lx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
+	C2D_DrawTriangle(rx - 3.5f, cy - 2.0f, UI_ACCENT, rx + 3.5f, cy - 2.0f, UI_ACCENT,
+		rx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
+	uiLabel(buf, label, W * 0.5f, cy, 1, UI_ACCENT);
+}
+
+static void drawPauseTop(WorldUiMode ui) {
 	char label[64];
 	if (ui == WORLD_UI_PAUSE)
 		snprintf(label, sizeof(label), "%s", portstr_caps(PS_PAUSE_TITLE));
@@ -61736,18 +61751,7 @@ static void drawPauseTop(WorldUiMode ui) {
 	} else {
 		snprintf(label, sizeof(label), "%s", portstr_caps(PS_PAUSE_TITLE));
 	}
-	const float lw = uiMeasure(buf, label, UI_LABEL_PX);
-	const float ph = 20.0f, pw = lw + 38.0f;
-	const float px = floorf((W - pw) * 0.5f), py = H - ph - 6.0f, cy = py + ph * 0.5f;
-	uiRoundRect(px, py, pw, ph, ph * 0.5f, UI_Z, C2D_Color32(0, 0, 0, 210));
-	uiPill(px, py, pw, ph, true, UI_Z + 0.005f);
-	// Downward chevrons flanking the label, pointing attention to the bottom screen.
-	const float lx = px + 11.0f, rx = px + pw - 11.0f;
-	C2D_DrawTriangle(lx - 3.5f, cy - 2.0f, UI_ACCENT, lx + 3.5f, cy - 2.0f, UI_ACCENT,
-		lx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
-	C2D_DrawTriangle(rx - 3.5f, cy - 2.0f, UI_ACCENT, rx + 3.5f, cy - 2.0f, UI_ACCENT,
-		rx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
-	uiLabel(buf, label, W * 0.5f, cy, 1, UI_ACCENT);
+	drawTopDownCue(label, 128);
 }
 
 // ------------------------------------------------- EA Trax now-playing popup
@@ -70270,8 +70274,8 @@ int main(int argc, char* argv[])
 			profEnd(PROF_MENU2D);
 		}
 
-		// PORT: whenever a modal/pause menu pauses the world and asks for
-		// interaction on the lower panel, dim the top 3D scene and show a
+		// PORT: whenever a modal/pause menu pauses the world (or the boot
+		// profile prompt asks for input below), dim the top screen and show a
 		// compact indicator pointing attention down to the touch screen.
 		if (bootState == BOOT_WORLD && worldDialog &&
 				(worldUi == WORLD_UI_PAUSE || worldUi == WORLD_UI_ENGAGE ||
@@ -70280,6 +70284,11 @@ int main(int argc, char* argv[])
 			sceneBegin(targetTop);
 			profBegin(PROF_MENU2D);
 			drawPauseTop(worldUi);
+			profEnd(PROF_MENU2D);
+		} else if (nameBottom) {
+			sceneBegin(targetTop);
+			profBegin(PROF_MENU2D);
+			drawTopDownCue(portstr_caps(PS_T_PROFILES), 90);
 			profEnd(PROF_MENU2D);
 		}
 
