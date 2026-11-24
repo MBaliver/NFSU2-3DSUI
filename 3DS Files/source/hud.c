@@ -3226,9 +3226,43 @@ void hud_draw(Hud* h, const HudFrame* f, C2D_Font font, float fontUnitPx) {
 		case HE_GEAR:
 			drawString(h, e, gear, gearColor, font, fontUnitPx, 1.0f, 0.0f);
 			break;
-		case HE_LAP_TEXT:
-			drawString(h, e, lapText, h->w[e].color, font, fontUnitPx, 1.0f, 0.0f);
+		case HE_LAP_TEXT: {
+			float dx = 0.0f;
+			// PORT: "Completed" (and its translations) is much wider than "Lap",
+			// so when HUD_MIN_TEXT_PX lifts it, shift it left to keep a clean
+			// gap before the "%d%%" value in HE_NUM_LAPS.
+			if (lapText == h->sCompleted && numLaps[0] && h->w[HE_NUM_LAPS].found) {
+				HudWidget lgL, lgN;
+				float lkL, lkN;
+				const HudWidget* wL = lapGroupWidget(h, HE_LAP_TEXT, &lgL, &lkL);
+				const HudWidget* wN = lapGroupWidget(h, HE_NUM_LAPS, &lgN, &lkN);
+				C2D_Text tL, tN;
+				C2D_TextFontParse(&tL, font, h->buf, lapText);
+				C2D_TextFontParse(&tN, font, h->buf, numLaps);
+				float scL = (wL->fontPt ? (float)wL->fontPt : 21.0f) * wL->h * HUD_SCALE / fontUnitPx;
+				if (scL < HUD_MIN_TEXT_PX / fontUnitPx) scL = HUD_MIN_TEXT_PX / fontUnitPx;
+				scL *= lkL;
+				float scN = (wN->fontPt ? (float)wN->fontPt : 21.0f) * wN->h * HUD_SCALE / fontUnitPx;
+				if (scN < HUD_MIN_TEXT_PX / fontUnitPx) scN = HUD_MIN_TEXT_PX / fontUnitPx;
+				scN *= lkN;
+				float twL = 0.0f, thL = 0.0f, twN = 0.0f, thN = 0.0f;
+				textDims(&tL, scL, scL, &twL, &thL);
+				textDims(&tN, scN, scN, &twN, &thN);
+				float xL = originX(HE_LAP_TEXT) + wL->x * HUD_SCALE;
+				if (wL->justify & 0x1) xL -= twL * 0.5f;
+				else if (wL->justify & 0x2) xL -= twL;
+				float xN = originX(HE_NUM_LAPS) + wN->x * HUD_SCALE;
+				if (wN->justify & 0x1) xN -= twN * 0.5f;
+				else if (wN->justify & 0x2) xN -= twN;
+				if (xN + twN > s_hudClipW - HUD_EDGE_PAD)
+					xN = s_hudClipW - HUD_EDGE_PAD - twN;
+				const float overlap = (xL + twL) - (xN - 6.0f);
+				if (overlap > 0.0f && HUD_SCALE * lkL > 0.0f)
+					dx = -overlap / (HUD_SCALE * lkL);
+			}
+			drawStringAt(h, e, lapText, h->w[e].color, font, fontUnitPx, 1.0f, dx, 0.0f);
 			break;
+		}
 		case HE_LAP_NUMBER:
 			drawString(h, e, lapNumber, h->w[e].color, font, fontUnitPx, 1.0f, 0.0f);
 			break;

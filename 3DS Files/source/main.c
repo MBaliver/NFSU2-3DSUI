@@ -15652,6 +15652,39 @@ static void postRaceResolve(MenuState* m, int scr, const LangTable* lang) {
 // rows n+1..6, and every row's bar stays at its INIT's alpha 0 except a
 // highlighted row's, which the HIGHLIGHT script brings up.
 static void postRaceLayout(MenuState* m) {
+	// PORT: post-race actions live on the touch screen (drawUiPostRace()),
+	// so hide the original bottom-bar button legends on the top screen.
+	if (postRaceScreenOf(m->screenName) > 0) {
+		for (int k = 0; k < m->padGlyphCount; k++) {
+			const int gi = m->padGlyphIdx[k];
+			if (gi < 0 || gi >= m->screen.widgetCount)
+				continue;
+			const float gy = m->worldPosY[gi];
+			menuHideSubtree(m, gi, true);
+			if (gy > 80.0f) {
+				const int par = m->screen.widgets[gi].parentIndex;
+				if (par >= 0 && par < m->screen.widgetCount) {
+					int kids = 0;
+					for (int j = 0; j < m->screen.widgetCount; j++)
+						if (m->screen.widgets[j].parentIndex == par)
+							kids++;
+					if (kids <= 4)
+						menuHideSubtree(m, par, true);
+				}
+				for (int j = 0; j < m->screen.widgetCount && j < FNG_MAX_WIDGETS; j++) {
+					if (m->screen.widgets[j].type == FNG_TYPE_STRING &&
+							fabsf(m->worldPosY[j] - gy) < 24.0f)
+						menuHideSubtree(m, j, true);
+				}
+			}
+		}
+		for (int i = 0; i < m->screen.widgetCount && i < FNG_MAX_WIDGETS; i++) {
+			const FngWidget* w = &m->screen.widgets[i];
+			if (w->hasObjHash && (w->objHash == PR_NEXT_HASH || w->objHash == PR_STATS_HASH))
+				menuHideSubtree(m, i, true);
+		}
+		m->padGlyphCount = 0;
+	}
 	// The stats screen's: Setup hides the lap list's two headers for a drag
 	// or a point-to-point race, which have no list.
 	if (m->isPostStats && (g_postRace.drag || g_postRace.pointToPoint)) {
@@ -60493,10 +60526,12 @@ static const char* uiAfterColon(const char* s) {
 	return c ? c + 2 : s;
 }
 static bool drawUiEngage(const MenuState* m) {
-	static C2D_TextBuf buf = NULL;
+	static C2D_TextBuf buf = NULL, wrapBuf = NULL;
 	if (!buf)
 		buf = C2D_TextBufNew(4096);
-	if (!buf || !g_uiFont || !m->isEngageDlg || g_engageDlg.kind == ENGAGE_KIND_NONE)
+	if (!wrapBuf)
+		wrapBuf = C2D_TextBufNew(2048);
+	if (!buf || !wrapBuf || !g_uiFont || !m->isEngageDlg || g_engageDlg.kind == ENGAGE_KIND_NONE)
 		return false;
 	C2D_TextBufClear(buf);
 	fskBegin(m);
@@ -60516,11 +60551,13 @@ static bool drawUiEngage(const MenuState* m) {
 	const char* body = g_engStr.body;
 	const float bodyPx = 14.0f, lh = 17.0f;
 	static char wrapped[1024];
-	int lines = body[0] ? uiWrap(buf, body, bodyPx, pw - 24.0f, wrapped, sizeof(wrapped)) : 0;
+	C2D_TextBufClear(wrapBuf);
+	int lines = body[0] ? uiWrap(wrapBuf, body, bodyPx, pw - 24.0f, wrapped, sizeof(wrapped)) : 0;
 	float ph, py;
 	if (race) {
-		py = 8.0f;
-		ph = H - 16.0f;
+		const float bodyH = lines > 0 ? (float)(lines < 5 ? lines : 5) * lh + 10.0f : 6.0f;
+		ph = fminf(H - 16.0f, 92.0f + bodyH + (nb ? 36.0f + 12.0f : 8.0f));
+		py = floorf((H - ph) * 0.5f);
 	} else {
 		ph = 52.0f + (float)(lines < 6 ? lines : 6) * lh + 10.0f + (nb ? 36.0f + 12.0f : 0.0f);
 		py = floorf((H - ph) * 0.5f);
@@ -60571,10 +60608,11 @@ static bool drawUiEngage(const MenuState* m) {
 	const float by = nb ? py + ph - 12.0f - 36.0f : py + ph - 8.0f;
 	float bpx = bodyPx, blh = lh;
 	const float room = by - 8.0f - y;
-	while (lines > 0 && (float)lines * blh > room && bpx > 11.0f) {
+	while (lines > 0 && (float)lines * blh > room && bpx > 10.0f) {
 		bpx -= 1.0f;
 		blh -= 1.0f;
-		lines = uiWrap(buf, body, bpx, pw - 24.0f, wrapped, sizeof(wrapped));
+		C2D_TextBufClear(wrapBuf);
+		lines = uiWrap(wrapBuf, body, bpx, pw - 24.0f, wrapped, sizeof(wrapped));
 	}
 	char* line = wrapped;
 	for (int k = 0; k < lines && line && *line; k++) {
@@ -61612,12 +61650,51 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 		drawWorldStatus(buf);
 }
 
-// PORT (the user, 2026-11-24): while the pause is up, its choices are on the
-// lower panel (menuNavOnBottom()) and the top screen simply dims the paused
-// 3D scene.
-static void drawPauseTop(void) {
+// PORT (the user, 2026-11-24): while a modal/pause menu pauses the 3D world
+// and asks for interaction on the lower panel, the top screen dims the 3D
+// scene and shows a compact indicator at the bottom edge pointing attention
+// down to the touch screen.
+static void drawPauseTop(WorldUiMode ui) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(256);
 	scissorReset();
-	C2D_DrawRectSolid(0.0f, 0.0f, 0.05f, SCREEN_TOP_W, SCREEN_TOP_H, C2D_Color32(0, 0, 0, 128));
+	const float W = SCREEN_TOP_W, H = SCREEN_TOP_H;
+	C2D_DrawRectSolid(0.0f, 0.0f, 0.05f, W, H, C2D_Color32(0, 0, 0, 128));
+	if (!buf || !g_uiFont)
+		return;
+	C2D_TextBufClear(buf);
+	char label[64];
+	if (ui == WORLD_UI_PAUSE)
+		snprintf(label, sizeof(label), "%s", portstr_caps(PS_PAUSE_TITLE));
+	else if (ui == WORLD_UI_MAP)
+		snprintf(label, sizeof(label), "%s", portstr_caps(PS_WORLD_MAP));
+	else if (ui == WORLD_UI_SMS)
+		snprintf(label, sizeof(label), "%s", portstr_caps(PS_MAILBOX));
+	else if (ui == WORLD_UI_STATUS)
+		snprintf(label, sizeof(label), "%s", portstr_caps(PS_LOAD_CAREER_STATS));
+	else if (ui == WORLD_UI_ENGAGE) {
+		const char* s = (g_engageDlg.kind == ENGAGE_KIND_RACE && g_engStr.type[0])
+			? g_engStr.type
+			: (g_engageDlg.kind == ENGAGE_KIND_SHOP ? portstr(PS_SHOP)
+			: (g_engageDlg.kind == ENGAGE_KIND_SHOWCASE ? portstr(PS_MK_SHOWCASE) : portstr(PS_CHALLENGE)));
+		snprintf(label, sizeof(label), "%s", s);
+		portstr_upper(label);
+	} else {
+		snprintf(label, sizeof(label), "%s", portstr_caps(PS_PAUSE_TITLE));
+	}
+	const float lw = uiMeasure(buf, label, UI_LABEL_PX);
+	const float ph = 20.0f, pw = lw + 38.0f;
+	const float px = floorf((W - pw) * 0.5f), py = H - ph - 6.0f, cy = py + ph * 0.5f;
+	uiRoundRect(px, py, pw, ph, ph * 0.5f, UI_Z, C2D_Color32(0, 0, 0, 210));
+	uiPill(px, py, pw, ph, true, UI_Z + 0.005f);
+	// Downward chevrons flanking the label, pointing attention to the bottom screen.
+	const float lx = px + 11.0f, rx = px + pw - 11.0f;
+	C2D_DrawTriangle(lx - 3.5f, cy - 2.0f, UI_ACCENT, lx + 3.5f, cy - 2.0f, UI_ACCENT,
+		lx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
+	C2D_DrawTriangle(rx - 3.5f, cy - 2.0f, UI_ACCENT, rx + 3.5f, cy - 2.0f, UI_ACCENT,
+		rx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
+	uiLabel(buf, label, W * 0.5f, cy, 1, UI_ACCENT);
 }
 
 // ------------------------------------------------- EA Trax now-playing popup
@@ -67923,6 +68000,9 @@ int main(int argc, char* argv[])
 				if (!simHold && want == WORLD_UI_NONE && g_touchOpenUi != WORLD_UI_NONE)
 					want = g_touchOpenUi;
 				g_touchOpenUi = WORLD_UI_NONE;
+				// PORT: never open SMS during an active race.
+				if (g_raceRun.on && want == WORLD_UI_SMS)
+					want = WORLD_UI_NONE;
 				// DbgSleepAt (PORT, a test aid, not retail): Azahar has no lid,
 				// so this many seconds into the world the hook is run as the
 				// system would run it, around a 3 s stall.
@@ -67981,7 +68061,7 @@ int main(int argc, char* argv[])
 						k >= 0 ? "queued" : "not queued (no record, or queued already)",
 						popup ? ", DoAutopopup" : "");
 					dlog(b);
-					if (popup && want == WORLD_UI_NONE && sms_count_unread(&gProfile) > 0)
+					if (popup && !g_raceRun.on && want == WORLD_UI_NONE && sms_count_unread(&gProfile) > 0)
 						want = WORLD_UI_SMS;
 				}
 				// UpdateTick's SMS share, the career clock and Tick
@@ -67990,7 +68070,7 @@ int main(int argc, char* argv[])
 				// that overlay goes, as ConditionsRightToSeeAutopopup's
 				// popup test has it.
 				smsQueueTick(frameDt);
-				if (!simHold && want == WORLD_UI_NONE && smsAutopopup())
+				if (!simHold && !g_raceRun.on && want == WORLD_UI_NONE && smsAutopopup())
 					want = WORLD_UI_SMS;
 				// The tuning race (#417): RCStateRaceInProgress's
 				// FEngStartInteraction while NeedsFEngScreenForDyno -- the
@@ -70137,13 +70217,16 @@ int main(int argc, char* argv[])
 			profEnd(PROF_MENU2D);
 		}
 
-		// PORT: the pause's summary on the top screen, its choices being on
-		// the lower panel -- the map, and the race or the career as it stands
-		// (drawPauseTop()).
-		if (bootState == BOOT_WORLD && worldUi == WORLD_UI_PAUSE && worldDialog) {
+		// PORT: whenever a modal/pause menu pauses the world and asks for
+		// interaction on the lower panel, dim the top 3D scene and show a
+		// compact indicator pointing attention down to the touch screen.
+		if (bootState == BOOT_WORLD && worldDialog &&
+				(worldUi == WORLD_UI_PAUSE || worldUi == WORLD_UI_ENGAGE ||
+				worldUi == WORLD_UI_SMS || worldUi == WORLD_UI_MAP ||
+				worldUi == WORLD_UI_STATUS)) {
 			sceneBegin(targetTop);
 			profBegin(PROF_MENU2D);
-			drawPauseTop();
+			drawPauseTop(worldUi);
 			profEnd(PROF_MENU2D);
 		}
 
