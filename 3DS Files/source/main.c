@@ -58286,10 +58286,10 @@ static bool drawUiWorldMap(const MenuState* m) {
 	// ---- top: the back tab off the left edge, the region off the right ----
 	C2D_DrawRectangle(0.0f, 0.0f, UI_Z - 0.05f, W, 40.0f, C2D_Color32(0, 0, 0, 102),
 		C2D_Color32(0, 0, 0, 102), C2D_Color32(0, 0, 0, 0), C2D_Color32(0, 0, 0, 0));
-	const float tw = uiMeasure(buf, portstr_caps(PS_WORLD_MAP), UI_LABEL_PX) + 44.0f;
+	const float tw = uiMeasure(buf, portstr_caps(PS_BACK), UI_LABEL_PX) + 44.0f;
 	uiTab(0.0f, 6.0f, tw, 28.0f, 0, UI_PANEL);
 	drawPadGlyph('B', 14.0f, 20.0f, 13.0f, UI_Z + 0.04f);
-	uiLabel(buf, portstr_caps(PS_WORLD_MAP), 27.0f, 20.0f, 0, UI_ACCENT);
+	uiLabel(buf, portstr_caps(PS_BACK), 27.0f, 20.0f, 0, UI_ACCENT);
 	wmHit(0.0f, 4.0f, tw, 32.0f, WMH_BACK);
 	char rn[64];
 	langTextToUtf8(g_gmStr[GMS_ZOOM0 + gm->section], rn, sizeof(rn));
@@ -58485,7 +58485,7 @@ static bool drawUiMailbox(const MenuState* m) {
 	g_smsHitN = 0;
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	const float bw = uiBackChip(buf, portstr(PS_MAILBOX));
+	const float bw = uiBackChip(buf, portstr(PS_BACK));
 	smsHit(0.0f, 0.0f, 6.0f + bw + 4.0f, UI_HEAD_H, SMH_BACK);
 	// The category switcher, in the header band.
 	const float rx = 6.0f + bw + 8.0f, rw = W - 6.0f - rx;
