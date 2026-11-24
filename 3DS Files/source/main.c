@@ -61399,7 +61399,7 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 	const int aIdx = meRow > 0 ? meRow - 1 : 0;
 	const int bIdx = meRow > 0 ? meRow : (n > 1 ? 1 : -1);
 	const int slots[2] = { aIdx, bIdx };
-	const float slotW = (W - 34.0f) * 0.5f;
+	const float slotW = (W - 48.0f) * 0.5f;
 	for (int s = 0; s < 2; s++) {
 		const int idx = slots[s];
 		if (idx < 0 || idx >= n)
@@ -61421,14 +61421,19 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 		uiText(buf, nm, 15.0f, sx + 18.0f, cy, 0, rw->me ? UI_ACCENT : UI_WHITE,
 			slotW - 22.0f - fw - 4.0f);
 	}
-	// Expand / collapse chevron on the right of the strip.
-	const float cx = W - 14.0f;
-	if (g_raceBoardOpen)
-		C2D_DrawTriangle(cx - 4.0f, cy - 2.0f, UI_ACCENT, cx + 4.0f, cy - 2.0f, UI_ACCENT,
-			cx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
-	else
-		C2D_DrawTriangle(cx - 4.0f, cy + 2.5f, UI_ACCENT, cx + 4.0f, cy + 2.5f, UI_ACCENT,
-			cx, cy - 2.5f, UI_ACCENT, UI_Z + 0.03f);
+	// D-Pad Down badge + expand/collapse indicator on the right of the strip.
+	if (g_padSheetState == 1) {
+		drawPadGlyphRaw('d', W - 26.0f, cy, 14.0f, UI_Z + 0.04f);
+		uiArrow(W - 14.0f, cy, (float)M_PI * 0.5f, 3.5f, UI_ACCENT);
+	} else {
+		const float cx = W - 14.0f;
+		if (g_raceBoardOpen)
+			C2D_DrawTriangle(cx - 4.0f, cy - 2.0f, UI_ACCENT, cx + 4.0f, cy - 2.0f, UI_ACCENT,
+				cx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
+		else
+			C2D_DrawTriangle(cx - 4.0f, cy + 2.5f, UI_ACCENT, cx + 4.0f, cy + 2.5f, UI_ACCENT,
+				cx, cy - 2.5f, UI_ACCENT, UI_Z + 0.03f);
+	}
 	uiHit(0.0f, sy - 2.0f, W, sh + 2.0f, HIT_RACE_BOARD);
 
 	// ---- expanded floating standings card (when tapped) ----
@@ -68057,9 +68062,15 @@ int main(int argc, char* argv[])
 				if (!simHold && want == WORLD_UI_NONE && g_touchOpenUi != WORLD_UI_NONE)
 					want = g_touchOpenUi;
 				g_touchOpenUi = WORLD_UI_NONE;
-				// PORT: never open SMS during an active race.
-				if (g_raceRun.on && want == WORLD_UI_SMS)
-					want = WORLD_UI_NONE;
+				// PORT: during an active race, block free-roam overlays (World Map,
+				// SMS, Career Status); only Pause opens. D-Pad Down (the World Map
+				// button) toggles the expanded Standings card on the lower screen.
+				if (g_raceRun.on) {
+					if (want == WORLD_UI_MAP)
+						g_raceBoardOpen = !g_raceBoardOpen;
+					if (want != WORLD_UI_NONE && want != WORLD_UI_PAUSE)
+						want = WORLD_UI_NONE;
+				}
 				// DbgSleepAt (PORT, a test aid, not retail): Azahar has no lid,
 				// so this many seconds into the world the hook is run as the
 				// system would run it, around a 3 s stall.
