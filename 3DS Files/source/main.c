@@ -38077,31 +38077,33 @@ static const TrackPathZone* g_markerZone[WORLD_MAX_MARKERS];
 // PORT: what the lower screen's marker card and destination strip call each
 // marker -- the element type's player-facing name (the shop records carry
 // only internal names such as UC_BODYSHOP) and, for an event, its purse.
-static char g_markerTitle[WORLD_MAX_MARKERS][24];
-static char g_markerInfo[WORLD_MAX_MARKERS][32];
+static char g_markerTitle[WORLD_MAX_MARKERS][40];
+static char g_markerInfo[WORLD_MAX_MARKERS][48];
 static void worldMarkerText(int i, const EventRec* ev) {
-	static const char* const kName[MINIMAP_ELEM_COUNT] = {
-		[MINIMAP_ELEM_SHOWCASE] = "Showcase", [MINIMAP_ELEM_CRIB] = "Garage",
-		[MINIMAP_ELEM_PAINTSHOP] = "Paint Shop", [MINIMAP_ELEM_PARTSSHOP] = "Parts Shop",
-		[MINIMAP_ELEM_ICESHOP] = "Car Specialties", [MINIMAP_ELEM_PERFORMANCESHOP] = "Performance Shop",
-		[MINIMAP_ELEM_CARLOT] = "Car Lot", [MINIMAP_ELEM_CIRCUITEVENT] = "Circuit",
-		[MINIMAP_ELEM_DRAGEVENT] = "Drag", [MINIMAP_ELEM_STREETEVENT] = "Street X",
-		[MINIMAP_ELEM_DRIFTEVENT] = "Drift", [MINIMAP_ELEM_SPRINTEVENT] = "Sprint",
-		[MINIMAP_ELEM_URLEVENT] = "URL", [MINIMAP_ELEM_SUVEVENT] = "SUV Race",
+	// The game's own names for them (portstr.h), in the language of the
+	// world's load; 0 (PS_ACCESSIBILITY, never a marker's) is "no name".
+	static const PortStr kName[MINIMAP_ELEM_COUNT] = {
+		[MINIMAP_ELEM_SHOWCASE] = PS_MK_SHOWCASE, [MINIMAP_ELEM_CRIB] = PS_MK_GARAGE,
+		[MINIMAP_ELEM_PAINTSHOP] = PS_MK_PAINT, [MINIMAP_ELEM_PARTSSHOP] = PS_MK_PARTS,
+		[MINIMAP_ELEM_ICESHOP] = PS_MK_ICE, [MINIMAP_ELEM_PERFORMANCESHOP] = PS_MK_PERF,
+		[MINIMAP_ELEM_CARLOT] = PS_MK_CARLOT, [MINIMAP_ELEM_CIRCUITEVENT] = PS_MK_CIRCUIT,
+		[MINIMAP_ELEM_DRAGEVENT] = PS_MK_DRAG, [MINIMAP_ELEM_STREETEVENT] = PS_MK_STREETX,
+		[MINIMAP_ELEM_DRIFTEVENT] = PS_MK_DRIFT, [MINIMAP_ELEM_SPRINTEVENT] = PS_MK_SPRINT,
+		[MINIMAP_ELEM_URLEVENT] = PS_MK_URL, [MINIMAP_ELEM_SUVEVENT] = PS_MK_SUV,
 	};
 	const u8 el = g_markers[i].element;
-	const char* n = el < MINIMAP_ELEM_COUNT && kName[el] ? kName[el] : "Marker";
+	const char* n = portstr(el < MINIMAP_ELEM_COUNT && kName[el] ? kName[el] : PS_MK_MARKER);
 	snprintf(g_markerTitle[i], sizeof(g_markerTitle[i]), "%s", n);
 	g_markerInfo[i][0] = '\0';
 	if (ev) {
 		char c[24];
 		formatCashGrouped(ev->purse, c, sizeof(c));
 		snprintf(g_markerInfo[i], sizeof(g_markerInfo[i]), "%s%s%s",
-			ev->cls == EVENT_CLASS_SPON ? "Sponsor race" : "Race",
+			portstr(ev->cls == EVENT_CLASS_SPON ? PS_SPONSOR_RACE : PS_RACE),
 			ev->purse ? " \xc2\xb7 $" : "", ev->purse ? c : "");
 	} else if (el >= MINIMAP_ELEM_CRIB && el <= MINIMAP_ELEM_CARLOT) {
 		snprintf(g_markerInfo[i], sizeof(g_markerInfo[i]), "%s",
-			el == MINIMAP_ELEM_CRIB ? "Save and change cars" : "Shop");
+			portstr(el == MINIMAP_ELEM_CRIB ? PS_MK_GARAGE_INFO : PS_SHOP_INFO));
 	}
 }
 
@@ -57437,24 +57439,30 @@ static float uiTextBase(C2D_TextBuf buf, const char* str, float px, float x, flo
 	if (!str || !str[0])
 		return 0.0f;
 	const float sc = px / g_fontUnitPx;
-	char tmp[64];
+	char tmp[128];
 	snprintf(tmp, sizeof(tmp), "%s", str);
 	C2D_Text t;
 	float w = 0.0f, h = 0.0f;
+	bool cut = false;
 	for (;;) {
 		C2D_TextFontParse(&t, g_uiFont, buf, tmp);
 		textDims(&t, sc, sc, &w, &h);
-		const size_t n = strlen(tmp);
+		size_t n = strlen(tmp);
 		if (maxW <= 0.0f || w <= maxW || n <= 3)
 			break;
-		tmp[n - 3] = '.';
-		tmp[n - 2] = '.';
-		tmp[n - 1] = '\0';
-		if (n > 4) {
-			tmp[n - 4] = '.';
-			tmp[n - 3] = '.';
-			tmp[n - 2] = '\0';
+		// PORT: two whole characters off before the "..": a translated
+		// label's accented letters are two bytes, and half of one draws as '?'.
+		if (cut)
+			n -= 2;
+		for (int d = 0; d < 2 && n > 0; d++) {
+			n--;
+			while (n > 0 && ((u8)tmp[n] & 0xC0) == 0x80)
+				n--;
 		}
+		if (n == 0)
+			break;
+		memcpy(tmp + n, "..", 3);
+		cut = true;
 	}
 	C2D_TextOptimize(&t);
 	const float dx = align == 2 ? -w : align == 1 ? -w * 0.5f : 0.0f;
@@ -57511,8 +57519,8 @@ static void worldGpsToMarker(int i) {
 	GpsCar car;
 	gpsCarFrom(&car);
 	gps_start(&car, target, icon);
-	char b[64];
-	snprintf(b, sizeof(b), "GPS: %s", g_markerTitle[i]);
+	char b[96];
+	snprintf(b, sizeof(b), portstr(PS_FEED_GPS_FMT), g_markerTitle[i]);
 	worldFeedPush(b, uiRgb(uiLighten(uiMarkerColour(i), 0.3f)));
 	dlog("bottom hud: GPS started from the touch screen");
 }
@@ -57555,7 +57563,7 @@ static void worldHandleTap(void) {
 		case HIT_STRIP_GPS: worldGpsToMarker(g_nearestEvent); break;
 		case HIT_STRIP_CANCEL:
 			gps_stop();
-			worldFeedPush("GPS off", 0xAAB0B8u);
+			worldFeedPush(portstr(PS_FEED_GPS_OFF), 0xAAB0B8u);
 			break;
 		case HIT_CARD_GPS:
 			worldGpsToMarker(g_mmSel);
@@ -57602,15 +57610,15 @@ static void uiDistance(float metres, char* out, size_t cap) {
 	// the options switches this too.
 	if (unitsMetric()) {
 		if (metres < 1000.0f)
-			snprintf(out, cap, "%d m", (int)(metres / 10.0f + 0.5f) * 10);
+			snprintf(out, cap, "%d %s", (int)(metres / 10.0f + 0.5f) * 10, portstr(PS_UNIT_M));
 		else
-			snprintf(out, cap, "%.1f km", (double)(metres / 1000.0f));
+			snprintf(out, cap, "%.1f %s", (double)(metres / 1000.0f), portstr(PS_UNIT_KM));
 	} else {
 		const float ft = metres * 3.28084f;
 		if (ft < 1000.0f)
-			snprintf(out, cap, "%d ft", (int)(ft / 10.0f + 0.5f) * 10);
+			snprintf(out, cap, "%d %s", (int)(ft / 10.0f + 0.5f) * 10, portstr(PS_UNIT_FT));
 		else
-			snprintf(out, cap, "%.1f mi", (double)(metres / 1609.34f));
+			snprintf(out, cap, "%.1f %s", (double)(metres / 1609.34f), portstr(PS_UNIT_MI));
 	}
 }
 
@@ -57797,7 +57805,7 @@ static bool drawUiDialog(const MenuState* m) {
 	const char* labels[3];
 	for (int i = 0; i < nb; i++) {
 		const int k = btn[i];
-		labels[i] = m->dlgLabel[k][0] ? m->dlgLabel[k] : (k == 2 ? "OK" : k == 0 ? "Yes" : "No");
+		labels[i] = m->dlgLabel[k][0] ? m->dlgLabel[k] : portstr(k == 2 ? PS_OK : k == 0 ? PS_YES : PS_NO);
 	}
 	uiDialogBox(buf, W, H, NULL, m->dlgBlurb, labels, btn, nb, g_feDialog.current, 1,
 		g_uiDlgHit, &g_uiDlgHitN);
@@ -57939,10 +57947,10 @@ static bool drawUiWorldMap(const MenuState* m) {
 	// ---- top: the back tab off the left edge, the region off the right ----
 	C2D_DrawRectangle(0.0f, 0.0f, UI_Z - 0.05f, W, 40.0f, C2D_Color32(0, 0, 0, 102),
 		C2D_Color32(0, 0, 0, 102), C2D_Color32(0, 0, 0, 0), C2D_Color32(0, 0, 0, 0));
-	const float tw = uiMeasure(buf, "WORLD MAP", UI_LABEL_PX) + 44.0f;
+	const float tw = uiMeasure(buf, portstr_caps(PS_WORLD_MAP), UI_LABEL_PX) + 44.0f;
 	uiTab(0.0f, 6.0f, tw, 28.0f, 0, UI_PANEL);
 	drawPadGlyph('B', 14.0f, 20.0f, 13.0f, UI_Z + 0.04f);
-	uiLabel(buf, "WORLD MAP", 27.0f, 20.0f, 0, UI_ACCENT);
+	uiLabel(buf, portstr_caps(PS_WORLD_MAP), 27.0f, 20.0f, 0, UI_ACCENT);
 	wmHit(0.0f, 4.0f, tw, 32.0f, WMH_BACK);
 	char rn[64];
 	langTextToUtf8(g_gmStr[GMS_ZOOM0 + gm->section], rn, sizeof(rn));
@@ -57975,9 +57983,9 @@ static bool drawUiWorldMap(const MenuState* m) {
 		C2D_DrawRectSolid(sx, 0.0f, UI_Z - 0.01f, sw, H, C2D_Color32(0, 0, 0, 235));
 		C2D_DrawRectSolid(sx, 0.0f, UI_Z - 0.005f, 1.0f, H, C2D_Color32(255, 255, 255, 41));
 		wmHit(sx, 0.0f, sw, H, WMH_DRAWER);
-		uiLabel(buf, "SHOW ON MAP", sx + 10.0f, 18.0f, 0, UI_ACCENT);
-		const float dw = uiMeasure(buf, "Done", 14.0f) + 13.0f + 6.0f + 28.0f;
-		uiButton(buf, W - 6.0f - dw, 5.0f, dw, 26.0f, 'B', "Done", false, false);
+		uiLabel(buf, portstr(PS_SHOW_ON_MAP), sx + 10.0f, 18.0f, 0, UI_ACCENT);
+		const float dw = uiMeasure(buf, portstr(PS_DONE), 14.0f) + 13.0f + 6.0f + 28.0f;
+		uiButton(buf, W - 6.0f - dw, 5.0f, dw, 26.0f, 'B', portstr(PS_DONE), false, false);
 		wmHit(W - 6.0f - dw - 3.0f, 0.0f, dw + 9.0f, headH, WMH_DONE);
 		for (int k = 0; k < vis && s_top + k < n; k++) {
 			const int r = s_top + k;
@@ -58018,7 +58026,7 @@ static bool drawUiWorldMap(const MenuState* m) {
 		int shown = 0;
 		for (int r = 0; r < gm->rowCount; r++)
 			shown += gamemap_row_on(gm, r) ? 1 : 0;
-		const char* an = shown < gm->rowCount ? "Show all" : "Hide all";
+		const char* an = portstr(shown < gm->rowCount ? PS_SHOW_ALL : PS_HIDE_ALL);
 		const float ay = H - footH + 6.0f;
 		uiButton(buf, sx + 6.0f, ay, sw - 12.0f, 28.0f, 0, an, false, false);
 		wmHit(sx, ay - 4.0f, sw, footH, WMH_ALL);
@@ -58037,8 +58045,8 @@ static bool drawUiWorldMap(const MenuState* m) {
 		int shown = 0;
 		for (int r = 0; r < gm->rowCount; r++)
 			shown += gamemap_row_on(gm, r) ? 1 : 0;
-		char ft[32];
-		snprintf(ft, sizeof(ft), "FILTERS  %d/%d", shown, gm->rowCount);
+		char ft[48];
+		snprintf(ft, sizeof(ft), portstr(PS_FILTERS_FMT), shown, gm->rowCount);
 		const float fw = uiMeasure(buf, ft, UI_LABEL_PX) + 44.0f;
 		uiTab(0.0f, fy, fw, 28.0f, 0, UI_PANEL);
 		for (int i = 0; i < 3; i++)
@@ -58047,12 +58055,12 @@ static bool drawUiWorldMap(const MenuState* m) {
 		wmHit(0.0f, fy - 2.0f, fw, 36.0f, WMH_FILTERS);
 		if (!gameMapGpsIdle() && g_gpsMarkerNow >= 0) {
 			const u32 c = uiGpsColour();
-			const float glw = uiMeasure(buf, "GPS", UI_LABEL_PX);
+			const float glw = uiMeasure(buf, portstr(PS_GPS), UI_LABEL_PX);
 			const float gw = 25.0f + glw + 6.0f + uiMeasure(buf, g_markerTitle[g_gpsMarkerNow], 14.0f) + 10.0f;
 			const float gx = W - fminf(gw, W - fw - 12.0f);
 			uiTab(gx, fy, W - gx, 28.0f, 1, UI_PANEL);
 			C2D_DrawCircleSolid(gx + 16.0f, fy + 14.0f, UI_Z + 0.02f, 3.5f, c);
-			uiLabel(buf, "GPS", gx + 25.0f, fy + 14.0f, 0, uiLighten(c, 0.35f));
+			uiLabel(buf, portstr(PS_GPS), gx + 25.0f, fy + 14.0f, 0, uiLighten(c, 0.35f));
 			uiText(buf, g_markerTitle[g_gpsMarkerNow], 14.0f, gx + 31.0f + glw, fy + 14.0f, 0, UI_WHITE,
 				W - 8.0f - (gx + 31.0f + glw));
 			wmHit(gx, fy - 2.0f, W - gx, 36.0f, WMH_GPS);
@@ -58068,12 +58076,12 @@ static bool drawUiWorldMap(const MenuState* m) {
 		wmHit(cx, cy, cw, ch, WMH_CARD);
 		char nm[48];
 		langTextToUtf8(g_gmStr[GMS_ZONE0 + cur->zoneType], nm, sizeof(nm));
-		uiLabel(buf, cur->wme >= GAMEMAP_WME_PAINTSHOP ? "SHOP" : "EVENT", cx + 37.0f, cy + 9.0f, 0, UI_DIM);
+		uiLabel(buf, portstr(cur->wme >= GAMEMAP_WME_PAINTSHOP ? PS_SHOP : PS_EVENT), cx + 37.0f, cy + 9.0f, 0, UI_DIM);
 		uiText(buf, nm, 16.0f, cx + 10.0f, cy + 26.0f, 0, UI_WHITE, cw - 20.0f);
 		if (cur->sponsor)
-			uiText(buf, "Sponsor race", 13.0f, cx + 10.0f, cy + 44.0f, 0, UI_DIM, cw - 20.0f);
+			uiText(buf, portstr(PS_SPONSOR_RACE), 13.0f, cx + 10.0f, cy + 44.0f, 0, UI_DIM, cw - 20.0f);
 		const bool idle = gameMapGpsIdle();
-		const char* bl = idle ? "Set GPS" : "GPS Off";
+		const char* bl = portstr(idle ? PS_SET_GPS : PS_GPS_OFF);
 		const float bw = uiMeasure(buf, bl, 14.0f) + 13.0f + 6.0f + 28.0f;
 		const float bx = cx + cw - bw - 8.0f, by = cy + ch - 34.0f;
 		if (!gm->gpsDisabled) {
@@ -58138,7 +58146,7 @@ static bool drawUiMailbox(const MenuState* m) {
 	g_smsHitN = 0;
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	const float bw = uiBackChip(buf, "Mailbox");
+	const float bw = uiBackChip(buf, portstr(PS_MAILBOX));
 	smsHit(0.0f, 0.0f, 6.0f + bw + 4.0f, UI_HEAD_H, SMH_BACK);
 	// The category switcher, in the header band.
 	const float rx = 6.0f + bw + 8.0f, rw = W - 6.0f - rx;
@@ -58164,7 +58172,7 @@ static bool drawUiMailbox(const MenuState* m) {
 	if (g_smsListTop > v->count - vis) g_smsListTop = v->count - vis;
 	if (g_smsListTop < 0) g_smsListTop = 0;
 	if (v->count == 0)
-		uiText(buf, "No messages", 15.0f, W * 0.5f, y0 + 50.0f, 1, UI_DIM, 0.0f);
+		uiText(buf, portstr(PS_NO_MESSAGES), 15.0f, W * 0.5f, y0 + 50.0f, 1, UI_DIM, 0.0f);
 	const float rx0 = 8.0f, rww = W - 16.0f - 10.0f;
 	for (int k = 0; k < vis; k++) {
 		const int row = g_smsListTop + k;
@@ -58200,7 +58208,7 @@ static bool drawUiMailbox(const MenuState* m) {
 		}
 	}
 	if (v->count > 0) {
-		static const char* const L[2] = { "Read", "Delete" };
+		const char* const L[2] = { portstr(PS_READ), portstr(PS_DELETE) };
 		static const char K[2] = { 'A', 'Y' };
 		static const bool P[2] = { true, false };
 		static const int I[2] = { SMH_READ, SMH_DELETE };
@@ -58225,7 +58233,7 @@ static bool drawUiSmsReader(const MenuState* m) {
 	g_smsHitN = 0;
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	const float bw = uiBackChip(buf, "Inbox");
+	const float bw = uiBackChip(buf, portstr(PS_INBOX));
 	smsHit(0.0f, 0.0f, 6.0f + bw + 4.0f, UI_HEAD_H, SMH_INBOX);
 	// The header: FROM and the subject.
 	const char* from = g_smsBox.rdFrom;
@@ -58236,8 +58244,8 @@ static bool drawUiSmsReader(const MenuState* m) {
 	subj = sc ? sc + 2 : subj;
 	const float hx = 6.0f + bw + 10.0f;
 	char fl[96];
-	snprintf(fl, sizeof(fl), "FROM %s", from);
-	for (char* p = fl; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+	snprintf(fl, sizeof(fl), portstr(PS_FROM_FMT), from);
+	portstr_upper(fl);
 	uiText(buf, fl, 11.0f, hx, 10.0f, 0, UI_ACCENT, W - hx - 8.0f);
 	uiText(buf, subj, 15.0f, hx, 25.0f, 0, UI_WHITE, W - hx - 8.0f);
 	// The body.
@@ -58278,7 +58286,7 @@ static bool drawUiSmsReader(const MenuState* m) {
 		uiRoundRect(W - 16.0f, by + 6.0f + (bh - 12.0f - th) * (g_smsReaderTop / g_smsReaderMax), 3.0f, th,
 			1.5f, UI_Z + 0.02f, UI_ACCENT);
 	}
-	static const char* const L[1] = { "Drive" };
+	const char* const L[1] = { portstr(PS_DRIVE) };
 	static const char K[1] = { 'Y' };
 	static const bool P[1] = { true };
 	static const int I[1] = { SMH_DRIVE };
@@ -58343,8 +58351,8 @@ static void uiSkinHeader(C2D_TextBuf buf, const char* back, const C2D_Text* titl
 		x = 6.0f + bw + 10.0f;
 	}
 	if (help) {
-		const float hw = uiMeasure(buf, "Help", 14.0f) + 13.0f + 6.0f + 28.0f;
-		uiButton(buf, BOTTOM_W - 6.0f - hw, 5.0f, hw, 26.0f, 'l', "Help", false, false);
+		const float hw = uiMeasure(buf, portstr(PS_HELP), 14.0f) + 13.0f + 6.0f + 28.0f;
+		uiButton(buf, BOTTOM_W - 6.0f - hw, 5.0f, hw, 26.0f, 'l', portstr(PS_HELP), false, false);
 		fskHit(BOTTOM_W - 10.0f - hw, 0.0f, hw + 10.0f, UI_HEAD_H, FSK_KEY, KEY_ZL);
 		right = BOTTOM_W - 6.0f - hw - 8.0f;
 	}
@@ -58639,7 +58647,7 @@ static bool drawUiIconGrid(const MenuState* m) {
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
 	const bool isMain = strcasecmp(m->screenName, "UI_Main.fng") == 0;
-	uiSkinHeader(buf, isMain ? NULL : "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, NULL,
+	uiSkinHeader(buf, isMain ? NULL : portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, NULL,
 		feHelpHash(m->screenName) != 0);
 	if (g_uiGrid.m != m) {
 		g_uiGrid.m = m;
@@ -58702,7 +58710,7 @@ static bool drawUiIconGrid(const MenuState* m) {
 				uiCText(&m->itemLabels[i], 12.0f, x + tw * 0.5f, y + th - 12.0f, 1, ink, tw - 8.0f);
 		}
 		if (locked)
-			uiLabel(buf, "LOCKED", x + tw * 0.5f, y + 10.0f, 1, UI_DIM);
+			uiLabel(buf, portstr_caps(PS_LOCKED), x + tw * 0.5f, y + 10.0f, 1, UI_DIM);
 		const float hy0 = fmaxf(y, top - 4.0f), hy1 = fminf(y + th, bottom + 4.0f);
 		if (hy1 > hy0)
 			fskHit(x, hy0, tw, hy1 - hy0, FSK_ITEM, (u32)i);
@@ -58723,7 +58731,7 @@ static bool drawUiIconGrid(const MenuState* m) {
 		uiGear(c->x + c->w * 0.5f, c->y + c->h * 0.5f, 8.5f, sel ? UI_ACCENT : UI_WHITE, C2D_Color32(8, 8, 8, 255));
 		fskHit(0.0f, 0.0f, c->x + c->w + 6.0f, UI_HEAD_H, FSK_ITEM, (u32)i);
 	}
-	static const UiAct kSel[1] = { { "Select", 'A', KEY_A, true } };
+	const UiAct kSel[1] = { { portstr(PS_SELECT), 'A', KEY_A, true } };
 	uiSkinFooter(buf, kSel, 1);
 	// The bank, left in the footer, wherever a career is spending it.
 	if (careerInProgress() && (m->isBodyShop || strcasecmp(m->screenName, "UI_CareerCrib.fng") == 0 ||
@@ -58732,8 +58740,8 @@ static bool drawUiIconGrid(const MenuState* m) {
 		char cash[32], line[40];
 		formatCashGrouped(gProfile.cash, cash, sizeof(cash));
 		snprintf(line, sizeof(line), "$%s", cash);
-		uiLabel(buf, "BANK", 12.0f, H - UI_FOOT_H * 0.5f, 0, UI_DIM);
-		uiText(buf, line, 16.0f, 12.0f + uiMeasure(buf, "BANK", UI_LABEL_PX) + 6.0f, H - UI_FOOT_H * 0.5f, 0,
+		uiLabel(buf, portstr_caps(PS_BANK), 12.0f, H - UI_FOOT_H * 0.5f, 0, UI_DIM);
+		uiText(buf, line, 16.0f, 12.0f + uiMeasure(buf, portstr_caps(PS_BANK), UI_LABEL_PX) + 6.0f, H - UI_FOOT_H * 0.5f, 0,
 			UI_WHITE, 0.0f);
 	}
 	return true;
@@ -58762,7 +58770,7 @@ static bool drawUiBodyParts(const MenuState* m) {
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
 	const char* cat = (m->selected >= 0 && m->selected < m->itemCount) ? m->itemStr[m->selected] : "";
-	uiSkinHeader(buf, "Back", NULL, cat, feHelpHash(m->screenName) != 0);
+	uiSkinHeader(buf, portstr(PS_BACK), NULL, cat, feHelpHash(m->screenName) != 0);
 	const int n = c->count, sel = g_bodyShop.sel;
 	const float y0 = UI_HEAD_H + 6.0f, rowH = 30.0f, bottom = H - UI_FOOT_H - 4.0f;
 	const int vis = (int)((bottom - y0) / rowH);
@@ -58788,10 +58796,10 @@ static bool drawUiBodyParts(const MenuState* m) {
 		u32 tagInk = UI_DIM;
 		tag[0] = '\0';
 		if (isFitted) {
-			snprintf(tag, sizeof(tag), "FITTED");
+			snprintf(tag, sizeof(tag), "%s", portstr(PS_FITTED));
 			tagInk = UI_ACCENT;
 		} else if (career && owned && c->level[r] > 0) {
-			snprintf(tag, sizeof(tag), "OWNED");
+			snprintf(tag, sizeof(tag), "%s", portstr_caps(PS_OWNED));
 		} else if (prices && !owned) {
 			char cash[24];
 			formatCashGrouped((unsigned)(c->price[r] > 0 ? c->price[r] : 0), cash, sizeof(cash));
@@ -58808,8 +58816,8 @@ static bool drawUiBodyParts(const MenuState* m) {
 		}
 		if (isFitted)
 			C2D_DrawCircleSolid(rx + 11.0f, cy, UI_Z + 0.03f, 3.0f, UI_ACCENT);
-		char fallback[24];
-		snprintf(fallback, sizeof(fallback), "Option %d", r + 1);
+		char fallback[32];
+		snprintf(fallback, sizeof(fallback), portstr(PS_OPTION_FMT), r + 1);
 		uiText(buf, c->name[r][0] ? c->name[r] : fallback, 15.0f, rx + 20.0f, cy, 0, cur ? UI_ACCENT : UI_WHITE,
 			rw - 20.0f - tw - 20.0f);
 		fskHit(rx, y, rw, h + 4.0f, FSK_PART, (u32)r);
@@ -58820,14 +58828,14 @@ static bool drawUiBodyParts(const MenuState* m) {
 		uiRoundRect(W - 12.0f, y0 + (shh - th) * (float)s_top / (float)(n - vis), 4.0f, th, 2.0f,
 			UI_Z + 0.01f, UI_ACCENT);
 	}
-	const UiAct acts[1] = { { selBuy ? "Buy" : "Install", 'A', KEY_A, true } };
+	const UiAct acts[1] = { { portstr(selBuy ? PS_BUY : PS_INSTALL), 'A', KEY_A, true } };
 	uiSkinFooter(buf, acts, 1);
 	if (career) {
 		char cash[32], bank[40];
 		formatCashGrouped(gProfile.cash, cash, sizeof(cash));
 		snprintf(bank, sizeof(bank), "$%s", cash);
-		uiLabel(buf, "BANK", 12.0f, H - UI_FOOT_H * 0.5f, 0, UI_DIM);
-		uiText(buf, bank, 16.0f, 12.0f + uiMeasure(buf, "BANK", UI_LABEL_PX) + 6.0f, H - UI_FOOT_H * 0.5f, 0,
+		uiLabel(buf, portstr_caps(PS_BANK), 12.0f, H - UI_FOOT_H * 0.5f, 0, UI_DIM);
+		uiText(buf, bank, 16.0f, 12.0f + uiMeasure(buf, portstr_caps(PS_BANK), UI_LABEL_PX) + 6.0f, H - UI_FOOT_H * 0.5f, 0,
 			UI_WHITE, 0.0f);
 	}
 	return true;
@@ -58860,7 +58868,7 @@ static bool drawUiCarSelect(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, NULL,
+	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, NULL,
 		feHelpHash(m->screenName) != 0);
 	const bool garage = m->isCribCarSel;
 	const bool lotOwned = m->isCarLot && m->lotState == CARLOT_STATE_OWNED;
@@ -58904,10 +58912,10 @@ static bool drawUiCarSelect(const MenuState* m) {
 			fskHit(8.0f, sy - 3.0f, fw * 0.5f, sh + 6.0f, FSK_KEY, KEY_L);
 			fskHit(8.0f + fw * 0.5f, sy - 3.0f, fw * 0.5f, sh + 6.0f, FSK_KEY, KEY_R);
 		} else if (m->isCarLot) {
-			const char* what = m->lotState == CARLOT_STATE_BUY ? "BUY A CAR"
-				: m->lotState == CARLOT_STATE_OWNED ? "PICK YOUR CAR TO TRADE"
-				: (m->lotState == CARLOT_STATE_TRADE || m->lotState == CARLOT_STATE_CHOOSE) ? "TRADE IN" : "";
-			uiLabel(buf, what, 10.0f, sy + sh * 0.5f, 0, UI_ACCENT);
+			const char* what = m->lotState == CARLOT_STATE_BUY ? portstr(PS_LOT_BUY)
+				: m->lotState == CARLOT_STATE_OWNED ? portstr(PS_LOT_PICK)
+				: (m->lotState == CARLOT_STATE_TRADE || m->lotState == CARLOT_STATE_CHOOSE) ? portstr(PS_LOT_TRADE_IN) : "";
+			uiText(buf, what, UI_LABEL_PX, 10.0f, sy + sh * 0.5f, 0, UI_ACCENT, W - 30.0f - pw);
 		}
 		// The list's run, a thin bar under it.
 		const float bx = 8.0f, bw = W - 16.0f, by = sy + sh + 3.0f;
@@ -58928,26 +58936,26 @@ static bool drawUiCarSelect(const MenuState* m) {
 	}
 	uiRowBar(cx0, cy0, cw, ch, true);
 	const CarRow* row = &m->carRows[sel];
-	char head[48];
+	char head[64];
 	head[0] = '\0';
 	if (garage) {
 		char slotWord[32];
-		langTextToUtf8(m->cribSlotWord[0] ? m->cribSlotWord : "Slot", slotWord, sizeof(slotWord));
+		langTextToUtf8(m->cribSlotWord[0] ? m->cribSlotWord : portstr(PS_SLOT), slotWord, sizeof(slotWord));
 		snprintf(head, sizeof(head), "%s %d", slotWord, sel + 1);
 	} else if (row->tunedSlot >= 0) {
-		snprintf(head, sizeof(head), "MY CAR %d", row->tunedSlot + 1);
+		snprintf(head, sizeof(head), portstr(PS_MY_CAR_FMT), row->tunedSlot + 1);
 	} else if (row->careerSlot >= 0) {
-		snprintf(head, sizeof(head), "CAREER CAR %d", row->careerSlot + 1);
+		snprintf(head, sizeof(head), portstr(PS_CAREER_CAR_FMT), row->careerSlot + 1);
 	} else if (row->sponsorIdx >= 0) {
-		snprintf(head, sizeof(head), "SPONSOR CAR");
+		snprintf(head, sizeof(head), "%s", portstr(PS_SPONSOR_CAR));
 	} else if (!m->isCarLot) {
-		snprintf(head, sizeof(head), "STOCK");
+		snprintf(head, sizeof(head), "%s", portstr(PS_STOCK));
 	}
-	for (char* p = head; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+	portstr_upper(head);
 	if (head[0])
 		uiLabel(buf, head, cx0 + 10.0f, cy0 + 12.0f, 0, UI_DIM);
 	if ((garage || lotOwned) && st == CRIBCAR_REAL && m->cribCarSlot[sel] == gProfile.currentCarSlot)
-		uiLabel(buf, "DRIVING", cx0 + cw - 10.0f, cy0 + 12.0f, 2, UI_ACCENT);
+		uiLabel(buf, portstr(PS_DRIVING), cx0 + cw - 10.0f, cy0 + 12.0f, 2, UI_ACCENT);
 	// The manufacturer's logo on the left, the badge art filling the rest.
 	char name[96];
 	name[0] = '\0';
@@ -58970,21 +58978,21 @@ static bool drawUiCarSelect(const MenuState* m) {
 	// ---- the footer: A, and the Quick Race kind's X ----
 	UiAct acts[2];
 	int na = 0;
-	const char* aLabel = garage ? "Select Car" : m->isCarLot
-		? (m->lotState == CARLOT_STATE_BUY ? "Buy" : m->lotState == CARLOT_STATE_OWNED ? "Trade" : "Trade In")
-		: "Select";
+	const char* aLabel = garage ? portstr(PS_SELECT_CAR) : m->isCarLot
+		? portstr(m->lotState == CARLOT_STATE_BUY ? PS_BUY : m->lotState == CARLOT_STATE_OWNED ? PS_TRADE : PS_TRADE_IN)
+		: portstr(PS_SELECT);
 	acts[na++] = (UiAct){ aLabel, 'A', KEY_A, true };
 	if (filtered && g_feCtx == CARDB_CTX_CUSTOMIZE && row->tunedSlot >= 0)
-		acts[na++] = (UiAct){ "Delete", 'X', KEY_X, false };
+		acts[na++] = (UiAct){ portstr(PS_DELETE), 'X', KEY_X, false };
 	else if (filtered && g_feCtx != CARDB_CTX_CUSTOMIZE)
-		acts[na++] = (UiAct){ "Customize", 'X', KEY_X, false };
+		acts[na++] = (UiAct){ portstr(PS_CUSTOMIZE), 'X', KEY_X, false };
 	uiSkinFooter(buf, acts, na);
 	if (na == 1 && careerInProgress() && (garage || m->isCarLot)) {
 		char cash[32], bank[40];
 		formatCashGrouped(gProfile.cash, cash, sizeof(cash));
 		snprintf(bank, sizeof(bank), "$%s", cash);
-		uiLabel(buf, "BANK", 12.0f, H - UI_FOOT_H * 0.5f, 0, UI_DIM);
-		uiText(buf, bank, 16.0f, 12.0f + uiMeasure(buf, "BANK", UI_LABEL_PX) + 6.0f, H - UI_FOOT_H * 0.5f, 0,
+		uiLabel(buf, portstr_caps(PS_BANK), 12.0f, H - UI_FOOT_H * 0.5f, 0, UI_DIM);
+		uiText(buf, bank, 16.0f, 12.0f + uiMeasure(buf, portstr_caps(PS_BANK), UI_LABEL_PX) + 6.0f, H - UI_FOOT_H * 0.5f, 0,
 			UI_WHITE, 0.0f);
 	}
 	return true;
@@ -59085,8 +59093,8 @@ static void uiFooterBank(C2D_TextBuf buf) {
 	char cash[32], bank[40];
 	formatCashGrouped(gProfile.cash, cash, sizeof(cash));
 	snprintf(bank, sizeof(bank), "$%s", cash);
-	uiLabel(buf, "BANK", 12.0f, BOTTOM_H - UI_FOOT_H * 0.5f, 0, UI_DIM);
-	uiText(buf, bank, 16.0f, 12.0f + uiMeasure(buf, "BANK", UI_LABEL_PX) + 6.0f, BOTTOM_H - UI_FOOT_H * 0.5f, 0,
+	uiLabel(buf, portstr_caps(PS_BANK), 12.0f, BOTTOM_H - UI_FOOT_H * 0.5f, 0, UI_DIM);
+	uiText(buf, bank, 16.0f, 12.0f + uiMeasure(buf, portstr_caps(PS_BANK), UI_LABEL_PX) + 6.0f, BOTTOM_H - UI_FOOT_H * 0.5f, 0,
 		UI_WHITE, 0.0f);
 }
 // The item's name as plain text (a parsed label has no string to give back,
@@ -59117,7 +59125,7 @@ static bool drawUiTrackSelect(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "Track Select",
+	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_TRACK_SELECT),
 		feHelpHash(m->screenName) != 0);
 	// ---- the map and the selected track's numbers ----
 	const float y0 = UI_HEAD_H + 6.0f, mapS = 116.0f, mx = 8.0f;
@@ -59135,12 +59143,12 @@ static bool drawUiTrackSelect(const MenuState* m) {
 		iy += 17.0f;
 	}
 	if (m->hasItemDistance[sel]) {
-		uiLabel(buf, "LENGTH", mx, iy, 0, UI_DIM);
+		uiLabel(buf, portstr_caps(PS_DISTANCE), mx, iy, 0, UI_DIM);
 		uiCText(&m->itemDistanceText[sel], 14.0f, mx + mapS, iy, 2, UI_WHITE, mapS * 0.6f);
 		iy += 17.0f;
 	}
 	if (m->hasItemBest[sel]) {
-		uiLabel(buf, "BEST", mx, iy, 0, UI_DIM);
+		uiLabel(buf, portstr_caps(PS_BEST), mx, iy, 0, UI_DIM);
 		uiCText(&m->itemBestText[sel], 14.0f, mx + mapS, iy, 2, UI_WHITE, mapS * 0.6f);
 	}
 	// ---- the tracks ----
@@ -59154,11 +59162,11 @@ static bool drawUiTrackSelect(const MenuState* m) {
 		r.t = m->hasItemLabel[i] ? &m->itemLabels[i] : NULL;
 		r.s = m->itemStr[i];
 		r.dim = m->itemLocked[i];
-		r.tag = m->itemLocked[i] ? "LOCKED" : NULL;
+		r.tag = m->itemLocked[i] ? portstr_caps(PS_LOCKED) : NULL;
 		uiListRow(buf, &r, i, i == sel, lx, y0 + (float)k * rowH, lw, rowH - 4.0f, FSK_ITEM);
 	}
 	uiListBar(top, vis, n, y0, rowH);
-	const UiAct acts[1] = { { "Select", 'A', KEY_A, !m->itemLocked[sel] } };
+	const UiAct acts[1] = { { portstr(PS_SELECT), 'A', KEY_A, !m->itemLocked[sel] } };
 	uiSkinFooter(buf, acts, 1);
 	return true;
 }
@@ -59186,7 +59194,7 @@ static bool drawUiPerfPackage(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "Performance",
+	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_PERFORMANCE),
 		feHelpHash(m->screenName) != 0);
 	const float ty = UI_HEAD_H + 6.0f, th = 24.0f;
 	uiItemTabs(buf, m, ty, th, 4);
@@ -59194,7 +59202,7 @@ static bool drawUiPerfPackage(const MenuState* m) {
 	const PerfParts* pp = &g_perfParts;
 	const MenuItem* it = menuItemAt(m, sel);
 	const int mode = it ? it->modeValue : -1;
-	const char* aLabel = "Select";
+	const char* aLabel = portstr(PS_SELECT);
 	if (pp->browsing && g_perfMenu.loaded) {
 		// ---- the parts list ----
 		const int n = perfPartsRows();
@@ -59206,13 +59214,13 @@ static bool drawUiPerfPackage(const MenuState* m) {
 		for (int k = 0; k < vis && top + k < n; k++) {
 			const int i = top + k;
 			UiRow r = { 0 };
-			r.s = pp->count > 0 ? pp->name[i] : "None";
-			r.tag = pp->count > 0 && pp->purchased[i] ? "OWNED" : NULL;
+			r.s = pp->count > 0 ? pp->name[i] : portstr(PS_NONE);
+			r.tag = pp->count > 0 && pp->purchased[i] ? portstr_caps(PS_OWNED) : NULL;
 			r.mark = pp->count > 0 && pp->purchased[i];
 			uiListRow(buf, &r, i, i == pp->sel, 8.0f, y0 + (float)k * rowH, rw, rowH - 4.0f, FSK_LIST);
 		}
 		uiListBar(top, vis, n, y0, rowH);
-		aLabel = "Install";
+		aLabel = portstr(PS_INSTALL);
 	} else if (mode == PERFPKG_MODE_PACKAGE) {
 		// ---- the package: its parts, then the cost ----
 		const float rowH = 22.0f;
@@ -59233,7 +59241,7 @@ static bool drawUiPerfPackage(const MenuState* m) {
 			shown++;
 		}
 		if (!shown)
-			uiText(buf, m->itemLocked[sel] ? "Locked" : uiItemName(m, sel), 16.0f, W * 0.5f,
+			uiText(buf, m->itemLocked[sel] ? portstr(PS_LOCKED_MIXED) : uiItemName(m, sel), 16.0f, W * 0.5f,
 				(y0 + bottom) * 0.5f, 1, UI_DIM, W - 32.0f);
 		const float cy = bottom - 11.0f;
 		if (m->pkDiscount >= 0 && m->hasText[m->pkDiscount] && !m->layoutHidden[m->pkDiscount])
@@ -59242,7 +59250,7 @@ static bool drawUiPerfPackage(const MenuState* m) {
 			uiCText(&m->texts[m->pkCostLabel], 13.0f, 12.0f, cy, 0, UI_DIM, W * 0.5f);
 		if (m->pkCost >= 0 && m->hasText[m->pkCost] && !m->layoutHidden[m->pkCost])
 			uiCText(&m->texts[m->pkCost], 17.0f, W - 12.0f, cy, 2, UI_ACCENT, W * 0.45f);
-		aLabel = m->itemLocked[sel] ? "Locked" : "Buy";
+		aLabel = portstr(m->itemLocked[sel] ? PS_LOCKED_MIXED : PS_BUY);
 	} else {
 		// Customize before its list is up, and Return To Stock: the option.
 		uiRowBar(8.0f, y0, W - 16.0f, bottom - y0, true);
@@ -59276,12 +59284,12 @@ static bool drawUiPaint(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "Paint",
+	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_PAINT),
 		feHelpHash(m->screenName) != 0);
 	const float ty = UI_HEAD_H + 6.0f, th = 24.0f;
 	const float y0 = ty + th + 8.0f, bottom = H - UI_FOOT_H - 4.0f;
 	const PaintCat* c = paintCurrent(m);
-	const char* aLabel = "Choose";
+	const char* aLabel = portstr(PS_CHOOSE);
 	if (g_paint.browsing && c && g_paint.count > 0) {
 		// ---- the brand ----
 		const char* brand = "";
@@ -59322,14 +59330,14 @@ static bool drawUiPaint(const MenuState* m) {
 			snprintf(t, sizeof(t), "$%s", cash);
 			uiText(buf, t, 16.0f, W - 12.0f, iy, 2, UI_WHITE, 0.0f);
 		}
-		aLabel = "Apply";
+		aLabel = portstr(PS_APPLY);
 	} else {
 		uiItemTabs(buf, m, ty, th, 4);
 		uiRowBar(8.0f, y0, W - 16.0f, bottom - y0, true);
 		uiText(buf, uiItemName(m, sel), 20.0f, W * 0.5f, (y0 + bottom) * 0.5f - 8.0f, 1,
 			m->itemLocked[sel] ? UI_DIM : UI_WHITE, W - 40.0f);
 		if (m->itemLocked[sel])
-			uiLabel(buf, "LOCKED", W * 0.5f, (y0 + bottom) * 0.5f + 14.0f, 1, UI_DIM);
+			uiLabel(buf, portstr_caps(PS_LOCKED), W * 0.5f, (y0 + bottom) * 0.5f + 14.0f, 1, UI_DIM);
 		fskHit(8.0f, y0, W - 16.0f, bottom - y0, FSK_KEY, KEY_A);
 	}
 	const UiAct acts[1] = { { aLabel, 'A', KEY_A, true } };
@@ -59355,7 +59363,7 @@ static bool drawUiMcList(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "Profiles",
+	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_PROFILES),
 		feHelpHash(m->screenName) != 0);
 	const float y0 = UI_HEAD_H + 6.0f, rowH = 30.0f, bottom = H - UI_FOOT_H - 4.0f;
 	const int vis = (int)((bottom - y0) / rowH), n = m->listCount;
@@ -59377,7 +59385,7 @@ static bool drawUiMcList(const MenuState* m) {
 		uiListRow(buf, &row, r, r == m->listSel, 8.0f, y0 + (float)k * rowH, rw, rowH - 4.0f, FSK_LIST);
 	}
 	uiListBar(first, vis, n, y0, rowH);
-	const UiAct acts[1] = { { "Select", 'A', KEY_A, true } };
+	const UiAct acts[1] = { { portstr(PS_SELECT), 'A', KEY_A, true } };
 	uiSkinFooter(buf, acts, 1);
 	return true;
 }
@@ -59400,7 +59408,7 @@ static bool drawUiTrax(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "EA Trax",
+	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_TRAX),
 		feHelpHash(m->screenName) != 0);
 	// ---- the play order ----
 	const float ty = UI_HEAD_H + 6.0f, th = 22.0f, fw = W - 16.0f;
@@ -59409,7 +59417,7 @@ static bool drawUiTrax(const MenuState* m) {
 	drawPadGlyph('L', 8.0f + 14.0f, ty + th * 0.5f, 12.0f, UI_Z + 0.04f);
 	drawPadGlyph('R', 8.0f + fw - 14.0f, ty + th * 0.5f, 12.0f, UI_Z + 0.04f);
 	const char* order = m->traxModeStr[gProfile.options.audio.playOrder ? 1 : 0];
-	uiText(buf, order[0] ? order : (gProfile.options.audio.playOrder ? "Random" : "Sequential"), 13.0f,
+	uiText(buf, order[0] ? order : portstr(gProfile.options.audio.playOrder ? PS_RANDOM : PS_SEQUENTIAL), 13.0f,
 		W * 0.5f, ty + th * 0.5f, 1, UI_ACCENT, fw - 60.0f);
 	fskHit(8.0f, ty - 3.0f, fw, th + 6.0f, FSK_KEY, KEY_R);
 	// ---- the songs ----
@@ -59451,8 +59459,8 @@ static bool drawUiTrax(const MenuState* m) {
 	}
 	uiListBar(m->traxTop, EATRAX_VISIBLE_ROWS, OPTIONS_TRAX_SONGS, y0, rowH);
 	const UiAct acts[2] = {
-		{ "Preview", 'A', KEY_A, true },
-		{ m->traxGrabbed ? "Release" : "Move", 'X', KEY_X, false },
+		{ portstr(PS_PREVIEW), 'A', KEY_A, true },
+		{ portstr(m->traxGrabbed ? PS_RELEASE : PS_MOVE), 'X', KEY_X, false },
 	};
 	uiSkinFooter(buf, acts, 2);
 	return true;
@@ -59474,7 +59482,7 @@ static bool drawUiPerfBrand(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, "Brands",
+	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_BRANDS),
 		feHelpHash(m->screenName) != 0);
 	const float y0 = UI_HEAD_H + 6.0f, rowH = 31.0f, bottom = H - UI_FOOT_H - 4.0f;
 	const int n = pb->rows, vis = (int)((bottom - y0) / rowH);
@@ -59506,7 +59514,7 @@ static bool drawUiPerfBrand(const MenuState* m) {
 		}
 	}
 	uiListBar(top, vis, n, y0, rowH);
-	const UiAct acts[1] = { { "Select", 'A', KEY_A, true } };
+	const UiAct acts[1] = { { portstr(PS_SELECT), 'A', KEY_A, true } };
 	uiSkinFooter(buf, acts, 1);
 	uiFooterBank(buf);
 	return true;
@@ -59532,8 +59540,8 @@ static bool drawUiTuneGraph(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", uiWidgetText(m, tuneWidget(m, 0xCB9A2C64u)),
-		g_tgraph.type == CUSTTUNE_BOOST ? "Boost" : "Torque", false);
+	uiSkinHeader(buf, portstr(PS_BACK), uiWidgetText(m, tuneWidget(m, 0xCB9A2C64u)),
+		portstr(g_tgraph.type == CUSTTUNE_BOOST ? PS_BOOST : PS_TORQUE), false);
 	const int n = CUSTTUNE_CURVE_POINTS;
 	const float gx = 34.0f, gy = UI_HEAD_H + 22.0f, gw = W - gx - 10.0f, gh = H - UI_FOOT_H - 22.0f - gy;
 	g_uiTg.on = true;
@@ -59570,8 +59578,8 @@ static bool drawUiTuneGraph(const MenuState* m) {
 			uiText(buf, t, 13.0f, cx, fmaxf(gy + 6.0f, yv - 12.0f), 1, UI_ACCENT, 0.0f);
 		}
 	}
-	uiText(buf, "LEFT / RIGHT  point     UP / DOWN  value", 10.0f, W * 0.5f, UI_HEAD_H + 9.0f, 1, UI_DIM, 0.0f);
-	const UiAct acts[2] = { { "Tip", 'X', KEY_X, false }, { "Reset", 'Y', KEY_Y, false } };
+	uiText(buf, portstr(PS_TUNE_HINT), 10.0f, W * 0.5f, UI_HEAD_H + 9.0f, 1, UI_DIM, 0.0f);
+	const UiAct acts[2] = { { portstr(PS_TIP), 'X', KEY_X, false }, { portstr(PS_RESET), 'Y', KEY_Y, false } };
 	uiSkinFooter(buf, acts, 2);
 	return true;
 }
@@ -59592,15 +59600,15 @@ static bool drawUiTuneNos(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", NULL, "Nitrous", false);
+	uiSkinHeader(buf, portstr(PS_BACK), NULL, portstr(PS_NITROUS), false);
 	const float gx = 20.0f, gy = UI_HEAD_H + 14.0f, gw = W - 40.0f, gh = H - UI_FOOT_H - 52.0f - gy;
 	uiRoundRect(gx - 4.0f, gy - 4.0f, gw + 8.0f, gh + 8.0f, 3.0f, UI_Z, UI_PANEL);
 	for (int k = 1; k < 5; k++) {
 		C2D_DrawRectSolid(gx, gy + gh * (float)k / 5.0f, UI_Z + 0.005f, gw, 1.0f, C2D_Color32(255, 255, 255, 18));
 		C2D_DrawRectSolid(gx + gw * (float)k / 5.0f, gy, UI_Z + 0.005f, 1.0f, gh, C2D_Color32(255, 255, 255, 18));
 	}
-	uiLabel(buf, "POWER", gx + 4.0f, gy + 8.0f, 0, UI_DIM);
-	uiLabel(buf, "DURATION", gx + gw - 4.0f, gy + gh - 8.0f, 2, UI_DIM);
+	uiLabel(buf, portstr_caps(PS_POWER), gx + 4.0f, gy + 8.0f, 0, UI_DIM);
+	uiLabel(buf, portstr_caps(PS_DURATION), gx + gw - 4.0f, gy + gh - 8.0f, 2, UI_DIM);
 	const float x0 = gx + gw * g_tnos.mn16 / g_tnos.max16, x1 = gx + gw * g_tnos.mx16 / g_tnos.max16;
 	const float y0 = gy + gh - gh * g_tnos.mx17 / g_tnos.max17, y1 = gy + gh - gh * g_tnos.mn17 / g_tnos.max17;
 	C2D_DrawLine(x0, y0, C2D_Color32(230, 190, 60, 255), x1, y1, C2D_Color32(230, 190, 60, 255), 2.0f,
@@ -59623,7 +59631,7 @@ static bool drawUiTuneNos(const MenuState* m) {
 	uiArrow(gx + gw - 8.0f, sy, 0.0f, 6.0f, UI_WHITE);
 	fskHit(gx - 6.0f, sy - 14.0f, 26.0f, 28.0f, FSK_KEY, KEY_LEFT);
 	fskHit(gx + gw - 20.0f, sy - 14.0f, 26.0f, 28.0f, FSK_KEY, KEY_RIGHT);
-	const UiAct acts[2] = { { "Tip", 'X', KEY_X, false }, { "Reset", 'Y', KEY_Y, false } };
+	const UiAct acts[2] = { { portstr(PS_TIP), 'X', KEY_X, false }, { portstr(PS_RESET), 'Y', KEY_Y, false } };
 	uiSkinFooter(buf, acts, 2);
 	return true;
 }
@@ -59644,7 +59652,7 @@ static bool drawUiDynoChart(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", NULL, "Dyno Run", false);
+	uiSkinHeader(buf, portstr(PS_BACK), NULL, portstr(PS_DYNO_RUN), false);
 	const bool done = g_dyno.done;
 	const float legendH = done ? 30.0f : 0.0f;
 	const float gx = 30.0f, gy = UI_HEAD_H + 10.0f, gw = W - 60.0f, gh = H - UI_FOOT_H - 18.0f - legendH - gy;
@@ -59665,7 +59673,7 @@ static bool drawUiDynoChart(const MenuState* m) {
 		const float x = gx + gw * (float)k / 10.0f;
 		C2D_DrawRectSolid(x, gy, UI_Z + 0.005f, 1.0f, gh, C2D_Color32(255, 255, 255, 12));
 	}
-	uiText(buf, "RPM x1000", 9.0f, gx + gw, gy + gh + 9.0f, 2, UI_DIM, 0.0f);
+	uiText(buf, portstr(PS_RPM_AXIS), 9.0f, gx + gw, gy + gh + 9.0f, 2, UI_DIM, 0.0f);
 	const DynoRecord* r = &g_dynoLive;
 	const float p = dynoProgress();
 	const float upTo = done ? 1.0e9f : p * (r->limiter - 200.0f);
@@ -59707,7 +59715,7 @@ static bool drawUiDynoChart(const MenuState* m) {
 		if (hpT)
 			uiCText(hpT, 11.0f, W * 0.5f + 18.0f, ly, 0, UI_WHITE, W * 0.5f - 24.0f);
 	}
-	const UiAct acts[1] = { { done ? "Results" : "Stop", 'A', KEY_A, true } };
+	const UiAct acts[1] = { { portstr(done ? PS_RESULTS : PS_STOP), 'A', KEY_A, true } };
 	uiSkinFooter(buf, acts, 1);
 	return true;
 }
@@ -59727,19 +59735,21 @@ static bool drawUiDynoResults(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Chart", NULL, "Dyno Results", false);
+	uiSkinHeader(buf, portstr(PS_CHART), NULL, portstr(PS_DYNO_RESULTS), false);
 	static const char* const kCol[3] = { "CURRENT_DATA_%d", "PREV_DATA_%d", "FR_DATA_%d" };
-	static const char* const kHead[3] = { "THIS RUN", "LAST RUN", "FIRST RUN" };
-	static const char* const kStat[5] = { "0-60", "0-100", "TOP SPEED", "TORQUE", "POWER" };
+	const char* const kHead[3] = { portstr(PS_THIS_RUN), portstr(PS_LAST_RUN), portstr_caps(PS_FIRST_RUN) };
+	const char* const kStat[5] = { "0-60", "0-100", portstr_caps(PS_TOP_SPEED), portstr_caps(PS_TORQUE),
+		portstr_caps(PS_POWER) };
 	const float lx = 8.0f, lw = 62.0f, cw = (W - 16.0f - lw) / 3.0f;
 	const float y0 = UI_HEAD_H + 8.0f, hh = 16.0f;
 	for (int c = 0; c < 3; c++)
-		uiLabel(buf, kHead[c], lx + lw + cw * ((float)c + 0.5f), y0 + hh * 0.5f, 1, c == 0 ? UI_ACCENT : UI_DIM);
+		uiText(buf, kHead[c], UI_LABEL_PX, lx + lw + cw * ((float)c + 0.5f), y0 + hh * 0.5f, 1,
+			c == 0 ? UI_ACCENT : UI_DIM, cw - 4.0f);
 	const float ry = y0 + hh + 4.0f, rh = (H - UI_FOOT_H - 6.0f - ry) / 5.0f;
 	for (int k = 0; k < 5; k++) {
 		const float y = ry + (float)k * rh;
 		uiRowBar(lx, y, W - 16.0f, rh - 3.0f, false);
-		uiLabel(buf, kStat[k], lx + 8.0f, y + (rh - 3.0f) * 0.5f, 0, UI_DIM);
+		uiText(buf, kStat[k], UI_LABEL_PX, lx + 8.0f, y + (rh - 3.0f) * 0.5f, 0, UI_DIM, lw - 10.0f);
 		for (int c = 0; c < 3; c++) {
 			const C2D_Text* t = uiWidgetText(m, tuneWidget(m, tgHash(kCol[c], k + 1)));
 			if (t)
@@ -59747,7 +59757,7 @@ static bool drawUiDynoResults(const MenuState* m) {
 					c == 0 ? UI_WHITE : UI_DIM, cw - 6.0f);
 		}
 	}
-	const UiAct acts[1] = { { "Done", 'A', KEY_A, true } };
+	const UiAct acts[1] = { { portstr(PS_DONE), 'A', KEY_A, true } };
 	uiSkinFooter(buf, acts, 1);
 	return true;
 }
@@ -59771,7 +59781,7 @@ static bool drawUiCribMap(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", NULL, NULL, feHelpHash(m->screenName) != 0);
+	uiSkinHeader(buf, portstr(PS_BACK), NULL, NULL, feHelpHash(m->screenName) != 0);
 	// ---- the stage ----
 	{
 		const float sx = 96.0f, sw = 130.0f, sy = 5.0f, sh = 26.0f;
@@ -59804,16 +59814,16 @@ static bool drawUiCribMap(const MenuState* m) {
 		const CribMapNode* nd = &cm->nodes[i];
 		char nm[64], utf[96];
 		if (!nd->ev) {
-			snprintf(utf, sizeof(utf), "Overview");
+			snprintf(utf, sizeof(utf), "%s", portstr(PS_OVERVIEW));
 		} else {
 			const int t = nd->type >= 0 && nd->type <= 5 ? nd->type : 3;
-			snprintf(nm, sizeof(nm), "%s %d", g_wmStr[WMS_RT0 + t][0] ? g_wmStr[WMS_RT0 + t] : "Race", ordinal[i]);
+			snprintf(nm, sizeof(nm), "%s %d", g_wmStr[WMS_RT0 + t][0] ? g_wmStr[WMS_RT0 + t] : portstr(PS_RACE), ordinal[i]);
 			langTextToUtf8(nm, utf, sizeof(utf));
 		}
 		UiRow row = { 0 };
 		row.s = utf;
 		row.mark = nd->ev && nd->completed;
-		row.tag = nd->ev && nd->completed ? "DONE" : NULL;
+		row.tag = nd->ev && nd->completed ? portstr(PS_DONE_TAG) : NULL;
 		row.tagInk = UI_ACCENT;
 		uiListRow(buf, &row, i, i == cm->current, 8.0f, y0 + (float)k * rowH, lw - (n > vis ? 10.0f : 0.0f),
 			rowH - 4.0f, FSK_LIST);
@@ -59854,7 +59864,7 @@ static bool drawUiCribMap(const MenuState* m) {
 		fy += 16.0f;
 	}
 	const bool race = cribmap_current_event(cm) != NULL;
-	const UiAct acts[1] = { { "Race", 'A', KEY_A, race } };
+	const UiAct acts[1] = { { portstr(PS_RACE), 'A', KEY_A, race } };
 	uiSkinFooter(buf, acts, race ? 1 : 0);
 	return true;
 }
@@ -59883,7 +59893,7 @@ static bool drawUiRows(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL, NULL,
+	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, NULL,
 		feHelpHash(m->screenName) != 0);
 	// The Quick Race pages go on with A; the options page saves on Back.
 	const bool foot = !m->modeIsOptions;
@@ -59952,10 +59962,10 @@ static bool drawUiRows(const MenuState* m) {
 	}
 	if (foot && m->modeIsTune) {
 		// TuningSlidersMenu: BUTTON1 resets the row, the tip on X.
-		static const UiAct kTune[2] = { { "Tip", 'X', KEY_X, false }, { "Reset", 'Y', KEY_Y, false } };
+		const UiAct kTune[2] = { { portstr(PS_TIP), 'X', KEY_X, false }, { portstr(PS_RESET), 'Y', KEY_Y, false } };
 		uiSkinFooter(buf, kTune, 2);
 	} else if (foot) {
-		static const UiAct kGo[1] = { { "Continue", 'A', KEY_A, true } };
+		const UiAct kGo[1] = { { portstr(PS_CONTINUE), 'A', KEY_A, true } };
 		uiSkinFooter(buf, kGo, 1);
 	}
 	return true;
@@ -60012,34 +60022,35 @@ static bool drawUiEngage(const MenuState* m) {
 		uiRoundRect(px + 12.0f, py + 12.0f, 26.0f, 3.0f, 1.5f, UI_Z + 0.01f, UI_ACCENT);
 		char up[64];
 		snprintf(up, sizeof(up), "%s", g_engStr.type);
-		for (char* p = up; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+		portstr_upper(up);
 		uiLabel(buf, up, px + 44.0f, py + 14.0f, 0, UI_ACCENT);
 		char fr[96];
 		snprintf(fr, sizeof(fr), "%s", g_engStr.from);
-		for (char* p = fr; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+		portstr_upper(fr);
 		uiLabel(buf, fr, px + pw - 12.0f, py + 14.0f, 2, UI_DIM);
 		uiText(buf, uiAfterColon(g_engStr.subject), 19.0f, px + 12.0f, py + 33.0f, 0, UI_WHITE, pw - 24.0f);
 		// The two numbers.
 		const float tw = (pw - 24.0f - 8.0f) * 0.5f, ty = py + 48.0f;
-		const char* k2[2] = { "DISTANCE", "PURSE" };
+		const char* k2[2] = { portstr_caps(PS_DISTANCE), portstr_caps(PS_PURSE) };
 		char v2[2][40];
 		snprintf(v2[0], sizeof(v2[0]), "%s", g_engStr.dist[0] ? g_engStr.dist : "--");
 		snprintf(v2[1], sizeof(v2[1]), "$%s", g_engStr.purse[0] ? g_engStr.purse : "0");
 		for (int i = 0; i < 2; i++) {
 			const float x = px + 12.0f + (float)i * (tw + 8.0f);
 			uiRowBar(x, ty, tw, 36.0f, false);
-			uiLabel(buf, k2[i], x + 10.0f, ty + 10.0f, 0, UI_ACCENT);
+			uiText(buf, k2[i], UI_LABEL_PX, x + 10.0f, ty + 10.0f, 0, UI_ACCENT, tw - 20.0f);
 			uiText(buf, v2[i], 17.0f, x + 10.0f, ty + 25.0f, 0, UI_WHITE, tw - 20.0f);
 		}
 		y = ty + 44.0f;
 	} else {
 		const char* title = event ? uiAfterColon(g_engStr.subject) : g_engStr.title;
-		uiLabel(buf, event ? (g_engageDlg.kind == ENGAGE_KIND_SHOWCASE ? "SHOWCASE" : "WORLD CHALLENGE")
-			: g_engageDlg.kind == ENGAGE_KIND_SHOP ? "SHOP" : "CHALLENGE", px + 12.0f, py + 14.0f, 0, UI_ACCENT);
+		uiLabel(buf, event ? (g_engageDlg.kind == ENGAGE_KIND_SHOWCASE ? portstr_caps(PS_MK_SHOWCASE)
+			: portstr(PS_WORLD_CHALLENGE)) : portstr(g_engageDlg.kind == ENGAGE_KIND_SHOP ? PS_SHOP : PS_CHALLENGE),
+			px + 12.0f, py + 14.0f, 0, UI_ACCENT);
 		if (event && g_engStr.from[0]) {
 			char fr[96];
 			snprintf(fr, sizeof(fr), "%s", g_engStr.from);
-			for (char* p = fr; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+			portstr_upper(fr);
 			uiLabel(buf, fr, px + pw - 12.0f, py + 14.0f, 2, UI_DIM);
 		}
 		uiText(buf, title, 19.0f, px + 12.0f, py + 33.0f, 0, UI_WHITE, pw - 24.0f);
@@ -60111,8 +60122,8 @@ static bool drawUiStatus(const MenuState* m) {
 	uiScreenBackdrop(W, H);
 	// Header: Back, then the page switcher with its dots.
 	uiBand2(0.0f, UI_HEAD_H, true);
-	const float bw = uiMeasure(buf, "Back", 14.0f) + 13.0f + 6.0f + 28.0f;
-	uiButton(buf, 6.0f, 5.0f, bw, 26.0f, 'B', "Back", false, false);
+	const float bw = uiMeasure(buf, portstr(PS_BACK), 14.0f) + 13.0f + 6.0f + 28.0f;
+	uiButton(buf, 6.0f, 5.0f, bw, 26.0f, 'B', portstr(PS_BACK), false, false);
 	fskHit(0.0f, 0.0f, 6.0f + bw + 4.0f, UI_HEAD_H, FSK_KEY, KEY_B);
 	const float rx = 6.0f + bw + 8.0f, rw = W - 6.0f - rx;
 	const int pages = s->pages > 0 ? s->pages : 1, pg = s->page;
@@ -60132,13 +60143,13 @@ static bool drawUiStatus(const MenuState* m) {
 	if (pg == 0) {
 		// The visual rating and the completion, one line.
 		uiChip(8.0f, top, W - 16.0f, 30.0f, 0);
-		const float lw = uiLabel(buf, "VISUAL", 16.0f, top + 15.0f, 0, UI_ACCENT);
+		const float lw = uiLabel(buf, portstr(PS_VISUAL), 16.0f, top + 15.0f, 0, UI_ACCENT);
 		const float stars = s->hasCar ? s->stars : 0.0f;
 		for (int i = 0; i < 10; i++)
 			uiStar(16.0f + lw + 12.0f + (float)i * 12.0f, top + 15.0f, 5.5f, stars - (float)i);
 		snprintf(v, sizeof(v), "%.0f %%", (double)(st->completed * 100.0f));
 		const float cw = uiText(buf, v, 17.0f, W - 16.0f, top + 15.0f, 2, UI_WHITE, 0.0f);
-		uiLabel(buf, "COMPLETE", W - 16.0f - cw - 6.0f, top + 15.0f, 2, UI_ACCENT);
+		uiLabel(buf, portstr_caps(PS_COMPLETE), W - 16.0f - cw - 6.0f, top + 15.0f, 2, UI_ACCENT);
 		// The rows, STATUS_SLOTS of them from the view's top.
 		const float y0 = top + 36.0f, rowH = UI_STATUS_ROW_H;
 		for (int k = 0; k < STATUS_SLOTS && s->top + k < s->count; k++) {
@@ -60177,20 +60188,21 @@ static bool drawUiStatus(const MenuState* m) {
 		} else {
 			// The stage's completion big, its bar, then the tiles.
 			uiChip(8.0f, top, W - 16.0f, 50.0f, 0);
-			snprintf(v, sizeof(v), "STAGE %d", st->stage);
+			snprintf(v, sizeof(v), portstr_caps(PS_STAGE_FMT), st->stage);
 			uiLabel(buf, v, 18.0f, top + 13.0f, 0, UI_ACCENT);
 			uiText(buf, s->reg[0], 24.0f, W - 18.0f, top + 17.0f, 2, UI_WHITE, 0.0f);
 			const float f = fmaxf(0.0f, fminf(1.0f, st->stageDone));
 			uiRoundRect(18.0f, top + 35.0f, W - 36.0f, 6.0f, 3.0f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 36));
 			if (f > 0.0f)
 				uiRoundRect(18.0f, top + 35.0f, fmaxf(6.0f, (W - 36.0f) * f), 6.0f, 3.0f, UI_Z + 0.015f, UI_ACCENT);
-			static const char* const kTile[4] = { "WORLD RACES", "SPONSOR RACES", "URL RACES", "DVDS WON" };
+			const char* const kTile[4] = { portstr(PS_WORLD_RACES), portstr(PS_SPONSOR_RACES), portstr(PS_URL_RACES),
+				portstr(PS_DVDS_WON) };
 			const int tiles = gProfile.stageCompleted[1] ? 4 : 1;
 			const float tw = (W - 16.0f - 8.0f) * 0.5f, th = 42.0f;
 			for (int i = 0; i < tiles; i++) {
 				const float x = 8.0f + (float)(i % 2) * (tw + 8.0f), y = top + 58.0f + (float)(i / 2) * (th + 8.0f);
 				uiRowBar(x, y, tw, th, false);
-				uiLabel(buf, kTile[i], x + 10.0f, y + 12.0f, 0, UI_ACCENT);
+				uiText(buf, kTile[i], UI_LABEL_PX, x + 10.0f, y + 12.0f, 0, UI_ACCENT, tw - 20.0f);
 				uiText(buf, s->reg[1 + i], 19.0f, x + 10.0f, y + 29.0f, 0, UI_WHITE, tw - 20.0f);
 			}
 		}
@@ -60199,7 +60211,7 @@ static bool drawUiStatus(const MenuState* m) {
 		const StatusStageDvds* ps = stage >= 0 && stage < PROFILE_NUM_STAGES ? &st->perStage[stage] : NULL;
 		const int count = ps ? ps->dvds : 0;
 		if (count == 0)
-			uiText(buf, "No covers this stage", 15.0f, W * 0.5f, top + 40.0f, 1, UI_DIM, 0.0f);
+			uiText(buf, portstr(PS_NO_COVERS), 15.0f, W * 0.5f, top + 40.0f, 1, UI_DIM, 0.0f);
 		for (int i = 0; i < count && i < 4; i++) {
 			const float y = top + (float)i * 48.0f, cy = y + 21.0f;
 			uiRowBar(8.0f, y, W - 16.0f, 42.0f, false);
@@ -60243,7 +60255,7 @@ static bool drawUiHelp(const MenuState* m) {
 	const float ph = 30.0f + (float)n * rowH + 10.0f + 36.0f + 12.0f, py = floorf((H - ph) * 0.5f);
 	uiRoundRect(px, py, pw, ph, 6.0f, UI_Z, C2D_Color32(0, 0, 0, 219));
 	uiDialogRing(px, py, pw, ph);
-	uiLabel(buf, "HELP", px + 14.0f, py + 16.0f, 0, UI_ACCENT);
+	uiLabel(buf, portstr_caps(PS_HELP), px + 14.0f, py + 16.0f, 0, UI_ACCENT);
 	for (int r = 0; r < n; r++) {
 		const float cy = py + 36.0f + (float)r * rowH;
 		float x = px + 16.0f;
@@ -60258,7 +60270,7 @@ static bool drawUiHelp(const MenuState* m) {
 		uiText(buf, rows[r], 15.0f, tx, cy, 0, UI_WHITE, px + pw - 14.0f - tx);
 	}
 	const float bwid = 140.0f, bx = px + (pw - bwid) * 0.5f, by = py + ph - 12.0f - 36.0f;
-	uiButton(buf, bx, by, bwid, 36.0f, 'B', "OK", true, false);
+	uiButton(buf, bx, by, bwid, 36.0f, 'B', portstr(PS_OK), true, false);
 	return true;
 }
 
@@ -60275,18 +60287,18 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 	// ---- status, top: the bank (or a world challenge's clock), messages ----
 	if (counting) {
 		drawWorldCountdown(buf);
-		uiStatChip(buf, 0.0f, 6.0f, "TIME", g_wcChipText, g_wcChipColor);
+		uiStatChip(buf, 0.0f, 6.0f, portstr_caps(PS_TIME), g_wcChipText, g_wcChipColor);
 	} else {
 		char cash[32], v[40];
 		formatCashGrouped(gProfile.cash, cash, sizeof(cash));
 		snprintf(v, sizeof(v), "$%s", cash);
-		const float w = uiStatChip(buf, 0.0f, 6.0f, "BANK", v, UI_WHITE);
+		const float w = uiStatChip(buf, 0.0f, 6.0f, portstr_caps(PS_BANK), v, UI_WHITE);
 		uiHit(0.0f, 4.0f, w, UI_CHIP_H + 4.0f, HIT_BANK);
 	}
 	const int unread = (int)sms_count_unread(&gProfile);
 	static int lastUnread = -1;
 	if (lastUnread >= 0 && unread > lastUnread)
-		worldFeedPush("New SMS message", 0xE6E6E6u);
+		worldFeedPush(portstr(PS_FEED_NEW_SMS), 0xE6E6E6u);
 	lastUnread = unread;
 	if (unread > 0) {
 		char n[12];
@@ -60311,8 +60323,8 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 		uiHit(zx - 4.0f, y - 2.0f, 40.0f, 34.0f, k == 0 ? HIT_ZOOM_IN : HIT_ZOOM_OUT);
 	}
 	if (minimap_panned(g_minimap)) {
-		const float w = uiMeasure(buf, "Recenter", 14.0f) + 28.0f, x = W - 6.0f - w, y = 148.0f;
-		uiButton(buf, x, y, w, 26.0f, 0, "Recenter", false, false);
+		const float w = uiMeasure(buf, portstr(PS_RECENTER), 14.0f) + 28.0f, x = W - 6.0f - w, y = 148.0f;
+		uiButton(buf, x, y, w, 26.0f, 0, portstr(PS_RECENTER), false, false);
 		uiHit(x - 2.0f, y - 3.0f, w + 4.0f, 32.0f, HIT_RECENTER);
 	}
 
@@ -60341,7 +60353,7 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 		C2D_DrawRectSolid(0.0f, sy, UI_Z - 0.01f, W, sh, UI_DEEP);
 		C2D_DrawRectSolid(0.0f, sy, UI_Z - 0.005f, W, gpsOn ? 2.0f : 1.0f,
 			gpsOn ? track : C2D_Color32(255, 255, 255, 40));
-		const char* lab = gpsOn ? "GPS" : "NEAREST";
+		const char* lab = portstr(gpsOn ? PS_GPS : PS_NEAREST);
 		const float cy = sy + sh * 0.5f + 1.0f;
 		const float lw = uiLabel(buf, lab, 10.0f, cy, 0, ink);
 		float right = W - 8.0f;
@@ -60353,8 +60365,8 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 			uiHit(bx - 6.0f, sy, 28.0f + 14.0f, sh, HIT_STRIP_CANCEL);
 			right = bx - 10.0f;
 		} else {
-			const float bw = uiMeasure(buf, "Set GPS", 14.0f) + 28.0f, bx = right - bw;
-			uiButton(buf, bx, sy + 5.0f, bw, 28.0f, 0, "Set GPS", true, false);
+			const float bw = uiMeasure(buf, portstr(PS_SET_GPS), 14.0f) + 28.0f, bx = right - bw;
+			uiButton(buf, bx, sy + 5.0f, bw, 28.0f, 0, portstr(PS_SET_GPS), true, false);
 			uiHit(bx - 4.0f, sy, bw + 8.0f, sh, HIT_STRIP_GPS);
 			right = bx - 10.0f;
 		}
@@ -60372,7 +60384,7 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 			uiArrow(right - dw - 11.0f, cy, atan2f(typ - cyp, txp - cxp), 6.0f, ink);
 			uiText(buf, g_markerTitle[dest], 15.0f, nameX, cy, 0, UI_WHITE, right - dw - 24.0f - nameX);
 		} else {
-			uiText(buf, "Searching...", 15.0f, nameX, cy, 0, UI_WHITE, right - nameX);
+			uiText(buf, portstr(PS_SEARCHING), 15.0f, nameX, cy, 0, UI_WHITE, right - nameX);
 		}
 		feedBottom = sy - 8.0f;
 	}
@@ -60388,14 +60400,14 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 		uiRoundRect(cx, cy, cw, ch, 6.0f, UI_Z, UI_DEEP);
 		uiDialogRing(cx, cy, cw, ch);
 		uiRoundRect(cx + 9.0f, cy + 7.0f, 22.0f, 3.0f, 1.5f, UI_Z + 0.01f, uiMarkerColour(i));
-		uiLabel(buf, shop ? "SHOP" : "EVENT", cx + 37.0f, cy + 9.0f, 0, UI_DIM);
+		uiLabel(buf, portstr(shop ? PS_SHOP : PS_EVENT), cx + 37.0f, cy + 9.0f, 0, UI_DIM);
 		uiText(buf, g_markerTitle[i], 16.0f, cx + 10.0f, cy + 26.0f, 0, UI_WHITE, cw - 20.0f);
 		uiHit(cx, cy, cw, ch, HIT_CARD);
-		const float bw = uiMeasure(buf, "Set GPS", 14.0f) + 13.0f + 6.0f + 28.0f;
+		const float bw = uiMeasure(buf, portstr(PS_SET_GPS), 14.0f) + 13.0f + 6.0f + 28.0f;
 		const float bx = cx + cw - bw - 8.0f, by = cy + ch - 34.0f;
 		uiText(buf, g_markerInfo[i], 13.0f, cx + 10.0f, cy + 44.0f, 0, UI_DIM, cw - 20.0f);
 		if (g_markerZone[i] && gps_loaded()) {
-			uiButton(buf, bx, by, bw, 28.0f, 'A', "Set GPS", true, false);
+			uiButton(buf, bx, by, bw, 28.0f, 'A', portstr(PS_SET_GPS), true, false);
 			uiHit(bx - 4.0f, by - 4.0f, bw + 8.0f, 36.0f, HIT_CARD_GPS);
 		}
 	}
@@ -60404,9 +60416,17 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 // The race panel down the left: position, lap and time with the lap's
 // progress, then the standings with name and gap together.
 #define RACE_PANEL_W 122.0f
+// The game's own suffixes, as hud.c's GetLocalizedOrdinal picks them: 10 has
+// its own key, the rest go by their last digit (th st nd rd, then th).
 static const char* uiOrdinal(int n) {
-	if (n % 100 >= 11 && n % 100 <= 13) return "th";
-	switch (n % 10) { case 1: return "st"; case 2: return "nd"; case 3: return "rd"; default: return "th"; }
+	if (n == 10)
+		return portstr(PS_ORD_10);
+	switch (n % 10) {
+	case 1: return portstr(PS_ORD_ST);
+	case 2: return portstr(PS_ORD_ND);
+	case 3: return portstr(PS_ORD_RD);
+	default: return portstr(PS_ORD_TH);
+	}
 }
 
 // PORT: the finish on the race map -- a chequered flag at Race's finish line
@@ -60445,7 +60465,7 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 	const int pos = st->drift ? st->driftPos : race_position(r, 0);
 	const int of = st->drift ? st->driftCount : race_car_count(r);
 	if (st->racePos && pos > 0 && of > 1) {
-		uiLabel(buf, "POSITION", pad, y + 4.0f, 0, UI_ACCENT);
+		uiLabel(buf, portstr_caps(PS_POSITION), pad, y + 4.0f, 0, UI_ACCENT);
 		y += 12.0f;
 		const float base = y + uiCapPx(44.0f) + 2.0f;
 		char n[8], o[8];
@@ -60468,12 +60488,12 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 		if (lap > r->laps) lap = r->laps;
 		char l[16];
 		snprintf(l, sizeof(l), "%d/%d", lap, r->laps);
-		uiLabel(buf, "LAP", pad, y + 4.0f, 0, UI_ACCENT);
-		uiLabel(buf, "TIME", W - pad, y + 4.0f, 2, UI_ACCENT);
+		uiLabel(buf, portstr_caps(PS_LAP), pad, y + 4.0f, 0, UI_ACCENT);
+		uiLabel(buf, portstr_caps(PS_TIME), W - pad, y + 4.0f, 2, UI_ACCENT);
 		uiText(buf, l, 18.0f, pad, y + 18.0f, 0, UI_WHITE, 0.0f);
 		uiText(buf, t, 18.0f, W - pad, y + 18.0f, 2, UI_WHITE, 0.0f);
 	} else {
-		uiLabel(buf, "TIME", pad, y + 4.0f, 0, UI_ACCENT);
+		uiLabel(buf, portstr_caps(PS_TIME), pad, y + 4.0f, 0, UI_ACCENT);
 		uiText(buf, t, 18.0f, pad, y + 18.0f, 0, UI_WHITE, 0.0f);
 	}
 	y += 31.0f;
@@ -60485,9 +60505,9 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 		uiRoundRect(pad, y, (W - 2.0f * pad) * frac, 4.0f, 2.0f, UI_Z + 0.015f, UI_ACCENT);
 	y += 8.0f;
 	if (r->laps > 1 && race_best_lap_time(r) > 0) {
-		char bl[32], bt[24];
+		char bl[64], bt[24];
 		race_print_time(race_best_lap_time(r), 4, bt);
-		snprintf(bl, sizeof(bl), "BEST %s", bt);
+		snprintf(bl, sizeof(bl), "%s %s", portstr_caps(PS_BEST), bt);
 		uiText(buf, bl, 12.0f, W - pad, y + 5.0f, 2, UI_DIM, 0.0f);
 	}
 	y += 15.0f;
@@ -60502,7 +60522,8 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 		return;
 	C2D_DrawRectSolid(pad, y, UI_Z + 0.01f, W - 2.0f * pad, 1.0f, UI_RIM);
 	y += 6.0f;
-	uiLabel(buf, st->drift ? "SCORES" : "STANDINGS", pad, y + 4.0f, 0, UI_ACCENT);
+	uiText(buf, portstr(st->drift ? PS_SCORES : PS_STANDINGS), UI_LABEL_PX, pad, y + 4.0f, 0, UI_ACCENT,
+		W - 2.0f * pad);
 	y += 12.0f;
 	int meRow = -1;
 	for (int i = 0; i < n; i++)
@@ -60520,7 +60541,7 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 		if (rw->name && rw->name[0])
 			snprintf(nm, sizeof(nm), "%s", rw->name);
 		else
-			snprintf(nm, sizeof(nm), "Racer %d", rw->place);
+			snprintf(nm, sizeof(nm), portstr(PS_RACER_FMT), rw->place);
 		const u32 gc = st->drift ? UI_DIM : (meRow >= 0 && i < meRow ? UI_AHEAD : UI_BEHIND);
 		const float fw = rw->figure[0] ? uiText(buf, rw->figure, 12.0f, W - pad, cy, 2, gc, 0.0f) : 0.0f;
 		uiText(buf, nm, 15.0f, pad + 17.0f, cy, 0, rw->me ? UI_ACCENT : UI_WHITE,
@@ -60688,10 +60709,9 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 		// Name the file instead of leaving the panel empty -- buildSetupMessage()'s
 		// rule, for the same reason: the path is the one thing the player cannot
 		// see from outside. A card packed before this task has no TRACKMAP*.BIN.
-		char rel[64], msg[160];
+		char rel[64], msg[256];
 		trackmap_rel_path(MINIMAP_FREEROAM_TRACK, rel, sizeof(rel));
-		snprintf(msg, sizeof(msg),
-			"No map art.\nCopy %s from the game data\nto the GameDir folder on the card.", rel);
+		snprintf(msg, sizeof(msg), portstr(PS_NO_MAP_ART), rel);
 		C2D_Text t;
 		C2D_TextFontParse(&t, g_uiFont, buf, msg);
 		C2D_TextOptimize(&t);
@@ -62683,8 +62703,9 @@ static bool drawUiLan(const MenuState* m) {
 	scissorReset();
 	const float W = BOTTOM_W, H = BOTTOM_H;
 	uiScreenBackdrop(W, H);
-	static const char* const kTitle[] = { "", "LAN Servers", "LAN Name", "LAN Lobby", "Game Room" };
-	uiSkinHeader(buf, "Back", m->hasScreenTitle ? &m->screenTitleText : NULL,
+	const char* const kTitle[] = { "", portstr(PS_T_LAN_SERVERS), portstr(PS_T_LAN_NAME), portstr(PS_T_LAN_LOBBY),
+		portstr(PS_T_GAME_ROOM) };
+	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL,
 		kTitle[m->lanKind < 5 ? m->lanKind : 0], false);
 	float y0 = UI_HEAD_H + 6.0f;
 	const float bottom = H - UI_FOOT_H - 4.0f;
@@ -62692,7 +62713,7 @@ static bool drawUiLan(const MenuState* m) {
 	switch (m->lanKind) {
 	case LANK_LOBBY: {
 		// ---- Create Game, Join Game, Refresh, Filter ----
-		static const char* const kBtn[4] = { "Create", "Join", "Refresh", "Filter" };
+		const char* const kBtn[4] = { portstr(PS_CREATE), portstr(PS_JOIN), portstr(PS_REFRESH), portstr(PS_FILTER) };
 		const float gap = 4.0f, bw = (W - 16.0f - 3.0f * gap) / 4.0f, bh = 24.0f;
 		for (int k = 0; k < 4; k++) {
 			const float x = 8.0f + (float)k * (bw + gap);
@@ -62706,7 +62727,7 @@ static bool drawUiLan(const MenuState* m) {
 		const int have = m->lanKind == LANK_SERVERS ? g_lanServerCount : g_lan.numGames;
 		const int n = have < LAN_LIST_ROWS ? have : LAN_LIST_ROWS;
 		if (n <= 0) {
-			uiText(buf, m->lanKind == LANK_SERVERS ? "Looking for servers..." : "No games yet", 15.0f,
+			uiText(buf, portstr(m->lanKind == LANK_SERVERS ? PS_LOOKING_SERVERS : PS_NO_GAMES), 15.0f,
 				W * 0.5f, (y0 + bottom) * 0.5f, 1, UI_DIM, W - 32.0f);
 			break;
 		}
@@ -62727,13 +62748,13 @@ static bool drawUiLan(const MenuState* m) {
 	}
 	case LANK_NAME: {
 		const float fy = (y0 + bottom) * 0.5f - 22.0f, fh = 36.0f;
-		uiLabel(buf, "YOUR NAME", 12.0f, fy - 12.0f, 0, UI_DIM);
+		uiLabel(buf, portstr(PS_YOUR_NAME), 12.0f, fy - 12.0f, 0, UI_DIM);
 		uiRowBar(8.0f, fy, W - 16.0f, fh, true);
 		const C2D_Text* t = uiLanText(m, m->lanField);
 		if (t)
 			uiCText(t, 18.0f, W * 0.5f, fy + fh * 0.5f, 1, UI_WHITE, W - 40.0f);
 		else
-			uiText(buf, "Tap to type a name", 15.0f, W * 0.5f, fy + fh * 0.5f, 1, UI_DIM, W - 40.0f);
+			uiText(buf, portstr(PS_TAP_NAME), 15.0f, W * 0.5f, fy + fh * 0.5f, 1, UI_DIM, W - 40.0f);
 		fskHit(8.0f, fy - 4.0f, W - 16.0f, fh + 8.0f, FSK_KEY, KEY_X);
 		break;
 	}
@@ -62743,7 +62764,7 @@ static bool drawUiLan(const MenuState* m) {
 		for (int k = 0; k < LAN_ROOM_SLOTS; k++) {
 			UiRow row = { 0 };
 			row.t = uiLanText(m, m->lanRowText[k][0]);
-			row.s = row.t ? NULL : "Open";
+			row.s = row.t ? NULL : portstr(PS_OPEN_SLOT);
 			row.dim = row.t == NULL;
 			row.mark = m->lanReady[k] >= 0 && !m->layoutHidden[m->lanReady[k]] && m->lanSlotConsole[k] >= 0;
 			uiListRow(buf, &row, k, k == m->lanSel && k > 0, 8.0f, y0 + (float)k * rowH, lw, rowH - 4.0f,
@@ -62751,11 +62772,11 @@ static bool drawUiLan(const MenuState* m) {
 		}
 		const float ix = 8.0f + lw + 8.0f, iw = W - ix - 8.0f;
 		uiRoundRect(ix, y0, iw, bottom - y0, 3.0f, UI_Z, UI_PANEL);
-		static const char* const kInfo[3] = { "TRACK", "LAPS", "DIRECTION" };
+		const char* const kInfo[3] = { portstr_caps(PS_TRACK), portstr_caps(PS_LAPS), portstr(PS_DIRECTION) };
 		const int iw3[3] = { m->lanTrack, m->lanLaps, m->lanDir };
 		float iy = y0 + 12.0f;
 		for (int k = 0; k < 3; k++) {
-			uiLabel(buf, kInfo[k], ix + 8.0f, iy, 0, UI_DIM);
+			uiText(buf, kInfo[k], UI_LABEL_PX, ix + 8.0f, iy, 0, UI_DIM, iw - 16.0f);
 			const C2D_Text* t = uiLanText(m, iw3[k]);
 			if (t)
 				uiCText(t, 14.0f, ix + 8.0f, iy + 15.0f, 0, UI_WHITE, iw - 16.0f);
@@ -62766,7 +62787,7 @@ static bool drawUiLan(const MenuState* m) {
 			uiCText(cd, 16.0f, ix + iw * 0.5f, bottom - 50.0f, 1, UI_ACCENT, iw - 12.0f);
 		if (m->lanOptBtn >= 0) {
 			const float by = bottom - 32.0f;
-			uiButton(buf, ix + 6.0f, by, iw - 12.0f, 26.0f, 'A', "Options", m->lanSel == 0, false);
+			uiButton(buf, ix + 6.0f, by, iw - 12.0f, 26.0f, 'A', portstr(PS_OPTIONS), m->lanSel == 0, false);
 			fskHit(ix + 6.0f, by - 3.0f, iw - 12.0f, 32.0f, FSK_LANOPT, 0);
 		}
 		break;
