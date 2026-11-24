@@ -63,6 +63,8 @@ bool portprefs_read(const char* path, PortPrefs* p) {
 			p->largeText = atoi(v) != 0;
 		} else if (strcasecmp(k, "HighContrast") == 0) {
 			p->highContrast = atoi(v) != 0;
+		} else if (strcasecmp(k, "MotionSteer") == 0) {
+			p->motionSteer = atoi(v) != 0;
 		}
 	}
 	fclose(f);
@@ -81,6 +83,7 @@ bool portprefs_write(const char* path, const PortPrefs* p) {
 	fprintf(f, "Language=%s\n", kPortLangs[li].code);
 	fprintf(f, "LargeText=%d\n", p->largeText ? 1 : 0);
 	fprintf(f, "HighContrast=%d\n", p->highContrast ? 1 : 0);
+	fprintf(f, "MotionSteer=%d\n", p->motionSteer ? 1 : 0);
 	const bool ok = fclose(f) == 0;
 	if (!ok) {
 		remove(tmp);

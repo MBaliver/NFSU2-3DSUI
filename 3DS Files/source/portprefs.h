@@ -32,6 +32,7 @@ typedef struct {
 	int  language;       // kPortLangs index; 0 = English
 	bool largeText;      // the kit (and the top HUD) at ~1.25x
 	bool highContrast;   // solid panels, stronger text and rims
+	bool motionSteer;    // 3DS accelerometer tilt steering (driving only)
 } PortPrefs;
 
 void portprefs_defaults(PortPrefs* p);

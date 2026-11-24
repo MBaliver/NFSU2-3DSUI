@@ -330,7 +330,8 @@ static void buildPlayer(const OptTarget* t, RowSink* sink) {
 	addRow(sink, OPT_SPLIT_TIME, LBL_SPLIT_TIME, false, false);     // 0x7942E8
 	addRow(sink, OPT_SCORE, LBL_SCORE, false, false);               // 0x7942A0
 	addRow(sink, OPT_LEADERBOARD, LBL_LEADERBOARD, false, false);   // 0x794330
-	addRow(sink, OPT_WHEEL_OPTIONS, LBL_WHEEL_OPTIONS, false, true); // 0x791E00
+	// PORT: replaces PC's Wheel Options with 3DS accelerometer tilt steering (driving only).
+	addTextRow(sink, OPT_WHEEL_OPTIONS, portstr(PS_OPT_MOTION_STEER), false);
 	addRow(sink, OPT_FEEDBACK, LBL_FEEDBACK, false, false);         // 0x791DB0
 	addRow(sink, OPT_ASK_TRANSMISSION, LBL_ASK_TRANS, false, false); // 0x794378
 }
@@ -737,7 +738,9 @@ void options_row_value(const OptTarget* t, OptKind kind, OptValue* out) {
 		out->valueHash = VAL_ON;
 		break;
 
-	case OPT_WHEEL_OPTIONS: // a button, no value
+	case OPT_WHEEL_OPTIONS:
+		out->valueHash = (t->port && t->port->motionSteer) ? VAL_ON : VAL_OFF;
+		break;
 	case OPT_CUSTOMIZE_DISPLAY:
 	case OPT_DEFAULT_DISPLAY:
 	default:
@@ -980,7 +983,10 @@ bool options_adjust(const OptTarget* t, OptKind kind, bool right) {
 				? DISPLAY_STEREO_INTO : DISPLAY_STEREO_POP;
 		break;
 
-	case OPT_WHEEL_OPTIONS: // PORT: a button for a wheel the 3DS cannot have
+	case OPT_WHEEL_OPTIONS:
+		if (t->port)
+			t->port->motionSteer = !t->port->motionSteer;
+		break;
 	default:
 		break;
 	}

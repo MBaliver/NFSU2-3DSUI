@@ -6082,7 +6082,8 @@ static OptTarget optionsTarget(void) {
 // True when it was the language, whose screen the caller loads again so its
 // labels are in the new one.
 static bool portPrefsRowChanged(OptKind kind) {
-	if (kind != OPT_ACC_LANGUAGE && kind != OPT_ACC_LARGE_TEXT && kind != OPT_ACC_HIGH_CONTRAST)
+	if (kind != OPT_ACC_LANGUAGE && kind != OPT_ACC_LARGE_TEXT &&
+			kind != OPT_ACC_HIGH_CONTRAST && kind != OPT_WHEEL_OPTIONS)
 		return false;
 	portPrefsApply(g_cfgMain);
 	portPrefsSave();
@@ -51366,8 +51367,8 @@ static void worldInput(u32 kHeld, u32 kDown, float dt) {
 	CarSimInput in;
 	memset(&in, 0, sizeof(in));
 
-	// Steering: the Circle Pad alone, analogue, so a partial deflection is
-	// partial lock rather than full lock a frame later.
+	// Steering: Circle Pad (analogue), plus optional 3DS accelerometer tilt
+	// steering ("Motion Steering" in Player Options -- driving only, never menus).
 	float steer = 0.0f;
 	circlePosition cp;
 	if (g_simLatePad)
@@ -51376,6 +51377,32 @@ static void worldInput(u32 kHeld, u32 kDown, float dt) {
 		hidCircleRead(&cp);
 	if (cp.dx > WORLD_STICK_DEAD || cp.dx < -WORLD_STICK_DEAD)
 		steer -= (float)cp.dx / WORLD_STICK_FULL;
+	{
+		static bool s_accelOn = false;
+		static float s_motionFilt = 0.0f;
+		if (g_portPrefs.motionSteer) {
+			if (!s_accelOn) {
+				HIDUSER_EnableAccelerometer();
+				s_accelOn = true;
+				s_motionFilt = 0.0f;
+			}
+			accelVector av = { 0, 0, 0 };
+			hidAccelRead(&av);
+			// 3DS landscape: 1G ~= 512 raw units; +X tilts right (turn right -> negative steer).
+			// Deadzone ~4 deg (35), full lock ~38 deg (315), low-pass smoothed.
+			s_motionFilt += ((float)av.x - s_motionFilt) * 0.35f;
+			const float dead = 35.0f, full = 315.0f;
+			const float mag = fabsf(s_motionFilt);
+			if (mag > dead) {
+				const float norm = fminf(1.0f, (mag - dead) / (full - dead));
+				steer -= (s_motionFilt > 0.0f ? norm : -norm);
+			}
+		} else if (s_accelOn) {
+			HIDUSER_DisableAccelerometer();
+			s_accelOn = false;
+			s_motionFilt = 0.0f;
+		}
+	}
 	in.steer = clamp1(steer);
 
 	// Pedals: digital, full travel or none. Every button below comes from the
