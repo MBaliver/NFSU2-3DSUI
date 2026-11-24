@@ -57686,7 +57686,7 @@ static void uiArrow(float x, float y, float a, float size, u32 c) {
 
 // The HUD's touch targets, laid out by the draw and hit by the next tap.
 enum { HIT_BANK = 1, HIT_SMS, HIT_ZOOM_IN, HIT_ZOOM_OUT, HIT_RECENTER, HIT_STRIP_GPS,
-	HIT_STRIP_CANCEL, HIT_CARD_GPS, HIT_CARD };
+	HIT_STRIP_CANCEL, HIT_CARD_GPS, HIT_CARD, HIT_RACE_BOARD };
 typedef struct { float x, y, w, h; int id; } UiHit;
 static UiHit g_uiHit[16];
 static int g_uiHitN;
@@ -57697,6 +57697,7 @@ static void uiHit(float x, float y, float w, float h, int id) {
 
 static int g_mmSel = -1;        // the marker whose card is up
 static int g_nearestEvent = -1; // the destination strip's offer with the GPS off
+static bool g_raceBoardOpen = false; // race bottom strip: expanded standings card
 
 static u32 uiMarkerColour(int i);
 static u32 uiLighten(u32 c, float k);
@@ -57758,6 +57759,9 @@ static void worldHandleTap(void) {
 		case HIT_CARD_GPS:
 			worldGpsToMarker(g_mmSel);
 			g_mmSel = -1;
+			break;
+		case HIT_RACE_BOARD:
+			g_raceBoardOpen = !g_raceBoardOpen;
 			break;
 		default: break;
 		}
@@ -61314,100 +61318,148 @@ static void drawRaceFinish(const Race* r, float mx, float my, float mw, float mh
 }
 
 static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
-	const float W = RACE_PANEL_W, pad = 9.0f;
-	// U2-UI: black, a hairline where it meets the map.
-	C2D_DrawRectSolid(0.0f, 0.0f, UI_Z - 0.01f, W, BOTTOM_H, C2D_Color32(0, 0, 0, 219));
-	C2D_DrawRectSolid(W - 1.0f, 0.0f, UI_Z - 0.005f, 1.0f, BOTTOM_H, C2D_Color32(255, 255, 255, 51));
+	const float W = BOTTOM_W, H = BOTTOM_H;
 	const Race* r = st->race;
-	float y = 8.0f;
+	// Same soft top shade as drawWorldChips(), so top tabs read over bright roads.
+	C2D_DrawRectangle(0.0f, 0.0f, UI_Z - 0.05f, W, 40.0f,
+		C2D_Color32(0, 0, 0, 102), C2D_Color32(0, 0, 0, 102),
+		C2D_Color32(0, 0, 0, 0), C2D_Color32(0, 0, 0, 0));
 
-	// Position: the place big, its suffix hung from the numeral's cap line,
-	// the field on its baseline.
+	// ---- top-left tab (same slot as BANK in free roam): POSITION ----
 	const int pos = st->drift ? st->driftPos : race_position(r, 0);
 	const int of = st->drift ? st->driftCount : race_car_count(r);
 	if (st->racePos && pos > 0 && of > 1) {
-		uiLabel(buf, portstr_caps(PS_POSITION), pad, y + 4.0f, 0, UI_ACCENT);
-		y += 12.0f;
-		const float base = y + uiCapPx(44.0f) + 2.0f;
-		char n[8], o[8];
-		snprintf(n, sizeof(n), "%d", pos);
-		snprintf(o, sizeof(o), "/%d", of);
-		const float nw = uiTextBase(buf, n, 44.0f, pad - 1.0f, base, 0, UI_WHITE, 0.0f);
-		const float sw = uiTextBase(buf, uiOrdinal(pos), 17.0f, pad + nw + 1.0f,
-			base - uiCapPx(44.0f) + uiCapPx(17.0f), 0, UI_WHITE, 0.0f);
-		uiTextBase(buf, o, 19.0f, pad + nw + sw + 4.0f, base, 0, UI_DIM, 0.0f);
-		y = base + 9.0f;
+		char pv[24];
+		snprintf(pv, sizeof(pv), "%d%s/%d", pos, uiOrdinal(pos), of);
+		const float tw = uiStatChip(buf, 0.0f, 6.0f, portstr_caps(PS_POSITION), pv, UI_WHITE);
+		uiHit(0.0f, 4.0f, tw, UI_CHIP_H + 4.0f, HIT_RACE_BOARD);
 	}
 
-	// Lap and time, then the lap's progress and the best lap.
-	C2D_DrawRectSolid(pad, y, UI_Z + 0.01f, W - 2.0f * pad, 1.0f, UI_RIM);
-	y += 6.0f;
-	char t[24];
-	race_print_time(race_clock(r), 4, t);
-	if (r->laps > 1) {
-		int lap = r->car.lap < 1 ? 1 : r->car.lap;
-		if (lap > r->laps) lap = r->laps;
-		char l[16];
-		snprintf(l, sizeof(l), "%d/%d", lap, r->laps);
-		uiLabel(buf, portstr_caps(PS_LAP), pad, y + 4.0f, 0, UI_ACCENT);
-		uiLabel(buf, portstr_caps(PS_TIME), W - pad, y + 4.0f, 2, UI_ACCENT);
-		uiText(buf, l, 18.0f, pad, y + 18.0f, 0, UI_WHITE, 0.0f);
-		uiText(buf, t, 18.0f, W - pad, y + 18.0f, 2, UI_WHITE, 0.0f);
-	} else {
-		uiLabel(buf, portstr_caps(PS_TIME), pad, y + 4.0f, 0, UI_ACCENT);
-		uiText(buf, t, 18.0f, pad, y + 18.0f, 0, UI_WHITE, 0.0f);
-	}
-	y += 31.0f;
+	// ---- progress fraction (0..1) ----
 	float frac = r->car.lapExact - floorf(r->car.lapExact);
 	if (r->car.lap < 0 || frac < 0.0f) frac = 0.0f;
 	if (r->car.finished) frac = 1.0f;
-	uiRoundRect(pad, y, W - 2.0f * pad, 4.0f, 2.0f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 30));
-	if (frac > 0.0f)
-		uiRoundRect(pad, y, (W - 2.0f * pad) * frac, 4.0f, 2.0f, UI_Z + 0.015f, UI_ACCENT);
-	y += 8.0f;
-	if (r->laps > 1 && race_best_lap_time(r) > 0) {
-		char bl[64], bt[24];
-		race_print_time(race_best_lap_time(r), 4, bt);
-		snprintf(bl, sizeof(bl), "%s %s", portstr_caps(PS_BEST), bt);
-		uiText(buf, bl, 12.0f, W - pad, y + 5.0f, 2, UI_DIM, 0.0f);
-	}
-	y += 15.0f;
 
-	// The standings, one row a car on one centre line: the place tile, the
-	// name, the gap -- red for a car ahead, green behind.
+	// ---- top-right tab (same slot as SMS in free roam): BEST / LAP / % ----
+	{
+		char rLab[32] = "", rVal[24] = "";
+		if (r->laps > 1 && race_best_lap_time(r) > 0) {
+			snprintf(rLab, sizeof(rLab), "%s", portstr_caps(PS_BEST));
+			race_print_time(race_best_lap_time(r), 4, rVal);
+		} else if (r->laps > 1) {
+			int lap = r->car.lap < 1 ? 1 : r->car.lap;
+			if (lap > r->laps) lap = r->laps;
+			snprintf(rLab, sizeof(rLab), "%s", portstr_caps(PS_LAP));
+			snprintf(rVal, sizeof(rVal), "%d/%d", lap, r->laps);
+		} else {
+			snprintf(rVal, sizeof(rVal), "%d%%", (int)(frac * 100.0f));
+		}
+		const float lw = rLab[0] ? uiMeasure(buf, rLab, UI_LABEL_PX) + 7.0f : 0.0f;
+		const float vw = uiMeasure(buf, rVal, 18.0f);
+		const float w = 18.0f + lw + vw + 10.0f;
+		const float x = W - w, y = 6.0f, cy = y + UI_CHIP_H * 0.5f;
+		uiTab(x, y, w, UI_CHIP_H, 1, UI_PANEL);
+		if (rLab[0])
+			uiLabel(buf, rLab, x + 18.0f, cy, 0, UI_ACCENT);
+		uiText(buf, rVal, 18.0f, x + 18.0f + lw, cy, 0, UI_WHITE, 0.0f);
+	}
+
+	// ---- right-edge zoom chips (same as free roam) ----
+	if (!g_raceBoardOpen) {
+		const float zx = W - 36.0f;
+		for (int k = 0; k < 2; k++) {
+			const float zy = 76.0f + 34.0f * (float)k, cx = zx + 15.0f, cy = zy + 15.0f;
+			uiChip(zx, zy, 30.0f, 30.0f, 0);
+			C2D_DrawRectSolid(cx - 6.0f, cy - 1.0f, UI_Z + 0.03f, 12.0f, 2.0f, UI_WHITE);
+			if (k == 0)
+				C2D_DrawRectSolid(cx - 1.0f, cy - 6.0f, UI_Z + 0.03f, 2.0f, 12.0f, UI_WHITE);
+			uiHit(zx - 4.0f, zy - 2.0f, 40.0f, 34.0f, k == 0 ? HIT_ZOOM_IN : HIT_ZOOM_OUT);
+		}
+	}
+
+	// ---- bottom strip (same 36 px bar as GPS in free roam) ----
+	const float sh = 36.0f, sy = H - sh;
+	C2D_DrawRectSolid(0.0f, sy, UI_Z - 0.01f, W, sh, UI_DEEP);
+	C2D_DrawRectSolid(0.0f, sy, UI_Z - 0.005f, W, 2.0f, C2D_Color32(255, 255, 255, 36));
+	if (frac > 0.0f)
+		C2D_DrawRectSolid(0.0f, sy, UI_Z - 0.002f, W * frac, 2.0f, UI_ACCENT);
+
 	if (!st->leaderboard || !g_hud)
 		return;
 	HudStandingRow rows[1 + RACE_MAX_AI];
 	const int n = hud_race_standings(g_hud, st, rows, 1 + RACE_MAX_AI);
 	if (n <= 1)
 		return;
-	C2D_DrawRectSolid(pad, y, UI_Z + 0.01f, W - 2.0f * pad, 1.0f, UI_RIM);
-	y += 6.0f;
-	uiText(buf, portstr(st->drift ? PS_SCORES : PS_STANDINGS), UI_LABEL_PX, pad, y + 4.0f, 0, UI_ACCENT,
-		W - 2.0f * pad);
-	y += 12.0f;
 	int meRow = -1;
 	for (int i = 0; i < n; i++)
 		if (rows[i].me) meRow = i;
-	// U2-UI list rows: grey bars, yours wearing the highlight.
-	const float rowH = 20.0f;
-	for (int i = 0; i < n && y + rowH <= BOTTOM_H - 2.0f; i++) {
-		const HudStandingRow* rw = &rows[i];
-		const float cy = y + (rowH - 2.0f) * 0.5f;
-		uiRowBar(pad - 5.0f, y, W - 2.0f * pad + 8.0f, rowH - 2.0f, rw->me);
-		char p[4];
+
+	// Compact battle readout inside the 36 px strip: your row + closest rival.
+	const float cy = sy + sh * 0.5f + 1.0f;
+	const int aIdx = meRow > 0 ? meRow - 1 : 0;
+	const int bIdx = meRow > 0 ? meRow : (n > 1 ? 1 : -1);
+	const int slots[2] = { aIdx, bIdx };
+	const float slotW = (W - 34.0f) * 0.5f;
+	for (int s = 0; s < 2; s++) {
+		const int idx = slots[s];
+		if (idx < 0 || idx >= n)
+			continue;
+		const HudStandingRow* rw = &rows[idx];
+		const float sx = 8.0f + (float)s * (slotW + 4.0f);
+		if (s == 1)
+			C2D_DrawRectSolid(sx - 3.0f, sy + 9.0f, UI_Z + 0.01f, 1.0f, sh - 16.0f,
+				C2D_Color32(255, 255, 255, 38));
+		char p[6], nm[32];
 		snprintf(p, sizeof(p), "%d", rw->place);
-		uiText(buf, p, 13.0f, pad + 4.0f, cy, 1, rw->me ? UI_ACCENT : UI_DIM, 0.0f);
-		char nm[32];
 		if (rw->name && rw->name[0])
 			snprintf(nm, sizeof(nm), "%s", rw->name);
 		else
 			snprintf(nm, sizeof(nm), portstr(PS_RACER_FMT), rw->place);
-		const u32 gc = st->drift ? UI_DIM : (meRow >= 0 && i < meRow ? UI_AHEAD : UI_BEHIND);
-		const float fw = rw->figure[0] ? uiText(buf, rw->figure, 12.0f, W - pad, cy, 2, gc, 0.0f) : 0.0f;
-		uiText(buf, nm, 15.0f, pad + 17.0f, cy, 0, rw->me ? UI_ACCENT : UI_WHITE,
-			W - pad - 17.0f - pad - fw - 4.0f);
-		y += rowH;
+		const u32 gc = st->drift ? UI_DIM : (meRow >= 0 && idx < meRow ? UI_AHEAD : UI_BEHIND);
+		const float fw = rw->figure[0] ? uiText(buf, rw->figure, 12.0f, sx + slotW - 4.0f, cy, 2, gc, 0.0f) : 0.0f;
+		uiText(buf, p, 14.0f, sx + 4.0f, cy, 0, rw->me ? UI_ACCENT : UI_DIM, 0.0f);
+		uiText(buf, nm, 15.0f, sx + 18.0f, cy, 0, rw->me ? UI_ACCENT : UI_WHITE,
+			slotW - 22.0f - fw - 4.0f);
+	}
+	// Expand / collapse chevron on the right of the strip.
+	const float cx = W - 14.0f;
+	if (g_raceBoardOpen)
+		C2D_DrawTriangle(cx - 4.0f, cy - 2.0f, UI_ACCENT, cx + 4.0f, cy - 2.0f, UI_ACCENT,
+			cx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
+	else
+		C2D_DrawTriangle(cx - 4.0f, cy + 2.5f, UI_ACCENT, cx + 4.0f, cy + 2.5f, UI_ACCENT,
+			cx, cy - 2.5f, UI_ACCENT, UI_Z + 0.03f);
+	uiHit(0.0f, sy - 2.0f, W, sh + 2.0f, HIT_RACE_BOARD);
+
+	// ---- expanded floating standings card (when tapped) ----
+	if (g_raceBoardOpen) {
+		const float rowH = 22.0f;
+		const float cw = W - 16.0f, ch = 26.0f + (float)n * rowH + 6.0f;
+		const float cx0 = 8.0f, cy0 = sy - ch - 6.0f;
+		uiRoundRect(cx0, cy0, cw, ch, 6.0f, UI_Z + 0.01f, C2D_Color32(0, 0, 0, 224));
+		uiDialogRing(cx0, cy0, cw, ch);
+		uiLabel(buf, portstr_caps(st->drift ? PS_SCORES : PS_STANDINGS),
+			cx0 + 12.0f, cy0 + 13.0f, 0, UI_ACCENT);
+		float ry = cy0 + 24.0f;
+		for (int i = 0; i < n; i++) {
+			const HudStandingRow* rw = &rows[i];
+			const float rcy = ry + (rowH - 2.0f) * 0.5f;
+			uiRowBar(cx0 + 8.0f, ry, cw - 16.0f, rowH - 2.0f, rw->me);
+			char p[4], nm[32];
+			snprintf(p, sizeof(p), "%d", rw->place);
+			if (rw->name && rw->name[0])
+				snprintf(nm, sizeof(nm), "%s", rw->name);
+			else
+				snprintf(nm, sizeof(nm), portstr(PS_RACER_FMT), rw->place);
+			const u32 gc = st->drift ? UI_DIM : (meRow >= 0 && i < meRow ? UI_AHEAD : UI_BEHIND);
+			const float fw = rw->figure[0]
+				? uiText(buf, rw->figure, 13.0f, cx0 + cw - 14.0f, rcy, 2, gc, 0.0f) : 0.0f;
+			uiText(buf, p, 14.0f, cx0 + 18.0f, rcy, 1, rw->me ? UI_ACCENT : UI_DIM, 0.0f);
+			uiText(buf, nm, 15.0f, cx0 + 30.0f, rcy, 0, rw->me ? UI_ACCENT : UI_WHITE,
+				cw - 44.0f - fw - 6.0f);
+			ry += rowH;
+		}
+		uiHit(cx0, cy0, cw, ch, HIT_RACE_BOARD);
 	}
 }
 
@@ -61590,12 +61642,13 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	const bool showMap = !stage0 || stage0ShowMinimap();
 
 	// ---- the minimap ----
-	// PORT: full-bleed. Free roam's chips float over it; a race's panel takes
-	// the left and the map the rest.
+	// PORT: full-bleed in both free roam and races; chips and bottom strip float over it.
 	const float mapY = 0.0f;
-	const float mapX = g_raceRun.on ? RACE_PANEL_W : 0.0f;
-	const float mapW = BOTTOM_W - mapX;
-	const float mapH = BOTTOM_H - mapY;
+	const float mapX = 0.0f;
+	const float mapW = BOTTOM_W;
+	const float mapH = BOTTOM_H;
+	if (!g_raceRun.on)
+		g_raceBoardOpen = false;
 	const MinimapMarker* marks = NULL;
 	int markCount = 0;
 	MinimapGps gps;
