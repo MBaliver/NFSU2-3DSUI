@@ -26496,6 +26496,15 @@ static bool menuNavOnBottom(const MenuState* m) {
 	if ((g_tune.on || g_tune.pending) &&
 			(m->isFeDialog || strncasecmp(m->screenName, "UI_Performance", 14) == 0))
 		return true;
+	// PORT: the pause (UI_pause), its option pages (UI_PauseOptionsMain,
+	// UI_PauseOptions) and the Customize Display page they open are choices,
+	// and every choice lives on the lower panel in the kit (the user,
+	// 2026-11-24): the frontend's lower-panel layout, so the grid and the
+	// option rows skin them. Only the world loads these with g_feNavBottom
+	// clear; the frontend's own Customize keeps its clause below.
+	if (!g_feNavBottom && (strncasecmp(m->screenName, "UI_Pause", 8) == 0 ||
+			strcasecmp(m->screenName, OPTIONS_CUSTOMIZE_FNG) == 0))
+		return true;
 	return g_feNavBottom && strcasecmp(m->screenName, LOADING_FNG) != 0;
 }
 
@@ -38569,18 +38578,20 @@ static u32 worldUiKey(WorldUiMode m) {
 }
 
 // Which panel an in-world screen is drawn on -- a port layout decision the
-// user made (2026-10-22), not retail's: the pause menu and its own option
-// screens keep the top screen, and every dialog -- the engage race dialog,
-// the Cingular mailbox, the GPS world map, status, the pause menu's own
-// confirm dialog -- takes the bottom screen in place of the bank and minimap,
-// where the whole 640x480 canvas lands at exactly 320x240. The street stays
-// on the top screen, and so will the GPS guidance arrow above the car. The
-// post-race screens are full screens like the pause menu and keep the top too,
-// the sponsor pair among them (UI_SponsorPopup, UI_Sponsorship_new), whose
-// confirm then draws over it the way the pause menu's does. The photo shoot
-// is split across the two (shootSetup()), so it is not a bottom dialog either.
+// user made (2026-10-22), not retail's: every dialog -- the engage race
+// dialog, the Cingular mailbox, the GPS world map, status -- takes the bottom
+// screen in place of the bank and minimap, where the whole 640x480 canvas
+// lands at exactly 320x240. The street stays on the top screen, and so will
+// the GPS guidance arrow above the car. PORT (the user, 2026-11-24): the
+// pause menu, its option pages and its confirms joined them, in the kit
+// (menuNavOnBottom()); the top screen shows the map and the race or the
+// career's state while it is up (drawPauseTop()). The post-race screens are
+// full screens and keep the top, the sponsor pair among them
+// (UI_SponsorPopup, UI_Sponsorship_new), whose confirm then draws over it.
+// The photo shoot is split across the two (shootSetup()), so it is not a
+// bottom dialog either.
 static bool worldUiOnBottom(const MenuState* m) {
-	return !m->isShoot && strncasecmp(m->screenName, "UI_Pause", 8) != 0 &&
+	return !m->isShoot &&
 		strncasecmp(m->screenName, "UI_PostRace", 11) != 0 &&
 		strncasecmp(m->screenName, "UI_Sponsor", 10) != 0;
 }
@@ -60529,28 +60540,11 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 	}
 }
 
-static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
-	C2D_TextBufClear(buf);
-	// Last frame's buttons answer this frame's tap, then the draw lays them
-	// out again.
-	worldHandleTap();
-	g_uiHitN = 0;
-	g_gpsMarkerNow = g_raceRun.on ? -1 : worldGpsMarker();
-
-	// FEngHud::DetermineHudFeatures (0x802158F8) while the prologue has
-	// control: its mask is only the four Stage0 queries' bits, so the bank
-	// (PickedUpBank, hi 0x80000) is off throughout and the minimap (lo 1)
-	// only from ShowMinimap, state 6 on (#274).
-	const bool stage0 = stage0HasControl();
-	const bool showMap = !stage0 || stage0ShowMinimap();
-
-	// ---- the minimap ----
-	// PORT: full-bleed. Free roam's chips float over it; a race's panel takes
-	// the left and the map the rest.
-	const float mapY = 0.0f;
-	const float mapX = g_raceRun.on ? RACE_PANEL_W : 0.0f;
-	const float mapW = BOTTOM_W - mapX;
-	const float mapH = BOTTOM_H - mapY;
+// The minimap's content this frame -- the markers, the GPS's side, the map
+// mode and the rings' colour -- for whichever view draws it: the bottom
+// panel (drawWorldBottom()) or, under the pause, the top screen's
+// (drawPauseTop()). The lists are static: one view draws a frame.
+static MinimapMode worldMapContent(const MinimapMarker** marksOut, int* countOut, MinimapGps* gps) {
 	// In a race the radar carries the field and not the city: retail's
 	// RaceCoordinator puts an AIRACER element (minimap.h element 3, the orange
 	// car icon) on every opponent and leaves the shops and event starts off,
@@ -60581,39 +60575,38 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	}
 	// The GPS's side of the panel (minimap.h, "The GPS").
 	const int gpsSt = gps_status();
-	MinimapGps gps;
 	float gpsIcon[2] = { 0.0f, 0.0f };
-	gps.engaged = gpsSt >= GPS_STATUS_SEARCHING && gpsSt <= GPS_STATUS_ACTIVE;
-	gps.stageZero = g_careerStage == 0;
+	gps->engaged = gpsSt >= GPS_STATUS_SEARCHING && gpsSt <= GPS_STATUS_ACTIVE;
+	gps->stageZero = g_careerStage == 0;
 	// PORT: no GPS rings while a race runs -- the pulsing circle only
 	// distracts there (the user on hardware, 2026-11-13).
-	gps.icon = !g_raceRun.on && gps_icon(gpsIcon);
-	gps.iconX = gpsIcon[0];
-	gps.iconY = gpsIcon[1];
-	gps.ms = (u32)osGetTime();
+	gps->icon = !g_raceRun.on && gps_icon(gpsIcon);
+	gps->iconX = gpsIcon[0];
+	gps->iconY = gpsIcon[1];
+	gps->ms = (u32)osGetTime();
 	// PORT: the path itself, refreshed a few times a second (the walk is
 	// over the road network), in the tracked target's colour.
 	static float s_route[512][2];
 	static int s_routeN = 0;
 	static u64 s_routeAt = 0;
-	gps.route = NULL;
-	gps.routeN = 0;
+	gps->route = NULL;
+	gps->routeN = 0;
 	if (!g_raceRun.on && gps_follow_state() == 1) {
 		const u64 nowMs = osGetTime();
 		if (nowMs - s_routeAt > 250) {
 			s_routeAt = nowMs;
 			s_routeN = gps_route_polyline(g_worldPos, s_route, 512, 6.0f);
 		}
-		gps.route = (const float (*)[2])s_route;
-		gps.routeN = s_routeN;
-		gps.routeRgba = uiLighten(uiGpsColour(), 0.15f);
+		gps->route = (const float (*)[2])s_route;
+		gps->routeN = s_routeN;
+		gps->routeRgba = uiLighten(uiGpsColour(), 0.15f);
 	} else {
 		s_routeN = 0;
 	}
 	// IsRenderable: with the GPS engaged in a stage, a zone's marker shows
 	// only while it is the GPS's own.
 	static MinimapMarker gpsMarks[8];
-	if (!g_raceRun.on && gps.engaged && !gps.stageZero) {
+	if (!g_raceRun.on && gps->engaged && !gps->stageZero) {
 		int n = 0;
 		for (int i = 0; i < g_markerCount && n < 8; i++) {
 			if (!g_markerZone[i])
@@ -60668,6 +60661,74 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	// PORT: tracking a marker, the rings take its colour (uiGpsColour()).
 	if (g_gpsMarkerNow >= 0)
 		minimap_set_gps_colour(uiRgb(uiLighten(uiGpsColour(), 0.15f)));
+	*marksOut = marks;
+	*countOut = markCount;
+	return mapMode <= MINIMAP_MODE_ROTATE ? (MinimapMode)mapMode : MINIMAP_MODE_DEFAULT;
+}
+
+// The race panel's figures (drawRacePanel()), for the bottom panel and the
+// pause's top screen alike.
+static void worldRaceStats(HudRaceStats* st) {
+	memset(st, 0, sizeof(*st));
+	st->race = &g_raceRun.race;
+	// SetupLists' names: the profile's for the player, each driver's
+	// for its car.
+	st->names[0] = raceDriverName();
+	for (int k = 0; k < g_raceRun.field.count; k++) {
+		const Opponent* o = &g_raceRun.field.car[k];
+		if (o->raceCar >= 0 && o->raceCar < RACE_MAX_AI)
+			st->names[o->raceCar + 1] = o->name;
+	}
+	st->racePos = gProfile.options.player[0].racePos != 0;
+	st->leaderboard = gProfile.options.player[0].leaderboard != 0;
+	// DeterminRaceInfo: no Position and no LeaderBoard in mode 7 -- the
+	// LAN Outrun (#488) has the GetAwayMeter instead.
+	if (g_lanRaceOn && g_lanRace.outrun) {
+		st->racePos = false;
+		st->leaderboard = false;
+	}
+	st->drag = g_dragOn;
+	// RacePosition's drift arm: the place on DriftManager's leaderboard.
+	st->drift = g_driftOn;
+	st->driftPos = drift_board_pos(0);
+	st->driftCount = drift_board_count();
+	// LeaderBoard's drift arm: the board's top four, the most points first.
+	if (st->drift) {
+		for (int k = 0; k < 4 && k < st->driftCount; k++) {
+			if (!drift_board_at(k, &st->driftId[k], &st->driftPts[k], &st->driftMe[k]))
+				break;
+			st->driftName[k] = drift_board_name(st->driftId[k]);
+			st->driftRows = k + 1;
+		}
+	}
+}
+
+static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
+	C2D_TextBufClear(buf);
+	// Last frame's buttons answer this frame's tap, then the draw lays them
+	// out again.
+	worldHandleTap();
+	g_uiHitN = 0;
+	g_gpsMarkerNow = g_raceRun.on ? -1 : worldGpsMarker();
+
+	// FEngHud::DetermineHudFeatures (0x802158F8) while the prologue has
+	// control: its mask is only the four Stage0 queries' bits, so the bank
+	// (PickedUpBank, hi 0x80000) is off throughout and the minimap (lo 1)
+	// only from ShowMinimap, state 6 on (#274).
+	const bool stage0 = stage0HasControl();
+	const bool showMap = !stage0 || stage0ShowMinimap();
+
+	// ---- the minimap ----
+	// PORT: full-bleed. Free roam's chips float over it; a race's panel takes
+	// the left and the map the rest.
+	const float mapY = 0.0f;
+	const float mapX = g_raceRun.on ? RACE_PANEL_W : 0.0f;
+	const float mapW = BOTTOM_W - mapX;
+	const float mapH = BOTTOM_H - mapY;
+	const MinimapMarker* marks = NULL;
+	int markCount = 0;
+	MinimapGps gps;
+	const MinimapMode mapMode = worldMapContent(&marks, &markCount, &gps);
 	// PORT: free roam fills the panel under the bar with a square map; a
 	// race keeps the round one beside its stats.
 	minimap_set_square(true);
@@ -60676,8 +60737,7 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	if (g_minimap && showMap)
 		minimap_draw(g_minimap, g_worldPos[0], g_worldPos[1], g_worldYaw,
 			mapX, mapY, mapW, mapH,
-			mapMode <= MINIMAP_MODE_ROTATE ? (MinimapMode)mapMode : MINIMAP_MODE_DEFAULT,
-			marks, markCount, &gps);
+			mapMode, marks, markCount, &gps);
 	// The way back from a pan, in the map's bottom-right corner.
 	if (g_raceRun.on || stage0)
 		g_mmSel = -1;
@@ -60704,38 +60764,7 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	// ---- the race stats, right of the map ----
 	if (g_raceRun.on && g_hud) {
 		HudRaceStats st;
-		memset(&st, 0, sizeof(st));
-		st.race = &g_raceRun.race;
-		// SetupLists' names: the profile's for the player, each driver's
-		// for its car.
-		st.names[0] = raceDriverName();
-		for (int k = 0; k < g_raceRun.field.count; k++) {
-			const Opponent* o = &g_raceRun.field.car[k];
-			if (o->raceCar >= 0 && o->raceCar < RACE_MAX_AI)
-				st.names[o->raceCar + 1] = o->name;
-		}
-		st.racePos = gProfile.options.player[0].racePos != 0;
-		st.leaderboard = gProfile.options.player[0].leaderboard != 0;
-		// DeterminRaceInfo: no Position and no LeaderBoard in mode 7 -- the
-		// LAN Outrun (#488) has the GetAwayMeter instead.
-		if (g_lanRaceOn && g_lanRace.outrun) {
-			st.racePos = false;
-			st.leaderboard = false;
-		}
-		st.drag = g_dragOn;
-		// RacePosition's drift arm: the place on DriftManager's leaderboard.
-		st.drift = g_driftOn;
-		st.driftPos = drift_board_pos(0);
-		st.driftCount = drift_board_count();
-		// LeaderBoard's drift arm: the board's top four, the most points first.
-		if (st.drift) {
-			for (int k = 0; k < 4 && k < st.driftCount; k++) {
-				if (!drift_board_at(k, &st.driftId[k], &st.driftPts[k], &st.driftMe[k]))
-					break;
-				st.driftName[k] = drift_board_name(st.driftId[k]);
-				st.driftRows = k + 1;
-			}
-		}
+		worldRaceStats(&st);
 		drawRacePanel(buf, &st);
 		// The finish flag (drawRaceFinish) is off: on hardware it covered the
 		// cars and drew the eye (the user, 2026-11-13).
@@ -60749,6 +60778,164 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	// ---- the pager readout, on request ----
 	if (cfg->dbgWorldStatus)
 		drawWorldStatus(buf);
+}
+
+// A label in the kit's capitals: ASCII and the Latin-1 letters (UTF-8 C3 xx)
+// that retail's eight tables use, so the French and Swedish words lift too.
+static void pauseUpper(const char* in, char* out, size_t cap) {
+	size_t o = 0;
+	for (const unsigned char* p = (const unsigned char*)in; *p && o + 1 < cap; p++) {
+		unsigned char c = *p;
+		if (c >= 'a' && c <= 'z')
+			c -= 32;
+		else if (p > (const unsigned char*)in && p[-1] == 0xC3 && c >= 0xA0 && c <= 0xBE && c != 0xB7)
+			c -= 0x20;
+		out[o++] = (char)c;
+	}
+	out[o] = '\0';
+}
+
+// PORT (the user, 2026-11-24): while the pause is up, its choices are on the
+// lower panel (menuNavOnBottom()) and the top screen tells where things
+// stand, over the street dimmed under it: in a race, the race panel and the
+// map with the field; in free roam, the city map round the car with the
+// GPS's target and route, and a column with the bank, the career stage, the
+// GPS target and the unread messages. The map is a second view of the bottom
+// panel's (minimap_view_get()): pan, zoom and its last placement go back as
+// they were, so the bottom's touch finds its own once the pause closes.
+static void drawPauseTop(void) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(3072);
+	if (!buf || !g_uiFont)
+		return;
+	C2D_TextBufClear(buf);
+	scissorReset();
+	const float W = SCREEN_TOP_W, H = SCREEN_TOP_H, colW = RACE_PANEL_W, pad = 9.0f;
+	const bool race = g_raceRun.on;
+	const bool stage0 = !race && stage0HasControl();
+	const bool showMap = !stage0 || stage0ShowMinimap();
+	C2D_DrawRectSolid(0.0f, 0.0f, 0.05f, W, H, C2D_Color32(0, 0, 0, 120));
+
+	// ---- the map, right of the column ----
+	g_gpsMarkerNow = race ? -1 : worldGpsMarker();
+	const bool gpsOn = !race && gps_status() >= GPS_STATUS_SEARCHING && gps_status() <= GPS_STATUS_ACTIVE;
+	const int dest = gpsOn ? g_gpsMarkerNow : -1;
+	float bearing = 0.0f;
+	bool haveBearing = false;
+	if (g_minimap && showMap) {
+		MinimapView saved, v;
+		minimap_view_get(g_minimap, &saved);
+		v = saved;
+		v.panX = v.panY = 0.0f;   // on the car, whatever the bottom was panned to
+		minimap_view_set(g_minimap, &v);
+		const MinimapMarker* marks = NULL;
+		int markCount = 0;
+		MinimapGps gps;
+		const MinimapMode mode = worldMapContent(&marks, &markCount, &gps);
+		minimap_set_square(true);
+		minimap_set_screen(W, H);
+		minimap_draw(g_minimap, g_worldPos[0], g_worldPos[1], g_worldYaw, colW, 0.0f, W - colW, H,
+			mode, marks, markCount, &gps);
+		minimap_set_screen(0.0f, 0.0f);
+		// The way to the GPS's target as this view shows it, before the
+		// bottom's view comes back.
+		float cxp, cyp, txp, typ;
+		if (dest >= 0) {
+			minimap_world_to_panel(g_minimap, g_worldPos[0], g_worldPos[1], &cxp, &cyp);
+			minimap_world_to_panel(g_minimap, g_markers[dest].worldX, g_markers[dest].worldY, &txp, &typ);
+			bearing = atan2f(typ - cyp, txp - cxp);
+			haveBearing = true;
+		}
+		minimap_view_set(g_minimap, &saved);
+		scissorReset();
+	}
+
+	// ---- PAUSE, a tab hung from the map's top-right edge ----
+	{
+		char t[48];
+		pauseUpper(portstr(PS_PAUSE_TITLE), t, sizeof(t));
+		const float lw = uiMeasure(buf, t, UI_LABEL_PX);
+		const float w = 12.0f + 10.0f + 7.0f + lw + 12.0f, x = W - w, y = 6.0f, cy = y + UI_CHIP_H * 0.5f;
+		uiTab(x, y, w, UI_CHIP_H, 1, UI_DEEP);
+		// The pause sign beside the word, so it does not rest on the word alone.
+		C2D_DrawRectSolid(x + 12.0f, cy - 5.0f, UI_Z + 0.03f, 3.0f, 10.0f, UI_ACCENT);
+		C2D_DrawRectSolid(x + 18.0f, cy - 5.0f, UI_Z + 0.03f, 3.0f, 10.0f, UI_ACCENT);
+		uiLabel(buf, t, x + 12.0f + 10.0f + 7.0f, cy, 0, UI_ACCENT);
+	}
+
+	// ---- the column: the race panel, or free roam's state ----
+	if (race) {
+		if (g_hud) {
+			HudRaceStats st;
+			worldRaceStats(&st);
+			drawRacePanel(buf, &st);
+		}
+		return;
+	}
+	C2D_DrawRectSolid(0.0f, 0.0f, UI_Z - 0.01f, colW, H, C2D_Color32(0, 0, 0, 219));
+	C2D_DrawRectSolid(colW - 1.0f, 0.0f, UI_Z - 0.005f, 1.0f, H, C2D_Color32(255, 255, 255, 51));
+	float y = 8.0f;
+	char lab[48];
+	// The bank, as the bottom's chip has it; not while the prologue hides it.
+	if (!stage0) {
+		char cash[32], v[40];
+		formatCashGrouped(gProfile.cash, cash, sizeof(cash));
+		snprintf(v, sizeof(v), "$%s", cash);
+		pauseUpper(portstr(PS_PAUSE_BANK), lab, sizeof(lab));
+		uiLabel(buf, lab, pad, y + 4.0f, 0, UI_ACCENT);
+		y += 12.0f;
+		uiText(buf, v, 18.0f, pad, y + 9.0f, 0, UI_WHITE, colW - 2.0f * pad);
+		y += 24.0f;
+	}
+	// The career's stage, retail's own "Stage %d".
+	if (g_worldFromCareer && g_careerStage > 0) {
+		C2D_DrawRectSolid(pad, y, UI_Z + 0.01f, colW - 2.0f * pad, 1.0f, UI_RIM);
+		y += 6.0f;
+		const char* f = portstr(PS_PAUSE_STAGE);
+		const char* d = strstr(f, "%d");
+		char s[48];
+		if (d)
+			snprintf(s, sizeof(s), "%.*s%d%s", (int)(d - f), f, g_careerStage, d + 2);
+		else
+			snprintf(s, sizeof(s), "%s %d", f, g_careerStage);
+		uiText(buf, s, 16.0f, pad, y + 9.0f, 0, UI_WHITE, colW - 2.0f * pad);
+		y += 22.0f;
+	}
+	// Where the GPS goes: the target's name, its distance and the way to it.
+	if (dest >= 0) {
+		C2D_DrawRectSolid(pad, y, UI_Z + 0.01f, colW - 2.0f * pad, 1.0f, UI_RIM);
+		y += 6.0f;
+		const u32 track = uiGpsColour(), ink = uiLighten(track, 0.35f);
+		C2D_DrawRectSolid(pad, y, UI_Z + 0.01f, 22.0f, 2.0f, track);
+		y += 4.0f;
+		pauseUpper(portstr(PS_PAUSE_GPS), lab, sizeof(lab));
+		uiLabel(buf, lab, pad, y + 4.0f, 0, ink);
+		y += 14.0f;
+		const int lines = uiTextBlock(buf, g_markerTitle[dest], 15.0f, pad, y + 6.0f, 17.0f,
+			colW - 2.0f * pad, 0, UI_WHITE, 2);
+		y += 17.0f * (float)(lines < 1 ? 1 : lines > 2 ? 2 : lines) + 2.0f;
+		const float dx = g_markers[dest].worldX - g_worldPos[0];
+		const float dy = g_markers[dest].worldY - g_worldPos[1];
+		char dist[24];
+		uiDistance(sqrtf(dx * dx + dy * dy), dist, sizeof(dist));
+		float tx = pad;
+		if (haveBearing) {
+			uiArrow(pad + 6.0f, y + 9.0f, bearing, 6.0f, ink);
+			tx += 18.0f;
+		}
+		uiText(buf, dist, 16.0f, tx, y + 9.0f, 0, UI_WHITE, colW - pad - tx);
+		y += 22.0f;
+	}
+	// The unread messages, at the foot: the envelope and the count.
+	const int unread = (int)sms_count_unread(&gProfile);
+	if (unread > 0) {
+		char n[12];
+		snprintf(n, sizeof(n), "%d", unread);
+		const float cy = H - 8.0f - UI_CHIP_H * 0.5f;
+		drawEnvelope(pad, cy - 16.0f * 0.68f * 0.5f, 16.0f, UI_ACCENT);
+		uiText(buf, n, 19.0f, pad + 23.0f, cy, 0, UI_ACCENT, 0.0f);
+	}
 }
 
 // ------------------------------------------------- EA Trax now-playing popup
@@ -66572,6 +66759,11 @@ int main(int argc, char* argv[])
 				// and their questions both take a tap.
 				if (worldUi == WORLD_UI_TUNE)
 					kDown |= feTouchKeys(&menu, &dlgMenu, kDown);
+				// PORT: and so does the pause, its option pages and its
+				// confirms, in the kit on the same panel (menuNavOnBottom()):
+				// a tap is the key the screen already answers.
+				if (worldUi == WORLD_UI_PAUSE)
+					kDown |= feTouchKeys(&menu, &dlgMenu, kDown);
 				// So do the engage dialogs', on the same panel.
 				if (worldUi == WORLD_UI_ENGAGE)
 					kDown |= engageTouchKeys(&menu);
@@ -66739,10 +66931,13 @@ int main(int argc, char* argv[])
 					rebuildModeRowValues(&menu);
 				} else if (optAccept == OPTACCEPT_DEFAULT) {
 					dlog("world ui: options -- Default Settings -> \"Reset to default settings?\"");
+					// PORT: on the lower panel with the page it asks about.
+					g_feDialogToBottom = true;
 					if (haveConfig)
 						feDialogShowTwoButtons(&cfg, &dlgMenu, "GenericDialog_SMALL.fng", 0x0000F770u,
 							0x0000061Cu, OPTIONS_MSG_DEFAULT_YES, OPTIONS_MSG_DEFAULT_NO,
 							OPTIONS_MSG_DEFAULT_NO, OPTIONS_DEFAULT_TEXT);
+					g_feDialogToBottom = false;
 				} else if (optAccept == OPTACCEPT_CUSTOMIZE && worldUiDepth <
 						(int)(sizeof(worldUiStack) / sizeof(worldUiStack[0]))) {
 					// 0x4A82FB: Customize Display Settings over the Display page.
@@ -66814,9 +67009,13 @@ int main(int argc, char* argv[])
 						snprintf(b, sizeof(b), "world ui: pause -> %s -- UI_InGameDialog, text 0x%08X",
 							what, (unsigned)text);
 						dlog(b);
-						if (!(haveConfig && feDialogShowTwoButtons(&cfg, &dlgMenu,
-								"UI_InGameDialog.fng", LANG_OK_ID, LANG_CANCEL_ID, yes,
-								PAUSEMSG_CANCEL, PAUSEMSG_CANCEL, text))) {
+						// PORT: the confirm on the lower panel with the pause.
+						g_feDialogToBottom = true;
+						const bool shown = haveConfig && feDialogShowTwoButtons(&cfg, &dlgMenu,
+							"UI_InGameDialog.fng", LANG_OK_ID, LANG_CANCEL_ID, yes,
+							PAUSEMSG_CANCEL, PAUSEMSG_CANCEL, text);
+						g_feDialogToBottom = false;
+						if (!shown) {
 							dlog("world ui: the confirm would not load -- taking its OK");
 							if (pauseRaceYes(yes, &leaveTo))
 								close = true;
@@ -66834,10 +67033,14 @@ int main(int argc, char* argv[])
 						snprintf(b, sizeof(b), "world ui: pause -> %s -- UI_InGameDialog, text 0x%08X",
 							garage ? "Jump to Garage" : "Quit to Main Menu", (unsigned)text);
 						dlog(b);
-						if (!(haveConfig && feDialogShowTwoButtons(&cfg, &dlgMenu,
-								"UI_InGameDialog.fng", LANG_OK_ID, LANG_CANCEL_ID,
-								garage ? PAUSEMSG_GARAGE_YES : PAUSEMSG_QUIT_YES,
-								PAUSEMSG_CANCEL, PAUSEMSG_CANCEL, text))) {
+						// PORT: the confirm on the lower panel with the pause.
+						g_feDialogToBottom = true;
+						const bool shown = haveConfig && feDialogShowTwoButtons(&cfg, &dlgMenu,
+							"UI_InGameDialog.fng", LANG_OK_ID, LANG_CANCEL_ID,
+							garage ? PAUSEMSG_GARAGE_YES : PAUSEMSG_QUIT_YES,
+							PAUSEMSG_CANCEL, PAUSEMSG_CANCEL, text);
+						g_feDialogToBottom = false;
+						if (!shown) {
 							// A confirm that will not load must not strand the
 							// player in the world: take its OK.
 							dlog("world ui: the confirm would not load -- taking its OK");
@@ -66936,6 +67139,11 @@ int main(int argc, char* argv[])
 					// UI_PauseOptionsMain, so the next pause opens on its first.
 					feSetLastButton("UI_pause.fng", 0);
 					feSetLastButton("UI_PauseOptionsMain.fng", 0);
+					// PORT: the tap that closed it (a Resume tile, the Back
+					// pill) is spent: the lower panel's HUD comes back this
+					// same frame (worldMapTouch()) and must not take the lift
+					// as a tap on whatever of its own sits there.
+					g_touch.drag = true;
 				}
 				if (!leaveTo && close) {
 					if (worldUi == WORLD_UI_PAUSE && haveEaTrax) {
@@ -69189,6 +69397,16 @@ int main(int argc, char* argv[])
 			profEnd(PROF_MENU2D);
 		}
 
+		// PORT: the pause's summary on the top screen, its choices being on
+		// the lower panel -- the map, and the race or the career as it stands
+		// (drawPauseTop()).
+		if (bootState == BOOT_WORLD && worldUi == WORLD_UI_PAUSE && worldDialog) {
+			sceneBegin(targetTop);
+			profBegin(PROF_MENU2D);
+			drawPauseTop();
+			profEnd(PROF_MENU2D);
+		}
+
 		// EA Trax now-playing popup, top-screen half. Anywhere outside the
 		// world -- title screen, boot videos, profile prompts -- it rides
 		// at the canvas's bottom-left on the top screen. The title screen is the
@@ -69266,21 +69484,21 @@ int main(int argc, char* argv[])
 			if (worldUi != WORLD_UI_TUNE && worldUi != WORLD_UI_REPLAY)
 				uiScreenBackdrop(BOTTOM_W, BOTTOM_H);
 			menuClipBegin(&menu);
-			// The tuning screens are IconScrollerMenus (#417): the strip
-			// and its option title, as the pause screen's on the top one.
+			// The tuning screens and the pause are IconScrollerMenus (#417):
+			// the strip and its option title, where no kit grid drew them.
 			g_tuneBackdrop = false;
-			if (worldUi == WORLD_UI_TUNE)
+			if (worldUi == WORLD_UI_TUNE || worldUi == WORLD_UI_PAUSE)
 				carouselTick(&menu, frameDt);
 			// The replay's panel under the NFSU2 logo (replayUiFit()).
 			if (worldUi == WORLD_UI_REPLAY)
 				drawBottomLogoAt(REPLAY_LOGO_CY, REPLAY_LOGO_W);
 			drawMenu(&menu, fngStageFrames);
-			if (worldUi == WORLD_UI_TUNE)
+			if (worldUi == WORLD_UI_TUNE || worldUi == WORLD_UI_PAUSE)
 				drawCarousel(&menu);
 			// The world map's own GenericDialog, over it on the same panel,
-			// and the tuning screens' questions (#417).
-			if ((worldUi == WORLD_UI_MAP || worldUi == WORLD_UI_TUNE) && g_feDialog.up &&
-					dlgMenu.loaded) {
+			// the tuning screens' questions (#417) and the pause's confirms.
+			if ((worldUi == WORLD_UI_MAP || worldUi == WORLD_UI_TUNE || worldUi == WORLD_UI_PAUSE) &&
+					g_feDialog.up && dlgMenu.loaded) {
 				dlgMenu.screenW = SCREEN_BOT_W;
 				menuClipBegin(&dlgMenu);
 				drawMenu(&dlgMenu, fngStageFrames);

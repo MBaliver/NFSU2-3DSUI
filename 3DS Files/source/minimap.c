@@ -287,12 +287,49 @@ bool minimap_panned(const Minimap* m) {
 	return m && (m->panX != 0.0f || m->panY != 0.0f);
 }
 
+void minimap_view_get(const Minimap* m, MinimapView* v) {
+	if (!m || !v)
+		return;
+	v->panX = m->panX; v->panY = m->panY;
+	v->lastAngle = m->lastAngle; v->lastPerArt = m->lastPerArt;
+	v->lastCarX = m->lastCarX; v->lastCarY = m->lastCarY;
+	v->viewZoom = m->viewZoom;
+	v->lastCx = m->lastCx; v->lastCy = m->lastCy;
+	v->lastViewX = m->lastViewX; v->lastViewY = m->lastViewY;
+	v->lastX0 = m->lastX0; v->lastY0 = m->lastY0;
+	v->lastX1 = m->lastX1; v->lastY1 = m->lastY1;
+	v->drawn = m->drawn;
+	v->square = s_square;
+}
+
+void minimap_view_set(Minimap* m, const MinimapView* v) {
+	if (!m || !v)
+		return;
+	m->panX = v->panX; m->panY = v->panY;
+	m->lastAngle = v->lastAngle; m->lastPerArt = v->lastPerArt;
+	m->lastCarX = v->lastCarX; m->lastCarY = v->lastCarY;
+	m->viewZoom = v->viewZoom;
+	m->lastCx = v->lastCx; m->lastCy = v->lastCy;
+	m->lastViewX = v->lastViewX; m->lastViewY = v->lastViewY;
+	m->lastX0 = v->lastX0; m->lastY0 = v->lastY0;
+	m->lastX1 = v->lastX1; m->lastY1 = v->lastY1;
+	m->drawn = v->drawn;
+	s_square = v->square;
+}
+
 // main.c's scissorLogical(), which is static there. Same contract: logical
 // screen coordinates with the origin top-left, converted to the GPU's rotated
 // framebuffer axes, and C2D_Flush() first because the scissor applies to
 // everything already queued in the batch.
-#define MM_SCREEN_W 320.0f
-#define MM_SCREEN_H 240.0f
+// PORT: the bottom screen's unless minimap_set_screen() says otherwise (the
+// pause's map on the top screen).
+static float MM_SCREEN_W = 320.0f;
+static float MM_SCREEN_H = 240.0f;
+
+void minimap_set_screen(float w, float h) {
+	MM_SCREEN_W = w > 0.0f ? w : 320.0f;
+	MM_SCREEN_H = h > 0.0f ? h : 240.0f;
+}
 
 static void mmScissor(float x, float y, float w, float h) {
 	float x0 = x, y0 = y, x1 = x + w, y1 = y + h;

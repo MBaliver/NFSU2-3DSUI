@@ -21,6 +21,11 @@ typedef enum {
 	PS_LANGUAGE,
 	PS_LARGE_TEXT,
 	PS_HIGH_CONTRAST,
+	// pause: the top screen's summary while the pause is up (drawPauseTop())
+	PS_PAUSE_TITLE,
+	PS_PAUSE_BANK,
+	PS_PAUSE_STAGE,
+	PS_PAUSE_GPS,
 	PS_COUNT
 } PortStr;
 

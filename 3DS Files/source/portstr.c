@@ -25,6 +25,16 @@ static const PortStrDef kStr[PS_COUNT] = {
 	[PS_HIGH_CONTRAST] = { 0, { "High Contrast", "Contraste \xC3\xA9lev\xC3\xA9", "Hoher Kontrast",
 		"Contrasto elevato", "Alto contraste", "Hoog contrast", "H\xC3\xB6g kontrast",
 		"H\xC3\xB8j kontrast" } },
+	// pause: the top screen's summary while the pause is up (drawPauseTop()).
+	// All four are retail's words; the texts are their fallbacks. STAGE is a
+	// format with one %d (the career stage).
+	[PS_PAUSE_TITLE] = { 0x6C839FBEu, { "Pause", "Pause", "Pause", "Pausa", "Pausa", "Pauze", "Paus",
+		"Pause" } },
+	[PS_PAUSE_BANK] = { 0x13B49408u, { "Bank", "Argent", "Konto", "Denaro", "Banco", "Bankrekening",
+		"Pengar", "Kontanter" } },
+	[PS_PAUSE_STAGE] = { 0x8B84E940u, { "Stage %d", "Niveau %d", "Stufe %d", "Livello %d", "Etapa %d",
+		"Niveau %d", "Niv\xC3\xA5 %d", "Niveau %d" } },
+	[PS_PAUSE_GPS] = { 0x8C00BBDDu, { "GPS", "GPS", "GPS-System", "GPS", "GPS", "GPS", "GPS", "GPS" } },
 };
 
 static const char* s_cur[PS_COUNT];
