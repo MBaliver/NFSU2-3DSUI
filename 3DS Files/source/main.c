@@ -10268,6 +10268,7 @@ typedef struct {
 	u32 statCar[1 + RACE_MAX_AI];
 	int statCount, statAt;
 	bool inStats, statsFromMenu;
+	int resSel; // UI_PostRaceResults bottom pill focus: 0 = Continue, 1 = Race Stats
 	// TheRaceParameters: +0x00 the track, +0x18 point-to-point, +0x20 laps,
 	// +0x40 drag, +0x44 drift.
 	int track, laps;
@@ -45689,20 +45690,23 @@ static bool postRaceStatsInput(const Config* cfg, MenuState* menu, u32 kDown, fl
 		}
 		return false;
 	}
-	const bool left = (kDown & KEY_LEFT) != 0, right = (kDown & KEY_RIGHT) != 0;
-	if (!left && !right)
+	const bool prev = (kDown & (KEY_LEFT | KEY_UP)) != 0;
+	const bool next = (kDown & (KEY_RIGHT | KEY_DOWN)) != 0;
+	if (!prev && !next)
 		return false;
 	// Scroll (0x800F5F04): one along, clamped to the table.
 	const int was = pr->statAt;
-	int at = was + (left ? -1 : 1);
+	int at = was + (prev ? -1 : 1);
 	if (at < 0)
 		at = 0;
 	if (at > pr->statCount - 1)
 		at = pr->statCount - 1;
 	pr->statAt = at;
-	if (at != was)
+	if (at != was) {
+		feSoundPlay(prev ? FE_EV_UP : FE_EV_DOWN);
 		postRaceStatsFill(menu);
-	prsSetArrows(menu, !left);
+	}
+	prsSetArrows(menu, !prev);
 	return false;
 }
 
@@ -45862,8 +45866,18 @@ static bool postRaceInput(const Config* cfg, MenuState* menu, MenuState* dlg, u3
 	if (!onMenu) {
 		postRaceResultsTick(menu, dt);
 		bool ok = true;
+		if (onResults && pr->statCount > 0 && (kDown & (KEY_UP | KEY_DOWN))) {
+			const int nextSel = (kDown & KEY_UP) ? 0 : 1;
+			if (nextSel != pr->resSel) {
+				pr->resSel = nextSel;
+				feSoundPlay((kDown & KEY_UP) ? FE_EV_UP : FE_EV_DOWN);
+			}
+		}
 		if (kDown & KEY_A) {
-			ok = postRaceStep(cfg, menu, +1);      // 0x406415E3
+			if (onResults && pr->statCount > 0 && pr->resSel == 1)
+				ok = postRaceStatsOpen(cfg, menu, false);
+			else
+				ok = postRaceStep(cfg, menu, +1);      // 0x406415E3
 		} else if ((kDown & KEY_B) && !onResults) {
 			ok = postRaceStep(cfg, menu, -1);      // 0x911AB364
 		} else if ((kDown & KEY_X) && onResults) {
@@ -58001,7 +58015,8 @@ static bool drawUiDialog(const MenuState* m) {
 		const int k = btn[i];
 		labels[i] = m->dlgLabel[k][0] ? m->dlgLabel[k] : portstr(k == 2 ? PS_OK : k == 0 ? PS_YES : PS_NO);
 	}
-	uiDialogBox(buf, W, H, NULL, m->dlgBlurb, labels, btn, nb, g_feDialog.current, 1,
+	const int bId = (nb == 2 && g_feDialog.btnMsg[1] == g_feDialog.cancelMsg) ? 1 : -1;
+	uiDialogBox(buf, W, H, NULL, m->dlgBlurb, labels, btn, nb, g_feDialog.current, bId,
 		g_uiDlgHit, &g_uiDlgHitN);
 	return true;
 }
@@ -61107,24 +61122,51 @@ static void drawUiPostRace(MenuState* m) {
 			prHit(x - 2.0f, y - gap * 0.5f, w + 4.0f, th + gap, KEY_A, i, false);
 		}
 	} else if (scr == 3) {
-		// The entry up, as "n / count", the driver and the car.
-		const int at = pr->statAt;
-		if (at >= 0 && at < pr->statCount) {
-			char line[32];
-			snprintf(line, sizeof(line), "%d / %d", at + 1, pr->statCount);
-			uiText(buf, line, 14.0f, W * 0.5f, top + 22.0f, 1, UI_DIM, 0.0f);
-			uiText(buf, pr->statName[at], 18.0f, W * 0.5f, top + 46.0f, 1, UI_WHITE, W - 40.0f);
-			uiText(buf, pr->statCarStr[at], 14.0f, W * 0.5f, top + 68.0f, 1, UI_DIM, W - 40.0f);
+		// Interactive racer roster: pick any driver with UP/DOWN, LEFT/RIGHT or
+		// a direct tap to inspect their detailed breakdown on the top screen.
+		const int n = pr->statCount, at = pr->statAt;
+		if (at >= 0 && at < n) {
+			char cnt[24];
+			snprintf(cnt, sizeof(cnt), "%d / %d", at + 1, n);
+			uiText(buf, cnt, 14.0f, W - 10.0f, 18.0f, 2, UI_DIM, 0.0f);
 		}
-		const float gap = 12.0f, pw = (W - 2.0f * 24.0f - gap) * 0.5f, ph = 44.0f, y = top + 100.0f;
-		prPill(buf, 24.0f, y, pw, ph, 'd', portstr(PS_PR_PREVIOUS), false);
-		uiArrow(24.0f + 13.0f, y + ph * 0.5f, (float)M_PI, 5.0f, at > 0 ? UI_ACCENT : UI_DIM);
-		prHit(24.0f - 3.0f, y - 4.0f, pw + 6.0f, ph + 8.0f, KEY_LEFT, -1, false);
-		const float nx = 24.0f + pw + gap;
-		prPill(buf, nx, y, pw, ph, 'd', portstr(PS_PR_NEXT), false);
-		uiArrow(nx + pw - 13.0f, y + ph * 0.5f, 0.0f, 5.0f,
-			at < pr->statCount - 1 ? UI_ACCENT : UI_DIM);
-		prHit(nx - 3.0f, y - 4.0f, pw + 6.0f, ph + 8.0f, KEY_RIGHT, -1, false);
+		const float availH = H - top - 12.0f;
+		const float rh = n > 5 ? floorf((availH - (float)(n - 1) * 4.0f) / (float)n) : 34.0f;
+		const float rg = n > 5 ? 4.0f : 6.0f;
+		const float listH = (float)n * rh + (float)(n > 0 ? n - 1 : 0) * rg;
+		float y = top + (availH > listH ? floorf((availH - listH) * 0.5f) + 6.0f : 6.0f);
+		const float rw = W - 2.0f * mx;
+		for (int i = 0; i < n; i++) {
+			const bool sel = i == at;
+			const float cy = y + rh * 0.5f;
+			uiRowBar(mx, y, rw, rh, sel);
+			char rk[6], fig[32] = "";
+			snprintf(rk, sizeof(rk), "%d", i + 1);
+			if (i < pr->rowCount) {
+				if (pr->rows[i].disconnected) {
+					snprintf(fig, sizeof(fig), "%s", pr->statStr[PRS_STR_DISCONNECTED]);
+				} else if (pr->drift) {
+					formatCashGrouped(pr->rows[i].score, fig, sizeof(fig));
+				} else if (pr->rows[i].time > 0) {
+					race_print_time(pr->rows[i].time, 0, fig);
+				}
+			}
+			const float fw = fig[0] ? uiText(buf, fig, 14.0f, mx + rw - 10.0f, cy, 2,
+				sel ? UI_ACCENT : UI_WHITE, 0.0f) : 0.0f;
+			uiText(buf, rk, 15.0f, mx + 14.0f, cy, 1, sel ? UI_ACCENT : UI_DIM, 0.0f);
+			const float textX = mx + 28.0f, textW = rw - 38.0f - (fw > 0.0f ? fw + 8.0f : 0.0f);
+			if (rh >= 30.0f && pr->statCarStr[i][0]) {
+				uiText(buf, pr->statName[i], 15.0f, textX, y + rh * 0.34f, 0,
+					sel ? UI_ACCENT : UI_WHITE, textW);
+				uiText(buf, pr->statCarStr[i], 12.0f, textX, y + rh * 0.72f, 0,
+					UI_DIM, textW);
+			} else {
+				uiText(buf, pr->statName[i], 15.0f, textX, cy, 0,
+					sel ? UI_ACCENT : UI_WHITE, textW);
+			}
+			prHit(mx - 2.0f, y - rg * 0.5f, rw + 4.0f, rh + rg, 0u, i, true);
+			y += rh + rg;
+		}
 	} else if (scr == 7) {
 		// The sponsors as rows (two columns past three), the picked one
 		// highlighted; the signed one tagged in words, not colour alone.
@@ -61170,21 +61212,20 @@ static void drawUiPostRace(MenuState* m) {
 	} else {
 		// Results, the reward, the tournament pair and the sponsor popup.
 		const char* lab[2];
-		char key[2];
 		u32 keys[2];
 		int n = 0;
 		lab[n] = portstr(scr == 5 && pr->thereIsNext ? PS_PR_NEXT_RACE : PS_PR_CONTINUE);
-		key[n] = 'A';
 		keys[n++] = KEY_A;
 		if (scr == 1 && pr->statCount > 0) {
 			lab[n] = portstr(PS_PR_RACE_STATS);
-			key[n] = 'X';
 			keys[n++] = KEY_X;
 		}
 		const float ph = 44.0f, gap = 14.0f, pw = W - 2.0f * 24.0f;
 		float y = floorf((top + H - ((float)n * ph + (float)(n - 1) * gap)) * 0.5f);
+		const int sel = (scr == 1 && n > 1 && pr->resSel >= 0 && pr->resSel < n) ? pr->resSel : 0;
 		for (int i = 0; i < n; i++) {
-			prPill(buf, 24.0f, y, pw, ph, key[i], lab[i], i == 0);
+			const bool lit = i == sel;
+			prPill(buf, 24.0f, y, pw, ph, lit ? 'A' : 0, lab[i], lit);
 			prHit(24.0f - 3.0f, y - 4.0f, pw + 6.0f, ph + 8.0f, keys[i], -1, false);
 			y += ph + gap;
 		}
@@ -61206,6 +61247,18 @@ static u32 postRaceTouchKeys(MenuState* m, MenuState* dlg, u32 kDown) {
 		if (x < h->x || x >= h->x + h->w || y < h->y || y >= h->y + h->h)
 			continue;
 		u32 keys = h->keys;
+		if (!g_postRace.inStats && postRaceScreenOf(m->screenName) == 1 && keys == KEY_A)
+			g_postRace.resSel = 0;
+		if (g_postRace.inStats && h->sel >= 0 && h->sel < g_postRace.statCount) {
+			if (h->sel != g_postRace.statAt) {
+				const bool fwd = h->sel > g_postRace.statAt;
+				g_postRace.statAt = h->sel;
+				feSoundPlay(fwd ? FE_EV_DOWN : FE_EV_UP);
+				postRaceStatsFill(m);
+				prsSetArrows(m, fwd);
+			}
+			return 0u;
+		}
 		if (h->sel >= 0) {
 			if (h->sel >= m->itemCount)
 				return 0u;
