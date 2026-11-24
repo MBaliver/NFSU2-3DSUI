@@ -58733,7 +58733,8 @@ static void drawLoadingBottom(void) {
 	// ---- the tip on show: the rotation's slot, past any too long to fit ----
 	const LoadCtl* ctls = NULL;
 	const int nc = loadCtlList(c, &ctls);
-	const float tipY = nc > 0 ? 120.0f : LOAD_HEAD_H + 6.0f, tipH = H - 4.0f - tipY;
+	const float headH = c->kind != LOADK_NONE ? LOAD_HEAD_H : 0.0f;
+	const float tipY = nc > 0 ? 120.0f : headH + 6.0f, tipH = H - 4.0f - tipY;
 	const float bodyY = tipY + 29.0f, lh = 16.0f, bodyW = W - 16.0f - 20.0f;
 	const int maxLines = (int)((tipY + tipH - 7.0f - bodyY) / lh) + 1;
 	static char wrapped[768];
@@ -58768,23 +58769,10 @@ static void drawLoadingBottom(void) {
 		k = fminf(1.0f, (float)el / (float)LOAD_FADE_MS);
 	}
 	uiScreenBackdrop(W, H);
-	// ---- the header: the event, and the loading dots ----
-	uiBand2(0.0f, LOAD_HEAD_H, true);
-	uiText(buf, loadCtxTitle(c), 18.0f, 10.0f, LOAD_HEAD_H * 0.5f, 0, UI_ACCENT, 180.0f);
-	{
-		// Five dots, a lit one walking left to right with a fading tail --
-		// U2_loading_Circle's beat on the top screen, kept short.
-		const int lit = (int)((el / 120u) % 5u);
-		float dx = W - 12.0f - 4.0f * 9.0f;
-		for (int i = 0; i < 5; i++, dx += 9.0f) {
-			const int back = (lit - i + 5) % 5;
-			const u8 a = back == 0 ? 255 : back == 1 ? 150 : 60;
-			C2D_DrawCircleSolid(dx, LOAD_HEAD_H * 0.5f, UI_Z + 0.03f, 2.5f,
-				C2D_Color32(202, 244, 138, a));
-		}
-		if (c->kind != LOADK_NONE)
-			uiText(buf, portstr(PS_LOAD_LOADING), 12.0f, W - 12.0f - 4.0f * 9.0f - 10.0f,
-				LOAD_HEAD_H * 0.5f, 2, UI_DIM, 0.0f);
+	// ---- the header: the event (the loading indicator stays on the top screen) ----
+	if (c->kind != LOADK_NONE) {
+		uiBand2(0.0f, LOAD_HEAD_H, true);
+		uiText(buf, loadCtxTitle(c), 18.0f, 10.0f, LOAD_HEAD_H * 0.5f, 0, UI_ACCENT, W - 20.0f);
 	}
 	// ---- the controls ----
 	if (nc > 0) {
