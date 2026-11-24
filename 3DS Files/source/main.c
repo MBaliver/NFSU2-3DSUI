@@ -113,6 +113,7 @@ extern gxCmdQueue_s __C3D_Context;
 #define GX_QUEUE_ENTRIES 128
 #include "bleach.h"
 #include "portprefs.h"
+#include "portstr.h"
 #include <3ds/applets/swkbd.h>
 // Last: its macros route this file's hid* calls through the dev command file.
 #define DEVCMD_WRAP_HID
@@ -1679,11 +1680,23 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 static char g_langFile[16];
 static PortPrefs g_portPrefs;
 static char g_portPrefsPath[320];   // the active profile's port.txt, "" with none loaded
+static void portPrefsSave(void);
+static const Config* g_cfgMain;   // main()'s config (defined again below)
 
-static void portPrefsApply(void) {
+// Puts the settings in force: the string table screens load from, and the
+// port's own words (portstr.h) resolved for that language.
+static void portPrefsApply(const Config* cfg) {
 	const int li = g_portPrefs.language >= 0 && g_portPrefs.language < PORT_LANG_COUNT
 		? g_portPrefs.language : 0;
 	snprintf(g_langFile, sizeof(g_langFile), "%s", li == 0 ? "" : kPortLangs[li].file);
+	char p[320];
+	p[0] = '\0';
+	if (cfg && cfg->gameDir[0]) {
+		const size_t n = strlen(cfg->gameDir);
+		snprintf(p, sizeof(p), "sdmc:%s%sLANGUAGES/%s.bin", cfg->gameDir,
+			cfg->gameDir[n - 1] == '/' ? "" : "/", kPortLangs[li].file);
+	}
+	portstr_set_language(li, p[0] ? p : NULL);
 }
 
 // Resolves a game-relative path (e.g. "audio/ealogo.wav") against the
@@ -2957,6 +2970,10 @@ static const MenuItem MENU_ITEMS_OPTIONSMAIN[] = {
 	// (options.c buildControls), in place of UI_OptionsController's four fixed
 	// schemes around a PS2 pad.
 	{ 0xA04A7B26u, 0x04DC6DB5u, "CONTROLS",       "UI_Options.fng", OPTPAGE_CONTROLS },
+	// PORT: Accessibility (portprefs.h) -- the port's own settings, after
+	// Controls. No English.bin label: portstr(PS_ACCESSIBILITY) names it
+	// (menuItemLabelPort()); the Player page's icon for now.
+	{ 0xD708EFEFu, 0u,          "ACCESSIBILITY",  "UI_Options.fng", OPTPAGE_ACCESS },
 	{ 0xC52CCBF6u, 0xDCFB6B36u, "EA GAMES TRAX",  "EA_TRAX_Jukebox.fng", OPTPAGE_EATRAX },
 	{ 0x51009E20u, 0x0905101Fu, "CREDITS",        "Credits.fng", OPTPAGE_CREDITS },
 	{ 0x83070A37u, 0x19889765u, "LAN OPTIONS",    NULL, OPTPAGE_NETWORK,
@@ -6057,7 +6074,23 @@ static OptTarget optionsTarget(void) {
 	t.ctx = 1;
 	t.player = 0;
 	t.display = &g_display;
+	t.port = &g_portPrefs;   // PORT: the Accessibility page
 	return t;
+}
+
+// PORT: an Accessibility row changed (options.c): in force now and saved.
+// True when it was the language, whose screen the caller loads again so its
+// labels are in the new one.
+static bool portPrefsRowChanged(OptKind kind) {
+	if (kind != OPT_ACC_LANGUAGE && kind != OPT_ACC_LARGE_TEXT && kind != OPT_ACC_HIGH_CONTRAST)
+		return false;
+	portPrefsApply(g_cfgMain);
+	portPrefsSave();
+	char b[160];
+	snprintf(b, sizeof(b), "port prefs: language %s, large text %d, high contrast %d",
+		kPortLangs[g_portPrefs.language].code, g_portPrefs.largeText, g_portPrefs.highContrast);
+	dlog(b);
+	return kind == OPT_ACC_LANGUAGE;
 }
 
 // UpdateVolumes (0x469050) hands the mixers the AudioSettings block, and each
@@ -7191,10 +7224,10 @@ static void portPrefsSave(void) {
 // A profile's own settings, read over the ones in use: a profile with no
 // port.txt yet (a new one, or one from before the file existed) keeps what
 // the player has been using, and gets the file.
-static void portPrefsLoadFor(const ProfileEntry* entry) {
+static void portPrefsLoadFor(const Config* cfg, const ProfileEntry* entry) {
 	portprefs_path_for(entry->path, entry->legacy, g_portPrefsPath, sizeof(g_portPrefsPath));
 	const bool had = portprefs_read(g_portPrefsPath, &g_portPrefs);
-	portPrefsApply();
+	portPrefsApply(cfg);
 	portPrefsSave();
 	char b[400];
 	snprintf(b, sizeof(b), "port prefs: %s %s -- language %s, large text %d, high contrast %d",
@@ -7218,7 +7251,7 @@ static bool bootLoadProfile(const Config* cfg, NfsProfile* active,
 	}
 	*active = loaded;
 	if (active == &gProfile)
-		portPrefsLoadFor(entry);
+		portPrefsLoadFor(cfg, entry);
 	// The event pile is not in the save and starts empty; CareerSpeech is,
 	// and comes from it.
 	careerLoadUnsaved();
@@ -15768,20 +15801,29 @@ static bool controlsActionBound(u32 action) {
 #define NAV_REPEAT_DELAY 400
 #define NAV_REPEAT_EVERY 90
 static u32 g_navRep;
+static u32 s_navDir;
+static u64 s_navNext;
+#define NAV_DIRS (KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | \
+	KEY_CPAD_UP | KEY_CPAD_DOWN | KEY_CPAD_LEFT | KEY_CPAD_RIGHT)
+
+// PORT: the repeat starts over, as if the direction held now had just been
+// pressed. A screen loaded again under a held direction (the Accessibility
+// page's Language) takes longer than the delay, and the held press would
+// otherwise come out the other side as a run of steps.
+static void navRepeatRestart(void) {
+	s_navDir = hidKeysHeld() & NAV_DIRS;
+	s_navNext = osGetTime() + NAV_REPEAT_DELAY;
+}
 
 static u32 navRepeat(u32 down, u32 held) {
-	static const u32 dirs = KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT |
-		KEY_CPAD_UP | KEY_CPAD_DOWN | KEY_CPAD_LEFT | KEY_CPAD_RIGHT;
-	static u32 s_dir;
-	static u64 s_next;
-	const u32 h = held & dirs;
+	const u32 h = held & NAV_DIRS;
 	const u64 now = osGetTime();
 	g_navRep = 0;
-	if (h != s_dir || (down & dirs)) {
-		s_dir = h;
-		s_next = now + NAV_REPEAT_DELAY;
-	} else if (h && now >= s_next) {
-		s_next = now + NAV_REPEAT_EVERY;
+	if (h != s_navDir || (down & NAV_DIRS)) {
+		s_navDir = h;
+		s_navNext = now + NAV_REPEAT_DELAY;
+	} else if (h && now >= s_navNext) {
+		s_navNext = now + NAV_REPEAT_EVERY;
 		g_navRep = h & ~down;
 	}
 	return down | g_navRep;
@@ -17710,6 +17752,10 @@ static bool loadFngScreenFresh(const Config* cfg, const char* screenName, bool f
 			C2D_TextFontParse(&out->screenTitleText, g_uiFont, out->textBuf, tt);
 			C2D_TextOptimize(&out->screenTitleText);
 			out->hasScreenTitle = true;
+		} else if (g_optionsPage == OPTPAGE_ACCESS) {
+			C2D_TextFontParse(&out->screenTitleText, g_uiFont, out->textBuf, portstr(PS_ACCESSIBILITY));
+			C2D_TextOptimize(&out->screenTitleText);
+			out->hasScreenTitle = true;
 		} else if (g_optionsPage == OPTPAGE_DEBUG) {
 			// PORT (#448): the page's own title; English.bin has none.
 			C2D_TextFontParse(&out->screenTitleText, g_uiFont, out->textBuf, "DEBUG MENU");
@@ -18662,6 +18708,9 @@ static bool loadFngScreenFresh(const Config* cfg, const char* screenName, bool f
 		// still carries its own hash and so still resolves here.
 		const char* raw = (langLoaded && it->labelHash)
 			? langbin_lookup(&lang, it->labelHash) : NULL;
+		if (!raw && it->modeValue == OPTPAGE_ACCESS &&
+				strcasecmp(screenName, "UI_OptionsMain.fng") == 0)
+			raw = portstr(PS_ACCESSIBILITY);   // PORT: no English.bin label
 		if (!raw)
 			raw = it->fallbackLabel;
 		if (!raw)
@@ -61284,7 +61333,7 @@ static void modeRowsInput(const Config* cfg, bool haveConfig, MenuState* menu, u
 				// picks one text scale for the whole grid out of the
 				// lines it is handed -- so the refresh here is the
 				// screen again, with the cursor put back.
-				if (kind == OPT_CONTROL_TYPE && haveConfig) {
+				if ((portPrefsRowChanged(kind) || kind == OPT_CONTROL_TYPE) && haveConfig) {
 					char again[64];
 					snprintf(again, sizeof(again), "%s", menu->screenName);
 					const int sel = menu->modeRowSel, top = menu->modeRowTop;
@@ -61293,6 +61342,7 @@ static void modeRowsInput(const Config* cfg, bool haveConfig, MenuState* menu, u
 						menu->modeRowSel = sel;
 						menu->modeRowTop = top;
 					}
+					navRepeatRestart();
 				}
 			}
 		}
@@ -63389,7 +63439,7 @@ int main(int argc, char* argv[])
 		char lp[320], b[400];
 		portprefs_last_path(profile_save_root(), lp, sizeof(lp));
 		const bool had = haveConfig && portprefs_read(lp, &g_portPrefs);
-		portPrefsApply();
+		portPrefsApply(haveConfig ? &cfg : NULL);
 		snprintf(b, sizeof(b), "port prefs: boot -- language %s (%s), large text %d, high contrast %d",
 			kPortLangs[g_portPrefs.language].code, had ? "the last profile's" : "the config's",
 			g_portPrefs.largeText, g_portPrefs.highContrast);
@@ -65431,6 +65481,20 @@ int main(int argc, char* argv[])
 					!options_row_disabled(menu.optRows[menu.modeRowSel].kind)) {
 				const OptTarget t = optionsTarget();
 				optAccept = options_accept(&t, menu.optRows[menu.modeRowSel].kind);
+				// PORT: an Accessibility row is in force and saved at once; the
+				// language loads the page again, in the new one.
+				if (portPrefsRowChanged(menu.optRows[menu.modeRowSel].kind) && haveConfig) {
+					char again[64];
+					snprintf(again, sizeof(again), "%s", menu.screenName);
+					const int sel = menu.modeRowSel, top = menu.modeRowTop;
+					freeMenu(&menu);
+					if (loadFngScreen(&cfg, again, false, &menu)) {
+						menu.modeRowSel = sel;
+						menu.modeRowTop = top;
+					}
+					optAccept = OPTACCEPT_NONE;
+					navRepeatRestart();
+				}
 			}
 
 			if (newProfile) {
@@ -66565,6 +66629,20 @@ int main(int argc, char* argv[])
 						!options_row_disabled(menu.optRows[menu.modeRowSel].kind)) {
 					const OptTarget t = optionsTarget();
 					optAccept = options_accept(&t, menu.optRows[menu.modeRowSel].kind);
+					// PORT: an Accessibility row is in force and saved at once; the
+					// language loads the page again, in the new one.
+					if (portPrefsRowChanged(menu.optRows[menu.modeRowSel].kind) && haveConfig) {
+						char again[64];
+						snprintf(again, sizeof(again), "%s", menu.screenName);
+						const int sel = menu.modeRowSel, top = menu.modeRowTop;
+						freeMenu(&menu);
+						if (loadFngScreen(&cfg, again, false, &menu)) {
+							menu.modeRowSel = sel;
+							menu.modeRowTop = top;
+						}
+						optAccept = OPTACCEPT_NONE;
+						navRepeatRestart();
+					}
 				}
 
 				if (menu.isIconScroller) {

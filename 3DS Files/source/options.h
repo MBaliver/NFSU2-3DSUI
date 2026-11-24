@@ -3,6 +3,7 @@
 #include <stdbool.h>
 
 #include "display.h"
+#include "portprefs.h"
 
 // The profile's options and UI_Options.fng's rows -- TASKS.md #259 item 8.
 // (main.c is the layout half, exactly as for modeopts.h: this file says which
@@ -172,6 +173,9 @@ typedef enum {
 	// PORT (#448, the user's own): the hidden Debug Menu, a page of
 	// UI_Options whose rows main.c supplies (options_set_debug_rows).
 	OPTPAGE_DEBUG = 10,
+	// PORT: Accessibility -- the port's own per-profile settings (portprefs.h):
+	// language, large text, high contrast. Reached from UI_OptionsMain.
+	OPTPAGE_ACCESS = 11,
 } OptPage;
 
 // One row class each, in builder order within a page.
@@ -267,6 +271,10 @@ typedef enum {
 	// PORT (#448): the Debug Menu's rows, main.c's in its order.
 	OPT_DBG_FIRST,
 	OPT_DBG_LAST = OPT_DBG_FIRST + 15,
+	// PORT: the Accessibility page's rows (OptTarget.port).
+	OPT_ACC_LANGUAGE,
+	OPT_ACC_LARGE_TEXT,
+	OPT_ACC_HIGH_CONTRAST,
 } OptKind;
 
 #define OPT_IS_BIND(k) ((k) >= OPT_BIND_FIRST && (k) <= OPT_BIND_LAST)
@@ -300,6 +308,7 @@ typedef struct {
 	int ctx;
 	int player; // [0x836364], the player the Player page edits
 	DisplaySettings* display;
+	PortPrefs* port;   // PORT: the Accessibility page's values; NULL leaves it empty
 } OptTarget;
 
 // PORT (#448): the Debug Menu's rows. main.c owns the values (its Config's

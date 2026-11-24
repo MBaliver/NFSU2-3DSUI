@@ -1,3 +1,4 @@
+#include "portstr.h"
 #include "options.h"
 #include <string.h>
 
@@ -445,6 +446,17 @@ static void buildCustomizeDisplay(const OptTarget* t, RowSink* sink) {
 }
 
 // PORT (#448): the Debug Menu's rows, from main.c.
+// PORT: the Accessibility page -- the port's own settings (portprefs.h),
+// labelled in the player's language (portstr.h). Language steps through the
+// eight tables; the other two are On / Off toggles like Rearview.
+static void buildAccess(const OptTarget* t, RowSink* sink) {
+	if (!t->port)
+		return;
+	addTextRow(sink, OPT_ACC_LANGUAGE, portstr(PS_LANGUAGE), false);
+	addTextRow(sink, OPT_ACC_LARGE_TEXT, portstr(PS_LARGE_TEXT), false);
+	addTextRow(sink, OPT_ACC_HIGH_CONTRAST, portstr(PS_HIGH_CONTRAST), false);
+}
+
 static const OptDebugRows* s_debugRows = NULL;
 
 void options_set_debug_rows(const OptDebugRows* rows) {
@@ -473,6 +485,7 @@ int options_build_rows(OptPage page, const OptTarget* t, OptRow* rows, int maxRo
 	case OPTPAGE_CONTROLS: buildControls(t, &sink); break;
 	case OPTPAGE_CUSTOMIZE_DISPLAY: buildCustomizeDisplay(t, &sink); break;
 	case OPTPAGE_DEBUG: buildDebug(&sink); break;
+	case OPTPAGE_ACCESS: buildAccess(t, &sink); break;
 	default: break; // Network: not ported (see TASKS.md #259)
 	}
 	return sink.n;
@@ -546,6 +559,17 @@ void options_row_value(const OptTarget* t, OptKind kind, OptValue* out) {
 	if (OPT_IS_BIND(kind)) {
 		const int s = controls_slot_of((int)(kind - OPT_BIND_FIRST));
 		out->text = s >= 0 ? controls_slot_name(s) : "Not Used";   // #527: none
+		return;
+	}
+	// PORT: the Accessibility page's values.
+	if (t->port && kind == OPT_ACC_LANGUAGE) {
+		const int li = t->port->language >= 0 && t->port->language < PORT_LANG_COUNT ? t->port->language : 0;
+		out->text = kPortLangs[li].native;
+		return;
+	}
+	if (t->port && (kind == OPT_ACC_LARGE_TEXT || kind == OPT_ACC_HIGH_CONTRAST)) {
+		const bool on = kind == OPT_ACC_LARGE_TEXT ? t->port->largeText : t->port->highContrast;
+		out->valueHash = on ? VAL_ON : VAL_OFF;
 		return;
 	}
 	// PORT (#448): a Debug Menu row's value, as main.c prints it.
@@ -754,6 +778,19 @@ bool options_adjust(const OptTarget* t, OptKind kind, bool right) {
 	// PORT (#447): the action to the next or previous button.
 	if (OPT_IS_BIND(kind)) {
 		controls_step((int)(kind - OPT_BIND_FIRST), right);
+		return false;
+	}
+	// PORT: the Accessibility page.
+	if (t->port && kind == OPT_ACC_LANGUAGE) {
+		t->port->language = wrapStep(t->port->language, PORT_LANG_COUNT - 1, right);
+		return false;
+	}
+	if (t->port && kind == OPT_ACC_LARGE_TEXT) {
+		t->port->largeText = !t->port->largeText;
+		return false;
+	}
+	if (t->port && kind == OPT_ACC_HIGH_CONTRAST) {
+		t->port->highContrast = !t->port->highContrast;
 		return false;
 	}
 	// PORT (#448): a Debug Menu row steps itself.
@@ -973,6 +1010,9 @@ OptAccept options_accept(const OptTarget* t, OptKind kind) {
 	case OPT_STEREO_STYLE:
 	case OPT_GPS_COLOUR: // PORT (#471)
 	case OPT_DRAG_TRIGGER_SHIFT:
+	case OPT_ACC_LANGUAGE: // PORT: the Accessibility page
+	case OPT_ACC_LARGE_TEXT:
+	case OPT_ACC_HIGH_CONTRAST:
 		options_adjust(t, kind, true);
 		return OPTACCEPT_CHANGED;
 	default:
