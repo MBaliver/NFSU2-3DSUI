@@ -60873,6 +60873,12 @@ static void drawPauseTop(void) {
 		}
 		return;
 	}
+	// Nothing to put in it (the prologue hides the bank and the map, and has
+	// no stage, GPS or mail yet): no column -- an empty black band read as a
+	// screen that had failed to draw.
+	const int unread = (int)sms_count_unread(&gProfile);
+	if (stage0 && !(g_worldFromCareer && g_careerStage > 0) && dest < 0 && unread <= 0)
+		return;
 	C2D_DrawRectSolid(0.0f, 0.0f, UI_Z - 0.01f, colW, H, C2D_Color32(0, 0, 0, 219));
 	C2D_DrawRectSolid(colW - 1.0f, 0.0f, UI_Z - 0.005f, 1.0f, H, C2D_Color32(255, 255, 255, 51));
 	float y = 8.0f;
@@ -60928,7 +60934,6 @@ static void drawPauseTop(void) {
 		y += 22.0f;
 	}
 	// The unread messages, at the foot: the envelope and the count.
-	const int unread = (int)sms_count_unread(&gProfile);
 	if (unread > 0) {
 		char n[12];
 		snprintf(n, sizeof(n), "%d", unread);
