@@ -59164,18 +59164,23 @@ static void uiGridLayout(const MenuState* m) {
 			return;
 		}
 	}
-	// The plain grid: up to three across for six or fewer, else four; rows
-	// no shorter than a fingertip's tile, scrolling past the screen.
-	const int cols = n <= 3 ? n : n <= 6 ? 3 : 4, rows = (n + cols - 1) / cols;
+	// The plain grid: 2x2 for four items, up to three across for six or fewer,
+	// else four; incomplete last rows are centred so no side gap looks broken.
+	const int cols = n <= 3 ? n : n == 4 ? 2 : n <= 6 ? 3 : 4, rows = (n + cols - 1) / cols;
 	const float tw = (W - 16.0f - gap * (float)(cols - 1)) / (float)cols;
 	float th = fminf(90.0f, (avail - gap * (float)(rows - 1)) / (float)rows);
 	if (th < 66.0f)
 		th = 66.0f;
 	const float total = th * (float)rows + gap * (float)(rows - 1);
 	const float y0 = total < avail ? top + (avail - total) * 0.5f : top;
-	for (int i = 0; i < n; i++)
-		g_uiGrid.c[i] = (UiGridCell){ 8.0f + (float)(i % cols) * (tw + gap), y0 + (float)(i / cols) * (th + gap),
+	for (int i = 0; i < n; i++) {
+		const int r = i / cols, c = i % cols;
+		const int inRow = (r == rows - 1 && (n % cols) != 0) ? (n % cols) : cols;
+		const float rowW = tw * (float)inRow + gap * (float)(inRow - 1);
+		const float x0 = floorf((W - rowW) * 0.5f);
+		g_uiGrid.c[i] = (UiGridCell){ x0 + (float)c * (tw + gap), y0 + (float)r * (th + gap),
 			tw, th, UI_CELL_TILE };
+	}
 	g_uiGrid.contentH = total;
 }
 
@@ -61515,6 +61520,112 @@ static u32 postRaceTouchKeys(MenuState* m, MenuState* dlg, u32 kDown) {
 	return 0u;
 }
 
+static const char* uiOrdinal(int n);
+// PORT: redesigned Post Race Stats top card in the NFSU2 U2-UI style: no
+// horizontal arrows (the lower roster uses UP/DOWN) and no giant empty column
+// when the race has no laps (Sprint/Drag).
+static void drawPostRaceStatsTop(void) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	const PostRace* pr = &g_postRace;
+	if (!buf || !g_uiFont || pr->statAt < 0 || pr->statAt >= pr->statCount)
+		return;
+	C2D_TextBufClear(buf);
+	const int at = pr->statAt;
+	const RaceStatsEntry* e = &pr->stats[at];
+	const bool hasLaps = !pr->drag && !pr->pointToPoint && pr->laps > 0;
+	const int lapCount = hasLaps ? (pr->laps < 6 ? pr->laps : 6) : 0;
+
+	// Build telemetry rows (same fields and units as postRaceStatsFill()).
+	const bool kph = unitsMetric();
+	const float mul = kph ? 3.6f : 2.237f;
+	const char* unit = pr->statStr[kph ? PRS_STR_KMH : PRS_STR_MPH];
+	const char* lab[7];
+	char val[7][48], t[16];
+	int n = 0;
+	if (pr->drift) {
+		lab[n] = pr->statStr[PRS_STR_SCORE];
+		formatCashGrouped((unsigned)(int)e->driftScore, val[n++], sizeof(val[0]));
+		lab[n] = pr->statStr[PRS_STR_BEST_DRIFT];
+		formatCashGrouped((unsigned)e->bestDrift, val[n++], sizeof(val[0]));
+		race_print_time((s32)(e->longestDrift * 4000.0f), 0, t);
+		lab[n] = pr->statStr[PRS_STR_LONGEST_DRIFT];
+		snprintf(val[n++], sizeof(val[0]), "%s", t);
+		lab[n] = pr->statStr[PRS_STR_TOP_SPEED];
+		snprintf(val[n++], sizeof(val[0]), "%3.1f %s", e->topSpeed * mul, unit);
+		lab[n] = pr->statStr[PRS_STR_AVG_SPEED];
+		snprintf(val[n++], sizeof(val[0]), "%3.1f %s", e->avgSpeed * mul, unit);
+	} else {
+		race_print_time(e->raceTime, 0, t);
+		lab[n] = pr->statStr[PRS_STR_FINISH_TIME];
+		snprintf(val[n++], sizeof(val[0]), "%s", t);
+		lab[n] = pr->statStr[PRS_STR_TIME_BEHIND];
+		snprintf(val[n++], sizeof(val[0]), "%s", prsTimeBehind(pr, at, t));
+		lab[n] = pr->statStr[PRS_STR_TOP_SPEED];
+		snprintf(val[n++], sizeof(val[0]), "%3.1f %s", e->topSpeed * mul, unit);
+		lab[n] = pr->statStr[PRS_STR_AVG_SPEED];
+		snprintf(val[n++], sizeof(val[0]), "%3.1f %s", e->avgSpeed * mul, unit);
+		if (pr->drag) {
+			lab[n] = pr->statStr[PRS_STR_PERFECT_SHIFTS];
+			snprintf(val[n++], sizeof(val[0]), "%d/%d", e->perfectShifts, e->shifts);
+		}
+		if (hasLaps) {
+			race_print_time(e->bestLap, 0, t);
+			lab[n] = pr->statStr[PRS_STR_BEST_LAP];
+			snprintf(val[n++], sizeof(val[0]), "%s", t);
+			lab[n] = pr->statStr[PRS_STR_LAPS_LED];
+			snprintf(val[n++], sizeof(val[0]), "%d/%d", e->lapsLed, pr->laps);
+		}
+	}
+
+	const float W = SCREEN_TOP_W, H = SCREEN_TOP_H;
+	const float rowH = 22.0f;
+	const int bodyRows = hasLaps ? (n > lapCount + 1 ? n : lapCount + 1) : n;
+	const float cw = hasLaps ? 364.0f : 284.0f;
+	const float ch = 50.0f + (float)bodyRows * rowH + 10.0f;
+	const float cx = floorf((W - cw) * 0.5f), cy = floorf((H - ch) * 0.5f);
+	uiRoundRect(cx, cy, cw, ch, 6.0f, UI_Z, C2D_Color32(0, 0, 0, 212));
+	uiDialogRing(cx, cy, cw, ch);
+
+	// Header: rank badge + driver name on left, car name on right.
+	char rk[16];
+	snprintf(rk, sizeof(rk), "%d%s", e->position, uiOrdinal(e->position));
+	const float rw = uiText(buf, rk, 18.0f, cx + 14.0f, cy + 20.0f, 0, UI_ACCENT, 0.0f);
+	const float carW = pr->statCarStr[at][0]
+		? uiText(buf, pr->statCarStr[at], 14.0f, cx + cw - 14.0f, cy + 21.0f, 2, UI_DIM, 110.0f) + 10.0f
+		: 0.0f;
+	uiText(buf, pr->statName[at], 18.0f, cx + 14.0f + rw + 10.0f, cy + 20.0f, 0, UI_WHITE,
+		cw - 28.0f - rw - 10.0f - carW);
+	C2D_DrawRectSolid(cx + 12.0f, cy + 38.0f, UI_Z + 0.01f, cw - 24.0f, 1.0f, UI_ACCENT);
+
+	const float y0 = cy + 48.0f;
+	float statX = cx + 14.0f, statR = cx + cw - 14.0f;
+	if (hasLaps) {
+		// Left column: compact Lap Times & Position table.
+		const float lapX = cx + 14.0f, lapR = cx + 140.0f;
+		uiLabel(buf, portstr_caps(PS_LAP), lapX, y0 + 6.0f, 0, UI_ACCENT);
+		uiLabel(buf, portstr_caps(PS_PR_POSITION), lapR, y0 + 6.0f, 2, UI_ACCENT);
+		for (int lap = 1; lap <= lapCount && lap < RACE_MAX_LAPS; lap++) {
+			const float ly = y0 + (float)lap * rowH + 6.0f;
+			char lt[24], lp[8];
+			race_print_time(e->lapTime[lap], 0, t);
+			snprintf(lt, sizeof(lt), "%d  %s", lap, t);
+			snprintf(lp, sizeof(lp), "%d%s", e->lapPos[lap], uiOrdinal(e->lapPos[lap]));
+			uiText(buf, lt, 14.0f, lapX, ly, 0, UI_WHITE, lapR - lapX - 28.0f);
+			uiText(buf, lp, 14.0f, lapR, ly, 2, UI_DIM, 0.0f);
+		}
+		C2D_DrawRectSolid(lapR + 10.0f, y0, UI_Z + 0.01f, 1.0f, (float)bodyRows * rowH - 2.0f, UI_RIM);
+		statX = lapR + 20.0f;
+	}
+	for (int k = 0; k < n; k++) {
+		const float sy = y0 + (float)k * rowH + 6.0f;
+		const float vw = uiText(buf, val[k], 15.0f, statR, sy, 2,
+			k == 0 ? UI_ACCENT : UI_WHITE, 0.0f);
+		uiText(buf, lab[k], 13.0f, statX, sy, 0, UI_DIM, statR - statX - vw - 8.0f);
+	}
+}
+
 // PORT: the top screen over the post-race menu. Its icon strip only repeated
 // the lower screen's pills, so the race's outcome stands there instead, as a
 // kit card: the player's place, the time (a drift's score), and in a career
@@ -61709,10 +61820,11 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 		uiText(buf, nm, 15.0f, sx + 18.0f, cy, 0, rw->me ? UI_ACCENT : UI_WHITE,
 			slotW - 22.0f - fw - 4.0f);
 	}
-	// D-Pad Down badge + expand/collapse indicator on the right of the strip.
+	// D-Pad Up/Down badge on the right of the strip.
 	if (g_padSheetState == 1) {
 		drawPadGlyphRaw('d', W - 26.0f, cy, 14.0f, UI_Z + 0.04f);
-		uiArrow(W - 14.0f, cy, (float)M_PI * 0.5f, 3.5f, UI_ACCENT);
+		uiArrow(W - 14.0f, cy - 3.5f, -(float)M_PI * 0.5f, 3.0f, UI_ACCENT);
+		uiArrow(W - 14.0f, cy + 3.5f,  (float)M_PI * 0.5f, 3.0f, UI_ACCENT);
 	} else {
 		const float cx = W - 14.0f;
 		if (g_raceBoardOpen)
@@ -68351,10 +68463,16 @@ int main(int argc, char* argv[])
 					want = g_touchOpenUi;
 				g_touchOpenUi = WORLD_UI_NONE;
 				// PORT: during an active race, block free-roam overlays (World Map,
-				// SMS, Career Status); only Pause opens. D-Pad Down (the World Map
-				// button) toggles the expanded Standings card on the lower screen.
+				// SMS, Career Status); only Pause opens. D-Pad Up or Down toggles
+				// the expanded Standings summary on the lower screen (unless bound
+				// to a driving control).
 				if (g_raceRun.on) {
-					if (want == WORLD_UI_MAP)
+					const u32 driveDpad = controlsKeysFor(OPT_ACT_ACCELERATE) |
+						controlsKeysFor(OPT_ACT_BRAKE) |
+						controlsKeysFor(OPT_ACT_SHIFT_UP) |
+						controlsKeysFor(OPT_ACT_SHIFT_DOWN);
+					const u32 boardKeys = (KEY_DUP | KEY_DDOWN) & ~driveDpad;
+					if (!simHold && (want == WORLD_UI_MAP || (kDown & boardKeys)))
 						g_raceBoardOpen = !g_raceBoardOpen;
 					if (want != WORLD_UI_NONE && want != WORLD_UI_PAUSE)
 						want = WORLD_UI_NONE;
@@ -70512,9 +70630,15 @@ int main(int argc, char* argv[])
 			// pills (drawUiPostRace()); the race's outcome stands in its place.
 			const bool prSummary = bootState == BOOT_WORLD && worldUi == WORLD_UI_POSTRACE &&
 				postRaceMenuUp(&menu);
+			const bool prStatsTop = bootState == BOOT_WORLD && worldUi == WORLD_UI_POSTRACE &&
+				g_postRace.inStats;
 			if (prSummary) {
 				scissorReset();
 				drawPostRaceSummaryTop();
+				menuClipBegin(&menu);
+			} else if (prStatsTop) {
+				scissorReset();
+				drawPostRaceStatsTop();
 				menuClipBegin(&menu);
 			} else {
 				drawMenu(&menu, fngStageFrames);
