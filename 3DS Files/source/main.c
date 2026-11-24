@@ -27503,40 +27503,70 @@ static u32 fskTouchKeys(MenuState* m, char* b, size_t cap) {
 				keys = h->arg;
 				break;
 			case FSK_ITEM:
-				if (a == m->selected)
+				if (a == m->selected) {
 					keys = KEY_A;
-				else
-					feTouchQueue(a > m->selected ? KEY_RIGHT : KEY_LEFT, abs(a - m->selected));
+				} else if (a >= 0 && a < m->itemCount) {
+					// Jump straight to the tapped item in one frame (no multi-frame walk).
+					if (a > 0) {
+						m->selected = a - 1;
+						keys = KEY_RIGHT;
+					} else {
+						m->selected = 1;
+						keys = KEY_LEFT;
+					}
+				}
 				break;
 			case FSK_ROW:
 			case FSK_ROWA:
 			case FSK_ROWL:
 			case FSK_ROWR:
-				if (a != m->modeRowSel)
-					feTouchQueue(a > m->modeRowSel ? KEY_DOWN : KEY_UP, abs(a - m->modeRowSel));
-				else if (h->kind == FSK_ROWL)
+				if (a != m->modeRowSel) {
+					if (h->kind == FSK_ROWL || h->kind == FSK_ROWR) {
+						m->modeRowSel = a;
+						keys = h->kind == FSK_ROWL ? KEY_LEFT : KEY_RIGHT;
+					} else if (a > 0) {
+						m->modeRowSel = a - 1;
+						keys = KEY_DOWN;
+					} else {
+						m->modeRowSel = 1;
+						keys = KEY_UP;
+					}
+				} else if (h->kind == FSK_ROWL) {
 					keys = KEY_LEFT;
-				else if (h->kind == FSK_ROWR)
+				} else if (h->kind == FSK_ROWR) {
 					keys = KEY_RIGHT;
-				else if (h->kind == FSK_ROWA)
+				} else if (h->kind == FSK_ROWA) {
 					keys = KEY_A;
+				}
 				break;
 			case FSK_BTN:
 				keys = a == m->engageSel ? KEY_A : a == 0 ? KEY_LEFT : KEY_RIGHT;
 				break;
 			case FSK_PART:
-				// A body shop part row: the current one is A, another that many
-				// steps down the list (bodyShopInput()'s ScrollVertical).
-				if (a == g_bodyShop.sel)
+				if (a == g_bodyShop.sel) {
 					keys = KEY_A;
-				else
-					feTouchQueue(a > g_bodyShop.sel ? KEY_DOWN : KEY_UP, abs(a - g_bodyShop.sel));
+				} else if (a > 0) {
+					g_bodyShop.sel = a - 1;
+					keys = KEY_DOWN;
+				} else {
+					g_bodyShop.sel = 1;
+					keys = KEY_UP;
+				}
 				break;
 			case FSK_LIST:
-				if (a == g_fskListSel)
+				if (a == g_fskListSel) {
 					keys = KEY_A;
-				else
+				} else if (m->isMcList && a >= 0 && a < m->listCount) {
+					if (a > 0) {
+						m->listSel = a - 1;
+						keys = KEY_DOWN;
+					} else {
+						m->listSel = 1;
+						keys = KEY_UP;
+					}
+				} else {
 					feTouchQueue(a > g_fskListSel ? KEY_DOWN : KEY_UP, abs(a - g_fskListSel));
+				}
 				break;
 			case FSK_SWATCH: {
 				// A paint swatch: in the current one's row, LEFT / RIGHT
