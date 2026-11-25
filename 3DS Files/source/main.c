@@ -118,6 +118,7 @@ extern gxCmdQueue_s __C3D_Context;
 // Last: its macros route this file's hid* calls through the dev command file.
 #define DEVCMD_WRAP_HID
 #include "devcmd.h"
+#include "uiaa.h"
 
 // The UI font every String is drawn with (TASKS.md #425): Helvetica 67
 // Condensed Medium Oblique, the user's .ttf (repo root), converted to citro2d's
@@ -30605,8 +30606,8 @@ static void drawTuneCurves(const MenuState* m, const DynoRecord* r, float upTo, 
 		const float yt = TCHART_Y0 + t * (TCHART_Y1 - TCHART_Y0);
 		const float yh = TCHART_Y0 + h * (TCHART_Y1 - TCHART_Y0);
 		if (k > 0) {
-			C2D_DrawLine(menuX(m, px), menuY(m, pt), ct, menuX(m, x), menuY(m, yt), ct, 2.0f, 0.6f);
-			C2D_DrawLine(menuX(m, px), menuY(m, ph), ch, menuX(m, x), menuY(m, yh), ch, 2.0f, 0.6f);
+			uiaaLine(menuX(m, px), menuY(m, pt), menuX(m, x), menuY(m, yt), 2.0f, ct, 0.6f);
+			uiaaLine(menuX(m, px), menuY(m, ph), menuX(m, x), menuY(m, yh), 2.0f, ch, 0.6f);
 		}
 		px = x;
 		pt = yt;
@@ -30628,8 +30629,7 @@ static void drawTuneChart(const MenuState* m) {
 	if (!g_dyno.done && g_dyno.state != 0 && p < 1.0f && upTo > 0.0f) {
 		const float x = TCHART_X0 + upTo / 10000.0f * (TCHART_X1 - TCHART_X0);
 		const u32 c = C2D_Color32(0xFF, 0xFF, 0x00, 0xFF);
-		C2D_DrawLine(menuX(m, x), menuY(m, TCHART_Y0), c, menuX(m, x), menuY(m, TCHART_Y1), c,
-			1.5f, 0.6f);
+		uiaaLine(menuX(m, x), menuY(m, TCHART_Y0), menuX(m, x), menuY(m, TCHART_Y1), 1.5f, c, 0.6f);
 	}
 }
 
@@ -30647,7 +30647,7 @@ static void drawTuneNos(const MenuState* m) {
 		float th = (lw->hasSize ? lw->sizeH : 3.0f) * m->layoutScale;
 		if (th < 1.5f)
 			th = 1.5f;
-		C2D_DrawLine(menuX(m, x0), menuY(m, y0), c, menuX(m, x1), menuY(m, y1), c, th, 0.6f);
+		uiaaLine(menuX(m, x0), menuY(m, y0), menuX(m, x1), menuY(m, y1), th, c, 0.6f);
 	}
 	const float px = ox + g_tnos.cur16 / g_tnos.max16 * TNOS_W;
 	const float py = oy - g_tnos.cur17 / g_tnos.max17 * TNOS_H;
@@ -57393,12 +57393,12 @@ static void drawWorldCountdown(C2D_TextBuf buf) {
 // An envelope, `w` wide, top-left at (x, y).
 static void drawEnvelope(float x, float y, float w, u32 c) {
 	const float h = w * 0.68f;
-	C2D_DrawRectSolid(x, y, 0.5f, w, 1.5f, c);
-	C2D_DrawRectSolid(x, y + h - 1.5f, 0.5f, w, 1.5f, c);
-	C2D_DrawRectSolid(x, y, 0.5f, 1.5f, h, c);
-	C2D_DrawRectSolid(x + w - 1.5f, y, 0.5f, 1.5f, h, c);
-	C2D_DrawLine(x, y, c, x + w * 0.5f, y + h * 0.55f, c, 1.5f, 0.5f);
-	C2D_DrawLine(x + w, y, c, x + w * 0.5f, y + h * 0.55f, c, 1.5f, 0.5f);
+	uiaaRect(x, y, w, 1.5f, c, 0.5f);
+	uiaaRect(x, y + h - 1.5f, w, 1.5f, c, 0.5f);
+	uiaaRect(x, y, 1.5f, h, c, 0.5f);
+	uiaaRect(x + w - 1.5f, y, 1.5f, h, c, 0.5f);
+	uiaaLine(x, y, x + w * 0.5f, y + h * 0.55f, 1.5f, c, 0.5f);
+	uiaaLine(x + w, y, x + w * 0.5f, y + h * 0.55f, 1.5f, c, 0.5f);
 }
 
 // PORT: the map's event feed, The Run's lower-screen readout in this game's
@@ -57619,32 +57619,9 @@ static void drawWorldBankReward(C2D_TextBuf buf) {
 #define UI_LABEL_PX  12.0f
 #define UI_Z         0.8f
 
-// A rounded rectangle with no overlapping pieces, so a translucent colour
-// blends once everywhere: three strips and four quarter-disc fans that each
-// stay inside their own corner square.
-static void uiRoundRect(float x, float y, float w, float h, float r, float z, u32 c) {
-	if (r * 2.0f > h) r = h * 0.5f;
-	if (r * 2.0f > w) r = w * 0.5f;
-	C2D_DrawRectSolid(x + r, y, z, w - 2.0f * r, h, c);
-	if (h > 2.0f * r) {
-		C2D_DrawRectSolid(x, y + r, z, r, h - 2.0f * r, c);
-		C2D_DrawRectSolid(x + w - r, y + r, z, r, h - 2.0f * r, c);
-	}
-	const float cx[4] = { x + r, x + w - r, x + w - r, x + r };
-	const float cy[4] = { y + r, y + r, y + h - r, y + h - r };
-	const float a0[4] = { (float)M_PI, (float)M_PI * 1.5f, 0.0f, (float)M_PI * 0.5f };
-	for (int k = 0; k < 4; k++) {
-		for (int i = 0; i < 4; i++) {
-			const float b0 = a0[k] + (float)M_PI * 0.125f * (float)i;
-			const float b1 = b0 + (float)M_PI * 0.125f;
-			C2D_DrawTriangle(cx[k], cy[k], c, cx[k] + r * cosf(b0), cy[k] + r * sinf(b0), c,
-				cx[k] + r * cosf(b1), cy[k] + r * sinf(b1), c, z);
-		}
-	}
-}
-
 // The outline of a rounded rectangle pushed out by `d` (in by a negative d):
 // four corner arcs of UI_RR_SEG steps, `n` = 4 * (UI_RR_SEG + 1) points.
+// Pulled in past its radius, a corner comes to a point on the diagonal.
 #define UI_RR_SEG 5
 #define UI_RR_N   (4 * (UI_RR_SEG + 1))
 static void uiRRPath(float x, float y, float w, float h, float r, float d, float* px, float* py) {
@@ -57653,30 +57630,59 @@ static void uiRRPath(float x, float y, float w, float h, float r, float d, float
 	const float cx[4] = { x + r, x + w - r, x + w - r, x + r };
 	const float cy[4] = { y + r, y + r, y + h - r, y + h - r };
 	const float a0[4] = { (float)M_PI, (float)M_PI * 1.5f, 0.0f, (float)M_PI * 0.5f };
-	float rr = r + d;
-	if (rr < 0.0f) rr = 0.0f;
+	const float rr = r + d;
 	int k = 0;
 	for (int c = 0; c < 4; c++)
 		for (int i = 0; i <= UI_RR_SEG; i++) {
-			const float a = a0[c] + (float)M_PI * 0.5f * (float)i / (float)UI_RR_SEG;
-			px[k] = cx[c] + rr * cosf(a);
-			py[k] = cy[c] + rr * sinf(a);
+			const float a = rr >= 0.0f ? a0[c] + (float)M_PI * 0.5f * (float)i / (float)UI_RR_SEG
+				: a0[c] + (float)M_PI * 0.25f;
+			const float k2 = rr >= 0.0f ? rr : rr * 1.41421356f;
+			px[k] = cx[c] + k2 * cosf(a);
+			py[k] = cy[c] + k2 * sinf(a);
 			k++;
 		}
 }
-// The band between the outline pushed out by d0 and by d1, coloured c0 on
-// the first edge and c1 on the second -- a rim when both match, a soft glow
-// when one is clear. Quads that share edges only, so it blends once.
-static void uiBand(float x, float y, float w, float h, float r, float d0, float d1, float z,
-		u32 c0, u32 c1) {
-	float ax[UI_RR_N], ay[UI_RR_N], bx[UI_RR_N], by[UI_RR_N];
-	uiRRPath(x, y, w, h, r, d0, ax, ay);
-	uiRRPath(x, y, w, h, r, d1, bx, by);
+// A rounded rectangle, antialiased (uiaa.h): its outline pulled in half a
+// pixel and filled, then faded out to half a pixel beyond. No piece overlaps
+// another, so a translucent colour blends once everywhere.
+static void uiRoundRect(float x, float y, float w, float h, float r, float z, u32 c) {
+	float ix[UI_RR_N], iy[UI_RR_N], ox[UI_RR_N], oy[UI_RR_N];
+	uiRRPath(x, y, w, h, r, -UIAA_F, ix, iy);
+	uiRRPath(x, y, w, h, r, UIAA_F, ox, oy);
+	const float cx = x + w * 0.5f, cy = y + h * 0.5f;
 	for (int i = 0; i < UI_RR_N; i++) {
 		const int j = (i + 1) % UI_RR_N;
-		C2D_DrawTriangle(ax[i], ay[i], c0, ax[j], ay[j], c0, bx[j], by[j], c1, z);
-		C2D_DrawTriangle(ax[i], ay[i], c0, bx[j], by[j], c1, bx[i], by[i], c1, z);
+		C2D_DrawTriangle(cx, cy, c, ix[i], iy[i], c, ix[j], iy[j], c, z);
 	}
+	uiaaStrip(ix, iy, c, ox, oy, uiaaClear(c), UI_RR_N, true, z);
+}
+// The band between the outline pushed out by d0 and by d1, coloured c0 on
+// the first edge and c1 on the second -- a rim when both match, a soft glow
+// when one is clear. Antialiased: widened half a pixel each side and faded
+// out there (a band thinner than that peaks fainter in its middle). Quads
+// that share edges only, so it blends once.
+static void uiBand(float x, float y, float w, float h, float r, float d0, float d1, float z,
+		u32 c0, u32 c1) {
+	const bool fwd = d0 <= d1;
+	const float lo = fwd ? d0 : d1, hi = fwd ? d1 : d0, span = hi - lo;
+	const u32 clo = fwd ? c0 : c1, chi = fwd ? c1 : c0;
+	float d[4] = { lo - UIAA_F, lo + UIAA_F, hi - UIAA_F, hi + UIAA_F };
+	u32 c[4];
+	if (span < 2.0f * UIAA_F) {
+		d[1] = d[2] = (lo + hi) * 0.5f;
+		c[1] = c[2] = uiaaScale(uiaaMix(clo, chi, 0.5f), span / (2.0f * UIAA_F));
+	} else {
+		c[1] = uiaaMix(clo, chi, UIAA_F / span);
+		c[2] = uiaaMix(clo, chi, 1.0f - UIAA_F / span);
+	}
+	c[0] = uiaaClear(clo);
+	c[3] = uiaaClear(chi);
+	float px[4][UI_RR_N], py[4][UI_RR_N];
+	for (int k = 0; k < 4; k++)
+		uiRRPath(x, y, w, h, r, d[k], px[k], py[k]);
+	for (int k = 0; k < 3; k++)
+		if (d[k + 1] > d[k])
+			uiaaStrip(px[k], py[k], c[k], px[k + 1], py[k + 1], c[k + 1], UI_RR_N, true, z);
 }
 // A rim `t` thick just inside a rounded rectangle.
 static void uiRing(float x, float y, float w, float h, float r, float t, float z, u32 c) {
@@ -57820,12 +57826,16 @@ static float uiLabel(C2D_TextBuf buf, const char* str, float x, float cy, int al
 // A small filled arrow pointing along `a` (screen radians, 0 = right).
 static void uiArrow(float x, float y, float a, float size, u32 c) {
 	const float ca = cosf(a), sa = sinf(a);
-	#define UIR(px, py) (x + (px) * ca - (py) * sa), (y + (px) * sa + (py) * ca)
-	C2D_DrawTriangle(UIR(size, 0.0f), c, UIR(-size * 0.8f, -size * 0.75f), c,
-		UIR(-size * 0.35f, 0.0f), c, UI_Z + 0.03f);
-	C2D_DrawTriangle(UIR(size, 0.0f), c, UIR(-size * 0.35f, 0.0f), c,
-		UIR(-size * 0.8f, size * 0.75f), c, UI_Z + 0.03f);
-	#undef UIR
+	// A dart: tip, back corner, notch, back corner -- a star round a point
+	// just ahead of the notch, so it fans from there.
+	const float lx[4] = { size, -size * 0.8f, -size * 0.35f, -size * 0.8f };
+	const float ly[4] = { 0.0f, -size * 0.75f, 0.0f, size * 0.75f };
+	float px[4], py[4];
+	for (int i = 0; i < 4; i++) {
+		px[i] = x + lx[i] * ca - ly[i] * sa;
+		py[i] = y + lx[i] * sa + ly[i] * ca;
+	}
+	uiaaFan(x + size * 0.1f * ca, y + size * 0.1f * sa, px, py, 4, NULL, c, UI_Z + 0.03f);
 }
 
 // The HUD's touch targets, laid out by the draw and hit by the next tap.
@@ -58270,11 +58280,7 @@ static bool drawUiWorldMap(const MenuState* m) {
 			const float r = 9.0f + pulse * 11.0f;
 			const u8 a = (u8)(255.0f * (1.0f - pulse));
 			const u32 c = (rc & 0x00FFFFFFu) | ((u32)a << 24);
-			for (int s2 = 0; s2 < 24; s2++) {
-				const float a0 = (float)s2 * (float)M_PI / 12.0f, a1 = a0 + (float)M_PI / 12.0f;
-				C2D_DrawLine(x + r * cosf(a0), y + r * sinf(a0), c, x + r * cosf(a1), y + r * sinf(a1), c,
-					2.0f, 0.29f);
-			}
+			uiaaArc(x, y, r - 1.0f, r + 1.0f, 0.0f, 2.0f * (float)M_PI, 32, c, 0.29f);
 		}
 		if (e->wme >= GAMEMAP_WME_PAINTSHOP) {
 			uiRoundRect(x - 8.5f, y - 8.5f, 17.0f, 17.0f, 4.0f, 0.3f, UI_PANEL_SOLID);
@@ -58360,8 +58366,8 @@ static bool drawUiWorldMap(const MenuState* m) {
 			const float tx = px + pw - 16.0f;
 			if (on) {
 				const u32 tc = focus ? UI_ACCENT : UI_WHITE;
-				C2D_DrawLine(tx - 5.0f, cy, tc, tx - 1.5f, cy + 3.5f, tc, 2.0f, UI_Z + 0.03f);
-				C2D_DrawLine(tx - 1.5f, cy + 3.5f, tc, tx + 5.0f, cy - 4.0f, tc, 2.0f, UI_Z + 0.03f);
+				uiaaLine(tx - 5.0f, cy, tx - 1.5f, cy + 3.5f, 2.0f, tc, UI_Z + 0.03f);
+				uiaaLine(tx - 1.5f, cy + 3.5f, tx + 5.0f, cy - 4.0f, 2.0f, tc, UI_Z + 0.03f);
 			}
 			wmHit(px, py, pw, rowH, WMH_ROW0 + r);
 		}
@@ -58384,9 +58390,9 @@ static bool drawUiWorldMap(const MenuState* m) {
 		for (int k = 0; k < 2; k++) {
 			const float y = 76.0f + 34.0f * (float)k, cx = zx + 15.0f, cy = y + 15.0f;
 			uiChip(zx, y, 30.0f, 30.0f, 0);
-			C2D_DrawRectSolid(cx - 6.0f, cy - 1.0f, UI_Z + 0.03f, 12.0f, 2.0f, UI_WHITE);
+			uiaaRect(cx - 6.0f, cy - 1.0f, 12.0f, 2.0f, UI_WHITE, UI_Z + 0.03f);
 			if (k == 0)
-				C2D_DrawRectSolid(cx - 1.0f, cy - 6.0f, UI_Z + 0.03f, 2.0f, 12.0f, UI_WHITE);
+				uiaaRect(cx - 1.0f, cy - 6.0f, 2.0f, 12.0f, UI_WHITE, UI_Z + 0.03f);
 			wmHit(zx - 4.0f, y - 2.0f, 40.0f, 34.0f, k == 0 ? WMH_ZIN : WMH_ZOUT);
 		}
 		// ---- bottom: the filters tab off the left edge, the GPS off the right ----
@@ -58398,7 +58404,7 @@ static bool drawUiWorldMap(const MenuState* m) {
 		const float fw = uiMeasure(buf, ft, UI_LABEL_PX) + 44.0f;
 		uiTab(0.0f, fy, fw, 28.0f, 0, UI_PANEL);
 		for (int i = 0; i < 3; i++)
-			C2D_DrawRectSolid(10.0f, fy + 9.0f + 4.0f * (float)i, UI_Z + 0.03f, 10.0f, 1.6f, UI_WHITE);
+			uiaaRect(10.0f, fy + 9.0f + 4.0f * (float)i, 10.0f, 1.6f, UI_WHITE, UI_Z + 0.03f);
 		uiLabel(buf, ft, 27.0f, fy + 14.0f, 0, UI_WHITE);
 		wmHit(0.0f, fy - 2.0f, fw, 36.0f, WMH_FILTERS);
 		if (!gameMapGpsIdle() && g_gpsMarkerNow >= 0) {
@@ -59070,6 +59076,7 @@ static bool drawUiMcName(const MenuState* m) {
 static void uiStar(float cx, float cy, float r, float k) {
 	const u32 off = C2D_Color32(255, 255, 255, 46), on = UI_ACCENT;
 	float px[10], py[10];
+	u32 cols[10];
 	for (int j = 0; j < 10; j++) {
 		const float rr = (j & 1) ? r * 0.44f : r, a = -(float)M_PI * 0.5f + (float)j * (float)M_PI / 5.0f;
 		px[j] = cx + rr * cosf(a);
@@ -59080,9 +59087,9 @@ static void uiStar(float cx, float cy, float r, float k) {
 		// A triangle is lit when its middle sits left of the lit edge.
 		const float mx = (cx + px[j] + px[n]) / 3.0f;
 		const bool lit = k >= 1.0f || (k > 0.0f && mx <= cx - r + 2.0f * r * k);
-		C2D_DrawTriangle(cx, cy, lit ? on : off, px[j], py[j], lit ? on : off, px[n], py[n], lit ? on : off,
-			UI_Z + 0.02f);
+		cols[j] = lit ? on : off;
 	}
+	uiaaFan(cx, cy, px, py, 10, cols, 0, UI_Z + 0.02f);
 }
 
 // ---- icon menus: a grid of tiles ----
@@ -59312,8 +59319,8 @@ static void uiGear(float cx, float cy, float r, u32 col, u32 hole) {
 		const float a = (float)k * (float)M_PI / 4.0f, ca = cosf(a), sa = sinf(a);
 		const float x0 = cx + ca * tIn, y0 = cy + sa * tIn, x1 = cx + ca * tOut, y1 = cy + sa * tOut;
 		const float nx = -sa * tw, ny = ca * tw;
-		C2D_DrawTriangle(x0 + nx, y0 + ny, col, x0 - nx, y0 - ny, col, x1 + nx, y1 + ny, col, UI_Z + 0.03f);
-		C2D_DrawTriangle(x0 - nx, y0 - ny, col, x1 - nx, y1 - ny, col, x1 + nx, y1 + ny, col, UI_Z + 0.03f);
+		const float qx[4] = { x0 + nx, x1 + nx, x1 - nx, x0 - nx }, qy[4] = { y0 + ny, y1 + ny, y1 - ny, y0 - ny };
+		uiaaPoly(qx, qy, 4, col, UI_Z + 0.03f);
 	}
 	C2D_DrawCircleSolid(cx, cy, UI_Z + 0.031f, r * 0.74f, col);
 	C2D_DrawCircleSolid(cx, cy, UI_Z + 0.032f, r * 0.32f, hole);
@@ -60322,8 +60329,7 @@ static bool drawUiTuneNos(const MenuState* m) {
 	uiLabel(buf, portstr_caps(PS_DURATION), gx + gw - 4.0f, gy + gh - 8.0f, 2, UI_DIM);
 	const float x0 = gx + gw * g_tnos.mn16 / g_tnos.max16, x1 = gx + gw * g_tnos.mx16 / g_tnos.max16;
 	const float y0 = gy + gh - gh * g_tnos.mx17 / g_tnos.max17, y1 = gy + gh - gh * g_tnos.mn17 / g_tnos.max17;
-	C2D_DrawLine(x0, y0, C2D_Color32(230, 190, 60, 255), x1, y1, C2D_Color32(230, 190, 60, 255), 2.0f,
-		UI_Z + 0.01f);
+	uiaaLine(x0, y0, x1, y1, 2.0f, C2D_Color32(230, 190, 60, 255), UI_Z + 0.01f);
 	const float px = gx + gw * g_tnos.cur16 / g_tnos.max16, py = gy + gh - gh * g_tnos.cur17 / g_tnos.max17;
 	C2D_DrawRectSolid(px - 0.5f, gy, UI_Z + 0.012f, 1.0f, gh, C2D_Color32(202, 244, 138, 110));
 	C2D_DrawRectSolid(gx, py - 0.5f, UI_Z + 0.012f, gw, 1.0f, C2D_Color32(202, 244, 138, 110));
@@ -60402,8 +60408,8 @@ static bool drawUiDynoChart(const MenuState* m) {
 			h = h < 0.0f ? 0.0f : h > 1.0f ? 1.0f : h;
 			const float x = gx + gw * rpm / 10000.0f, yt = gy + gh - gh * t, yh = gy + gh - gh * h;
 			if (k > 0) {
-				C2D_DrawLine(px, pt, ct, x, yt, ct, 2.0f, UI_Z + 0.02f);
-				C2D_DrawLine(px, ph, ch, x, yh, ch, 2.0f, UI_Z + 0.02f);
+				uiaaLine(px, pt, x, yt, 2.0f, ct, UI_Z + 0.02f);
+				uiaaLine(px, ph, x, yh, 2.0f, ch, UI_Z + 0.02f);
 			}
 			px = x; pt = yt; ph = yh;
 			if (last)
@@ -60412,8 +60418,7 @@ static bool drawUiDynoChart(const MenuState* m) {
 	}
 	if (!done && g_dyno.state != 0 && p < 1.0f && upTo > 0.0f) {
 		const float x = gx + gw * upTo / 10000.0f;
-		C2D_DrawLine(x, gy, C2D_Color32(255, 255, 0, 255), x, gy + gh, C2D_Color32(255, 255, 0, 255), 1.5f,
-			UI_Z + 0.025f);
+		uiaaLine(x, gy, x, gy + gh, 1.5f, C2D_Color32(255, 255, 0, 255), UI_Z + 0.025f);
 	}
 	if (done) {
 		const float ly = H - UI_FOOT_H - 6.0f - legendH * 0.5f;
@@ -60929,8 +60934,8 @@ static bool drawUiStatus(const MenuState* m) {
 			const bool won = ps->won[i];
 			C2D_DrawCircleSolid(30.0f, cy, UI_Z + 0.01f, 11.0f, won ? UI_ACCENT : C2D_Color32(255, 255, 255, 36));
 			if (won) {
-				C2D_DrawLine(24.5f, cy, UI_DARK_INK, 28.5f, cy + 4.0f, UI_DARK_INK, 2.2f, UI_Z + 0.02f);
-				C2D_DrawLine(28.5f, cy + 4.0f, UI_DARK_INK, 35.5f, cy - 4.0f, UI_DARK_INK, 2.2f, UI_Z + 0.02f);
+				uiaaLine(24.5f, cy, 28.5f, cy + 4.0f, 2.2f, UI_DARK_INK, UI_Z + 0.02f);
+				uiaaLine(28.5f, cy + 4.0f, 35.5f, cy - 4.0f, 2.2f, UI_DARK_INK, UI_Z + 0.02f);
 			}
 			uiText(buf, s->dvdName[i], 15.0f, 50.0f, cy - 7.0f, 0, UI_WHITE, W - 70.0f);
 			uiText(buf, s->dvdNeed[i], 12.0f, 50.0f, cy + 9.0f, 0, UI_DIM, W - 70.0f);
@@ -60987,12 +60992,22 @@ static bool drawUiHelp(const MenuState* m) {
 
 static void drawTouchCameraBtn(float x, float y, float w, float h) {
 	const float cx = x + w * 0.5f, cy = y + h * 0.5f;
-	uiChip(x, y, w, h, 0);
-	// Simple crisp camera icon: body + viewfinder bump + lens circle.
-	uiRoundRect(cx - 8.0f, cy - 4.5f, 16.0f, 10.5f, 2.0f, UI_Z + 0.025f, UI_WHITE);
-	C2D_DrawRectSolid(cx - 4.0f, cy - 7.0f, UI_Z + 0.025f, 8.0f, 3.0f, UI_WHITE);
-	C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.03f, 3.6f, UI_PANEL_SOLID);
-	C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.035f, 1.8f, UI_ACCENT);
+	// A round button, the shape of what it does: a disc as wide as the slot,
+	// in the chips' 60% black with their hairline rim.
+	const float d = w, dx = cx - d * 0.5f, dy = cy - d * 0.5f;
+	uiRoundRect(dx, dy, d, d, d * 0.5f, UI_Z, UI_PANEL);
+	uiRing(dx, dy, d, d, d * 0.5f, 1.0f, UI_Z + 0.005f, UI_RIM);
+	// "Cycle the view", not "take a picture": a video camera inside a
+	// clockwise arrow -- an open ring whose head points into the gap on top.
+	const float z = UI_Z + 0.025f, r = 10.5f, t = 1.8f, ri = r - t;
+	const float a0 = (float)M_PI * (300.0f / 180.0f), a1 = (float)M_PI * (600.0f / 180.0f);
+	uiaaArc(cx, cy, ri, r, a0, a1, 20, UI_WHITE, z);
+	const float rm = r - t * 0.5f, ex = cx + rm * cosf(a1), ey = cy + rm * sinf(a1);
+	const float ux = cosf(a1), uy = sinf(a1), tx = -uy, ty = ux; // radial, clockwise tangent
+	uiaaTri(ex + ux * 3.4f, ey + uy * 3.4f, ex - ux * 3.4f, ey - uy * 3.4f, ex + tx * 4.0f, ey + ty * 4.0f,
+		UI_WHITE, z);
+	uiRoundRect(cx - 6.5f, cy - 3.5f, 8.5f, 7.0f, 1.5f, z, UI_WHITE);
+	uiaaTri(cx + 2.5f, cy, cx + 6.0f, cy - 3.5f, cx + 6.0f, cy + 3.5f, UI_WHITE, z);
 	uiHit(x - 4.0f, y - 2.0f, w + 8.0f, h + 6.0f, HIT_CAMERA);
 }
 
@@ -61054,9 +61069,9 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 	for (int k = 0; k < 2; k++) {
 		const float y = 76.0f + 34.0f * (float)k, cx = zx + 15.0f, cy = y + 15.0f;
 		uiChip(zx, y, 30.0f, 30.0f, 0);
-		C2D_DrawRectSolid(cx - 6.0f, cy - 1.0f, UI_Z + 0.03f, 12.0f, 2.0f, UI_WHITE);
+		uiaaRect(cx - 6.0f, cy - 1.0f, 12.0f, 2.0f, UI_WHITE, UI_Z + 0.03f);
 		if (k == 0)
-			C2D_DrawRectSolid(cx - 1.0f, cy - 6.0f, UI_Z + 0.03f, 2.0f, 12.0f, UI_WHITE);
+			uiaaRect(cx - 1.0f, cy - 6.0f, 2.0f, 12.0f, UI_WHITE, UI_Z + 0.03f);
 		uiHit(zx - 4.0f, y - 2.0f, 40.0f, 34.0f, k == 0 ? HIT_ZOOM_IN : HIT_ZOOM_OUT);
 	}
 	if (minimap_panned(g_minimap)) {
@@ -61121,8 +61136,8 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 		if (gpsOn) {
 			const float bx = right - 28.0f, by = sy + 5.0f;
 			uiChip(bx, by, 28.0f, 28.0f, 0);
-			C2D_DrawLine(bx + 9.0f, by + 9.0f, UI_WHITE, bx + 19.0f, by + 19.0f, UI_WHITE, 1.8f, UI_Z + 0.03f);
-			C2D_DrawLine(bx + 19.0f, by + 9.0f, UI_WHITE, bx + 9.0f, by + 19.0f, UI_WHITE, 1.8f, UI_Z + 0.03f);
+			uiaaLine(bx + 9.0f, by + 9.0f, bx + 19.0f, by + 19.0f, 1.8f, UI_WHITE, UI_Z + 0.03f);
+			uiaaLine(bx + 19.0f, by + 9.0f, bx + 9.0f, by + 19.0f, 1.8f, UI_WHITE, UI_Z + 0.03f);
 			uiHit(bx - 6.0f, sy, 28.0f + 14.0f, sh, HIT_STRIP_CANCEL);
 			right = bx - 10.0f;
 		} else {
@@ -61478,8 +61493,7 @@ static void drawUiReplay(void) {
 	for (int k = 0; k < u->nMarks; k++) {
 		const float mf = (u->marks[k] - s) / span;
 		if (mf > 0.01f && mf < 0.99f)
-			C2D_DrawRectSolid(tx0 + tw * mf - 1.0f, ty - 2.0f, UI_Z + 0.02f, 2.0f, th + 4.0f,
-				C2D_Color32(255, 255, 255, 160));
+			uiaaRect(tx0 + tw * mf - 1.0f, ty - 2.0f, 2.0f, th + 4.0f, C2D_Color32(255, 255, 255, 160), UI_Z + 0.02f);
 	}
 	const float kx = tx0 + tw * frac, ky = ty + th * 0.5f;
 	C2D_DrawCircleSolid(kx, ky, UI_Z + 0.025f, u->scrubbing ? 9.0f : 7.0f, UI_WHITE);
@@ -61491,33 +61505,28 @@ static void drawUiReplay(void) {
 	uiPill(10.0f, r1y, 82.0f, r1h, false, UI_Z + 0.015f);
 	if (g_padSheetState == 1)
 		drawPadGlyphRaw('L', 30.0f, r1cy, 15.0f, UI_Z + 0.04f);
-	C2D_DrawRectSolid(48.0f, r1cy - 6.0f, UI_Z + 0.03f, 2.5f, 12.0f, UI_WHITE);
-	C2D_DrawTriangle(60.0f, r1cy - 6.0f, UI_WHITE, 60.0f, r1cy + 6.0f, UI_WHITE,
-		51.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
-	C2D_DrawTriangle(70.0f, r1cy - 6.0f, UI_WHITE, 70.0f, r1cy + 6.0f, UI_WHITE,
-		61.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
+	uiaaRect(48.0f, r1cy - 6.0f, 2.5f, 12.0f, UI_WHITE, UI_Z + 0.03f);
+	uiaaTri(60.0f, r1cy - 6.0f, 60.0f, r1cy + 6.0f, 51.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
+	uiaaTri(70.0f, r1cy - 6.0f, 70.0f, r1cy + 6.0f, 61.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
 
 	// Play / Pause (A) -- center primary
 	uiPill(100.0f, r1y, 120.0f, r1h, true, UI_Z + 0.015f);
 	if (g_padSheetState == 1)
 		drawPadGlyphRaw('A', 124.0f, r1cy, 16.0f, UI_Z + 0.04f);
 	if (u->paused) {
-		C2D_DrawTriangle(144.0f, r1cy - 7.0f, UI_ACCENT, 144.0f, r1cy + 7.0f, UI_ACCENT,
-			156.0f, r1cy, UI_ACCENT, UI_Z + 0.03f);
+		uiaaTri(144.0f, r1cy - 7.0f, 144.0f, r1cy + 7.0f, 156.0f, r1cy, UI_ACCENT, UI_Z + 0.03f);
 		uiText(buf, "Play", 16.0f, 164.0f, r1cy, 0, UI_ACCENT, 48.0f);
 	} else {
-		C2D_DrawRectSolid(144.0f, r1cy - 7.0f, UI_Z + 0.03f, 3.5f, 14.0f, UI_ACCENT);
-		C2D_DrawRectSolid(151.0f, r1cy - 7.0f, UI_Z + 0.03f, 3.5f, 14.0f, UI_ACCENT);
+		uiaaRect(144.0f, r1cy - 7.0f, 3.5f, 14.0f, UI_ACCENT, UI_Z + 0.03f);
+		uiaaRect(151.0f, r1cy - 7.0f, 3.5f, 14.0f, UI_ACCENT, UI_Z + 0.03f);
 		uiText(buf, "Pause", 16.0f, 162.0f, r1cy, 0, UI_ACCENT, 50.0f);
 	}
 
 	// Jump Forward (R)
 	uiPill(228.0f, r1y, 82.0f, r1h, false, UI_Z + 0.015f);
-	C2D_DrawTriangle(244.0f, r1cy - 6.0f, UI_WHITE, 244.0f, r1cy + 6.0f, UI_WHITE,
-		253.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
-	C2D_DrawTriangle(254.0f, r1cy - 6.0f, UI_WHITE, 254.0f, r1cy + 6.0f, UI_WHITE,
-		263.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
-	C2D_DrawRectSolid(264.0f, r1cy - 6.0f, UI_Z + 0.03f, 2.5f, 12.0f, UI_WHITE);
+	uiaaTri(244.0f, r1cy - 6.0f, 244.0f, r1cy + 6.0f, 253.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
+	uiaaTri(254.0f, r1cy - 6.0f, 254.0f, r1cy + 6.0f, 263.0f, r1cy, UI_WHITE, UI_Z + 0.03f);
+	uiaaRect(264.0f, r1cy - 6.0f, 2.5f, 12.0f, UI_WHITE, UI_Z + 0.03f);
 	if (g_padSheetState == 1)
 		drawPadGlyphRaw('R', 288.0f, r1cy, 15.0f, UI_Z + 0.04f);
 
@@ -61841,9 +61850,9 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 		for (int k = 0; k < 2; k++) {
 			const float zy = 76.0f + 34.0f * (float)k, cx = zx + 15.0f, cy = zy + 15.0f;
 			uiChip(zx, zy, 30.0f, 30.0f, 0);
-			C2D_DrawRectSolid(cx - 6.0f, cy - 1.0f, UI_Z + 0.03f, 12.0f, 2.0f, UI_WHITE);
+			uiaaRect(cx - 6.0f, cy - 1.0f, 12.0f, 2.0f, UI_WHITE, UI_Z + 0.03f);
 			if (k == 0)
-				C2D_DrawRectSolid(cx - 1.0f, cy - 6.0f, UI_Z + 0.03f, 2.0f, 12.0f, UI_WHITE);
+				uiaaRect(cx - 1.0f, cy - 6.0f, 2.0f, 12.0f, UI_WHITE, UI_Z + 0.03f);
 			uiHit(zx - 4.0f, zy - 2.0f, 40.0f, 34.0f, k == 0 ? HIT_ZOOM_IN : HIT_ZOOM_OUT);
 		}
 	}
@@ -61900,11 +61909,9 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 	} else {
 		const float cx = W - 14.0f;
 		if (g_raceBoardOpen)
-			C2D_DrawTriangle(cx - 4.0f, cy - 2.0f, UI_ACCENT, cx + 4.0f, cy - 2.0f, UI_ACCENT,
-				cx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
+			uiaaTri(cx - 4.0f, cy - 2.0f, cx + 4.0f, cy - 2.0f, cx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
 		else
-			C2D_DrawTriangle(cx - 4.0f, cy + 2.5f, UI_ACCENT, cx + 4.0f, cy + 2.5f, UI_ACCENT,
-				cx, cy - 2.5f, UI_ACCENT, UI_Z + 0.03f);
+			uiaaTri(cx - 4.0f, cy + 2.5f, cx + 4.0f, cy + 2.5f, cx, cy - 2.5f, UI_ACCENT, UI_Z + 0.03f);
 	}
 	uiHit(0.0f, sy - 2.0f, W, sh + 2.0f, HIT_RACE_BOARD);
 
@@ -62201,10 +62208,8 @@ static void drawTopDownCue(const char* label, u8 dimAlpha) {
 	uiPill(px, py, pw, ph, true, UI_Z + 0.005f);
 	// Downward chevrons flanking the label, pointing attention to the bottom screen.
 	const float lx = px + 11.0f, rx = px + pw - 11.0f;
-	C2D_DrawTriangle(lx - 3.5f, cy - 2.0f, UI_ACCENT, lx + 3.5f, cy - 2.0f, UI_ACCENT,
-		lx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
-	C2D_DrawTriangle(rx - 3.5f, cy - 2.0f, UI_ACCENT, rx + 3.5f, cy - 2.0f, UI_ACCENT,
-		rx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
+	uiaaTri(lx - 3.5f, cy - 2.0f, lx + 3.5f, cy - 2.0f, lx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
+	uiaaTri(rx - 3.5f, cy - 2.0f, rx + 3.5f, cy - 2.0f, rx, cy + 3.0f, UI_ACCENT, UI_Z + 0.03f);
 	uiLabel(buf, label, W * 0.5f, cy, 1, UI_ACCENT);
 }
 

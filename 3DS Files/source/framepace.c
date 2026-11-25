@@ -4,6 +4,9 @@
 #include <citro3d.h>
 
 #include "framepace.h"
+#include "dbglog.h"
+#include "uiaa.h"
+#include <stdio.h>
 
 bool g_framePace = true;
 
@@ -57,6 +60,8 @@ bool __wrap_C3D_FrameBegin(u8 flags)
 	const bool ok = __real_C3D_FrameBegin(flags);
 	if (ok) {
 		s_begun++;
+		uiaaTakeTris();   // counted from here to this frame's end
+
 		if (s_deferN)
 			reapDeferred();
 	}
@@ -75,6 +80,19 @@ void __wrap_C3D_FrameEnd(u8 flags)
 			gspWaitForAnyEvent();
 		s_waitTicks += svcGetSystemTick() - t0;
 		s_paced = false;
+	}
+	{
+		// The antialiased UI shapes (uiaa.h) cost about three times the
+		// triangles they replaced; log each new peak a frame, against
+		// citro2d's C2D_DEFAULT_MAX_OBJECTS * 2 (4096 * 2, text included).
+		static unsigned s_aaPeak;
+		const unsigned t = uiaaTakeTris();
+		if (t > s_aaPeak + 50) {
+			s_aaPeak = t;
+			char msg[48];
+			snprintf(msg, sizeof(msg), "peak %u triangles a frame", t);
+			dbglog_line("uiaa: ", msg);
+		}
 	}
 	__real_C3D_FrameEnd(flags);
 }
