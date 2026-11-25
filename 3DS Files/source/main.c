@@ -54658,8 +54658,9 @@ static void worldCamera(C3D_Mtx* out, float aspect) {
 // Centred, aspect-preserved, never upscaled past the source texture's own size
 // (the logo is 512x64 and the screen is 320 wide, so in practice this always
 // scales *down* -- but clamping keeps it honest if the texture is ever swapped).
-// The same logo, `w` pixels wide at most, centred on (BOTTOM_W / 2, cy).
-static void drawBottomLogoAt(float cy, float w) {
+// The same logo, `w` pixels wide at most, centred on (BOTTOM_W / 2, cy), at
+// depth `z` (over a kit backdrop, whose stripes sit at 0.11).
+static void drawBottomLogoAtZ(float cy, float w, float z) {
 	if (!g_haveChrome)
 		return;
 	C2D_Image logo = texcache_find(&g_chromeCache, UG_LOAD_LOGO_HASH);
@@ -54668,8 +54669,11 @@ static void drawBottomLogoAt(float cy, float w) {
 	const float tw = (float)logo.subtex->width, th = (float)logo.subtex->height;
 	float scale = w / tw;
 	if (scale > 1.0f) scale = 1.0f;
-	C2D_DrawImageAt(logo, (BOTTOM_W - tw * scale) * 0.5f, cy - th * scale * 0.5f, 0.1f, NULL,
+	C2D_DrawImageAt(logo, (BOTTOM_W - tw * scale) * 0.5f, cy - th * scale * 0.5f, z, NULL,
 		scale, scale);
+}
+static void drawBottomLogoAt(float cy, float w) {
+	drawBottomLogoAtZ(cy, w, 0.1f);
 }
 
 static void drawBottomLogo(void) {
@@ -61346,42 +61350,104 @@ static void prPill(C2D_TextBuf buf, float x, float y, float w, float h, char key
 // The current / default action is lit and wears A.
 static void drawUiPostRace(MenuState* m);
 
-// PORT: the title screen's lower panel. With a profile to come back to, the
-// logo over Continue (A, or a touch) -- that profile loaded and, for a career
-// past the prologue, straight out of the garage into free roam -- and START's
-// usual way to the profile list and the main menu under it. With none, the
-// logo alone, as before.
-#define TITLE_CONT_X 40.0f
-#define TITLE_CONT_Y 108.0f
-#define TITLE_CONT_W 240.0f
-#define TITLE_CONT_H 46.0f
-#define TITLE_MENU_X 80.0f
-#define TITLE_MENU_Y 188.0f
-#define TITLE_MENU_W 160.0f
-#define TITLE_MENU_H 32.0f
+// PORT: the title screen's lower panel, in the kit. With a profile to come
+// back to: under the logo, two choices in one column -- a card for the
+// profile (Career, the name, its bank and stage), which is Continue, and a
+// Main Menu row under it. Up / down move the highlight, A takes the lit one,
+// START is Main Menu from either, a touch takes what it lands on. Continue
+// loads that profile and, for a career that has started, goes straight out of
+// the garage into free roam; Main Menu is the usual way to the profile list.
+// The top screen's prompt greets the profile by name. With none, the logo.
 static bool g_titleContinueOk;
 static ProfileEntry g_titleContinueEntry;
+static unsigned g_titleCash;
+static int g_titleStage;
+// The panel's targets, laid out by the draw for the next touch.
+enum { TITLE_HIT_CARD, TITLE_HIT_MENU, TITLE_HIT_N };
+static float g_titleHit[TITLE_HIT_N][4];
+static int g_titleSel;   // TITLE_HIT_CARD or TITLE_HIT_MENU: the lit choice
 
-static bool titleHit(float tx, float ty, float x, float y, float w, float h) {
-	return tx >= x && tx < x + w && ty >= y && ty < y + h;
+static bool titleHitAt(int k, float tx, float ty) {
+	const float* r = g_titleHit[k];
+	return r[2] > 0.0f && tx >= r[0] && tx < r[0] + r[2] && ty >= r[1] && ty < r[1] + r[3];
+}
+
+// What the card shows, read off the save itself (not loaded as the profile:
+// that waits for Continue).
+static void titleReadSummary(void) {
+	static NfsProfile p;   // tens of KB, off the stack
+	g_titleCash = 0;
+	g_titleStage = 0;
+	if (profile_load_file(g_titleContinueEntry.path, &p)) {
+		g_titleCash = p.cash;
+		g_titleStage = p.careerStarted ? (int)p.careerStage : 0;
+	}
 }
 
 static void drawTitleBottom(void) {
 	static C2D_TextBuf buf = NULL;
 	if (!buf)
-		buf = C2D_TextBufNew(512);
+		buf = C2D_TextBufNew(768);
+	memset(g_titleHit, 0, sizeof(g_titleHit));
 	if (!g_titleContinueOk || !buf || !g_uiFont) {
 		drawBottomLogo();
 		return;
 	}
 	C2D_TextBufClear(buf);
-	drawBottomLogoAt(58.0f, 260.0f);
-	uiButton(buf, TITLE_CONT_X, TITLE_CONT_Y, TITLE_CONT_W, TITLE_CONT_H, 'A',
-		portstr(PS_PR_CONTINUE), true, true);
-	uiText(buf, g_titleContinueEntry.name, 14.0f, BOTTOM_W * 0.5f,
-		TITLE_CONT_Y + TITLE_CONT_H + 14.0f, 1, UI_WHITE, TITLE_CONT_W);
-	uiButton(buf, TITLE_MENU_X, TITLE_MENU_Y, TITLE_MENU_W, TITLE_MENU_H, 't',
-		portstr(PS_TITLE_MAIN_MENU), false, false);
+	const float W = BOTTOM_W, H = BOTTOM_H;
+	uiScreenBackdrop(W, H);
+	drawBottomLogoAtZ(34.0f, 216.0f, UI_Z + 0.02f);
+
+	// ---- the profile's card: Continue ----
+	const bool onCard = g_titleSel == TITLE_HIT_CARD;
+	const float cx = 12.0f, cy = 62.0f, cw = W - 24.0f, ch = 104.0f;
+	uiRoundRect(cx, cy, cw, ch, 4.0f, UI_Z, UI_DEEP);
+	if (onCard)
+		uiHighlight(cx, cy, cw, ch, 4.0f, UI_Z + 0.005f, UI_ACCENT);
+	else
+		uiRing(cx, cy, cw, ch, 4.0f, 1.0f, UI_Z + 0.005f, UI_RIM);
+	const float ix = cx + 16.0f, textR = cx + cw - 52.0f;
+	uiRoundRect(ix, cy + 16.0f, 22.0f, 3.0f, 1.5f, UI_Z + 0.01f, onCard ? UI_ACCENT : UI_DIM);
+	uiLabel(buf, portstr_caps(PS_TITLE_CAREER), ix + 30.0f, cy + 18.0f, 0, UI_DIM);
+	uiText(buf, g_titleContinueEntry.name, 28.0f, ix, cy + ch * 0.5f + 2.0f, 0, UI_WHITE, textR - ix);
+	// Its bank, and its stage once past the prologue.
+	{
+		char cash[32], v[40];
+		formatCashGrouped(g_titleCash, cash, sizeof(cash));
+		snprintf(v, sizeof(v), "$%s", cash);
+		const float sy = cy + ch - 20.0f;
+		const float lw = uiLabel(buf, portstr_caps(PS_BANK), ix, sy, 0, UI_ACCENT);
+		float x = ix + lw + 7.0f;
+		x += uiText(buf, v, 17.0f, x, sy, 0, UI_WHITE, 0.0f);
+		if (g_titleStage > 0) {
+			char st[48];
+			snprintf(st, sizeof(st), portstr(PS_STAGE_FMT), g_titleStage);
+			x += 12.0f;
+			C2D_DrawCircleSolid(x, sy, UI_Z + 0.02f, 2.0f, UI_DIM);
+			x += 10.0f;
+			uiText(buf, st, 17.0f, x, sy, 0, UI_WHITE, textR - x);
+		}
+	}
+	// A's badge on the lit choice, and the way on.
+	if (onCard)
+		drawPadGlyph('A', cx + cw - 36.0f, cy + ch * 0.5f, 20.0f, UI_Z + 0.04f);
+	uiArrow(cx + cw - 15.0f, cy + ch * 0.5f, 0.0f, 6.0f, onCard ? UI_ACCENT : UI_DIM);
+	g_titleHit[TITLE_HIT_CARD][0] = cx;
+	g_titleHit[TITLE_HIT_CARD][1] = cy;
+	g_titleHit[TITLE_HIT_CARD][2] = cw;
+	g_titleHit[TITLE_HIT_CARD][3] = ch;
+
+	// ---- Main Menu, a row under it: START, or A when lit ----
+	const float ry = cy + ch + 10.0f, rh = 40.0f;
+	uiRowBar(cx, ry, cw, rh, !onCard);
+	uiText(buf, portstr(PS_TITLE_MAIN_MENU), 16.0f, ix, ry + rh * 0.5f, 0, onCard ? UI_WHITE : UI_ACCENT,
+		textR - ix);
+	drawPadGlyph(onCard ? 't' : 'A', cx + cw - 36.0f, ry + rh * 0.5f, onCard ? 14.0f : 18.0f, UI_Z + 0.04f);
+	uiArrow(cx + cw - 15.0f, ry + rh * 0.5f, 0.0f, 5.0f, onCard ? UI_DIM : UI_ACCENT);
+	g_titleHit[TITLE_HIT_MENU][0] = cx;
+	g_titleHit[TITLE_HIT_MENU][1] = ry;
+	g_titleHit[TITLE_HIT_MENU][2] = cw;
+	g_titleHit[TITLE_HIT_MENU][3] = rh;
 }
 
 static void drawUiPostRace(MenuState* m) {
@@ -65782,6 +65848,20 @@ int main(int argc, char* argv[])
 								g_titleContinueEntry = g_profileEntries[pi];
 								g_titleContinueOk = true;
 							}
+						if (g_titleContinueOk) {
+							g_titleSel = TITLE_HIT_CARD;
+							titleReadSummary();
+							// The prompt ("Press START button") greets the
+							// profile instead: A is Continue now, START the menu.
+							for (int wi = 0; wi < menu.screen.widgetCount && wi < FNG_MAX_WIDGETS; wi++)
+								if (menu.screen.widgets[wi].hasStringHash &&
+										menu.screen.widgets[wi].stringHash == PROMPT_STRING_HASH) {
+									char wb[96];
+									snprintf(wb, sizeof(wb), portstr(PS_TITLE_WELCOME_FMT),
+										g_titleContinueEntry.name);
+									menuSetWidgetText(&menu, menu.textBuf, wi, wb);
+								}
+						}
 						char cb[96];
 						snprintf(cb, sizeof(cb), "title: Continue %s (last profile \"%.31s\")",
 							g_titleContinueOk ? "offered" : "not offered -- not on the card",
@@ -65848,14 +65928,23 @@ int main(int argc, char* argv[])
 			// leaves at once the way the garage's Return to Explore Mode does
 			// (g_cribEnterWorld) -- out of the garage the save was made in.
 			if (g_titleContinueOk) {
-				bool go = (kDown & KEY_A) != 0;
+				// Up / down light the other choice; A takes the lit one.
+				if ((kDown & (KEY_UP | KEY_DOWN)) && !(kDown & KEY_A)) {
+					const int want = (kDown & KEY_UP) ? TITLE_HIT_CARD : TITLE_HIT_MENU;
+					if (want != g_titleSel) {
+						g_titleSel = want;
+						feSoundPlay((kDown & KEY_UP) ? FE_EV_UP : FE_EV_DOWN);
+					}
+				}
+				bool go = (kDown & KEY_A) && g_titleSel == TITLE_HIT_CARD;
+				if ((kDown & KEY_A) && g_titleSel == TITLE_HIT_MENU)
+					kDown |= KEY_START;
 				if (kDown & KEY_TOUCH) {
 					touchPosition tp;
 					hidTouchRead(&tp);
-					if (titleHit(tp.px, tp.py, TITLE_CONT_X, TITLE_CONT_Y, TITLE_CONT_W, TITLE_CONT_H))
+					if (titleHitAt(TITLE_HIT_CARD, tp.px, tp.py))
 						go = true;
-					else if (titleHit(tp.px, tp.py, TITLE_MENU_X, TITLE_MENU_Y, TITLE_MENU_W,
-							TITLE_MENU_H))
+					else if (titleHitAt(TITLE_HIT_MENU, tp.px, tp.py))
 						kDown |= KEY_START;
 				}
 				kDown &= ~(u32)KEY_A;
