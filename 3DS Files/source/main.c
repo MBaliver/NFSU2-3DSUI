@@ -119,6 +119,7 @@ extern gxCmdQueue_s __C3D_Context;
 #define DEVCMD_WRAP_HID
 #include "devcmd.h"
 #include "uiaa.h"
+#include "uiaudit.h"
 
 // Entering the world primes the sections within this many metres of the car
 // and streams the rest (worldEnter(); DbgPageInM, 0 = the whole wanted ring).
@@ -1473,6 +1474,8 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 			char* e = NULL;
 			g_slowSdKBs = (u32)strtoul(val, &e, 10);
 			g_slowSdCallUs = (e && *e == ',') ? (u32)strtoul(e + 1, NULL, 10) : 0;
+		} else if (strcmp(key, "DbgUiAudit") == 0) {
+			g_uiAudit = atoi(val) != 0;   // uiaudit.h
 		} else if (strcmp(key, "DbgPageInM") == 0) {
 			g_pageInNearM = strtof(val, NULL);
 		} else if (strcmp(key, "DbgFramePace") == 0) {
@@ -26904,6 +26907,8 @@ static bool menuTouchHitsWidget(MenuState* m, int i, float minPx, int px, int py
 		hw = minPx * 0.5f;
 	if (hh < minPx * 0.5f)
 		hh = minPx * 0.5f;
+	if (g_uiAudit)
+		uiaudit_fng_touch(m->screenName, i, hw * 2.0f, hh * 2.0f);
 	return fabsf((float)px - cx) <= hw && fabsf((float)py - cy) <= hh;
 }
 
@@ -27510,6 +27515,9 @@ static void fskHit(float x, float y, float w, float h, int kind, u32 arg) {
 	if (g_fskN < FSK_MAX)
 		g_fsk[g_fskN++] = (FskHit){ x, y, w, h, kind, arg };
 }
+// DbgUiAudit (uiaudit.h): the call site's line with the target's size.
+#define fskHit(x, y, w, h, k, a) (uiaudit_touch(__LINE__, "fsk", (w), (h)), fskHit((x), (y), (w), (h), (k), (a)))
+
 static bool fskLive(const MenuState* m) {
 	return m && g_fskMenu == m && osGetTime() - g_fskMs < FSK_LIVE_MS;
 }
@@ -28115,7 +28123,10 @@ static float menuTextScaleRaw(const MenuState* m, const FngWidget* w) {
 }
 
 static float menuTextScale(const MenuState* m, const FngWidget* w) {
-	return menuTextScaleFloor(menuTextScaleRaw(m, w));
+	const float sc = menuTextScaleFloor(menuTextScaleRaw(m, w));
+	if (g_uiAudit)
+		uiaudit_fng(m->screenName, (int)(w - m->screen.widgets), sc * g_fontUnitPx);
+	return sc;
 }
 
 // How far a string may be narrowed horizontally, as a fraction of its own
@@ -57862,6 +57873,10 @@ static float uiText(C2D_TextBuf buf, const char* str, float px, float x, float c
 static float uiLabel(C2D_TextBuf buf, const char* str, float x, float cy, int align, u32 color) {
 	return uiText(buf, str, UI_LABEL_PX, x, cy, align, color, 0.0f);
 }
+// DbgUiAudit (uiaudit.h): the call site's line with the size drawn.
+#define uiText(b, s, px, x, y, a, c, w) (uiaudit_text(__LINE__, (px), (s)), uiText((b), (s), (px), (x), (y), (a), (c), (w)))
+#define uiTextBase(b, s, px, x, y, a, c, w) (uiaudit_text(__LINE__, (px), (s)), uiTextBase((b), (s), (px), (x), (y), (a), (c), (w)))
+
 
 // A small filled arrow pointing along `a` (screen radians, 0 = right).
 static void uiArrow(float x, float y, float a, float size, u32 c) {
@@ -57888,6 +57903,9 @@ static void uiHit(float x, float y, float w, float h, int id) {
 	if (g_uiHitN < 16)
 		g_uiHit[g_uiHitN++] = (UiHit){ x, y, w, h, id };
 }
+// DbgUiAudit (uiaudit.h): the call site's line with the target's size.
+#define uiHit(x, y, w, h, id) (uiaudit_touch(__LINE__, "hud", (w), (h)), uiHit((x), (y), (w), (h), (id)))
+
 
 static int g_mmSel = -1;        // the marker whose card is up
 static int g_nearestEvent = -1; // the destination strip's offer with the GPS off
@@ -58279,6 +58297,9 @@ static void wmHit(float x, float y, float w, float h, int id) {
 	if (g_wmHitN < 48)
 		g_wmHit[g_wmHitN++] = (WmHit){ x, y, w, h, id };
 }
+// DbgUiAudit (uiaudit.h): the call site's line with the target's size.
+#define wmHit(x, y, w, h, id) (uiaudit_touch(__LINE__, "map", (w), (h)), wmHit((x), (y), (w), (h), (id)))
+
 
 static bool drawUiWorldMap(const MenuState* m) {
 	static C2D_TextBuf buf = NULL;
@@ -58539,6 +58560,9 @@ static void smsHit(float x, float y, float w, float h, int id) {
 	if (g_smsHitN < 48)
 		g_smsHit[g_smsHitN++] = (SmsHit){ x, y, w, h, id };
 }
+// DbgUiAudit (uiaudit.h): the call site's line with the target's size.
+#define smsHit(x, y, w, h, id) (uiaudit_touch(__LINE__, "sms", (w), (h)), smsHit((x), (y), (w), (h), (id)))
+
 
 // The mailbox as the lower screen's list: the category with arrows, a row a
 // message -- the envelope in its SMSMessageCategories colour, the subject,
@@ -58730,6 +58754,8 @@ static float uiCText(const C2D_Text* t, float px, float x, float cy, int align, 
 	C2D_DrawText(t, C2D_WithColor, x + dx, y, UI_Z + 0.03f, sx, sc, color);
 	return w;
 }
+#define uiCText(t, px, x, y, a, c, w) (uiaudit_text(__LINE__, (px), "(label)"), uiCText((t), (px), (x), (y), (a), (c), (w)))
+
 // Lines of `src` wrapped at `px` to `maxW`, drawn from `y` (first line's
 // centre) `lh` apart, aligned by `align` on `x`; at most `maxLines`.
 static int uiTextBlock(C2D_TextBuf buf, const char* src, float px, float x, float y, float lh,
@@ -61271,6 +61297,9 @@ static void prHit(float x, float y, float w, float h, u32 keys, int sel, bool pi
 	if (g_prHitN < PR_HIT_MAX)
 		g_prHit[g_prHitN++] = (PrHit){ x, y, w, h, keys, sel, pick };
 }
+// DbgUiAudit (uiaudit.h): the call site's line with the target's size.
+#define prHit(x, y, w, h, k, s, p) (uiaudit_touch(__LINE__, "postrace", (w), (h)), prHit((x), (y), (w), (h), (k), (s), (p)))
+
 
 // The UI_postrace menu is up (not the stats screen standing in for it).
 static bool postRaceMenuUp(const MenuState* m) {
