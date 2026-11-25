@@ -66321,9 +66321,10 @@ int main(int argc, char* argv[])
 			// Follows the car-select screen's selection, and returns to the
 			// default car when the screen is left. Short-circuits unless the
 			// wanted car actually changed -- see syncCarModel().
-			// Not on the frame a new career leaves for the world: Loading.fng
-			// would bring the showroom back for that one frame.
-			if (haveConfig && bootState == BOOT_MENU && !g_careerStartWorld) {
+			// Not on the frame a new career or title Continue leaves for the
+			// world: Loading.fng would bring the showroom back (or rebuild the
+			// turntable car before the loading screen).
+			if (haveConfig && bootState == BOOT_MENU && !g_careerStartWorld && !g_cribEnterWorld) {
 				// UI_CareerCarSelect's turntable catches up with the cursor
 				// once it has rested CRIBCAR_SETTLE_MS, and so does the car
 				// lot's (its own 0xC98356BA tick, the same 0.3 s).
@@ -66608,33 +66609,43 @@ int main(int argc, char* argv[])
 					// package -- backdrop, scrim, prompt, copyright.
 					bootState = BOOT_TITLE;
 					// PORT: Continue, when the last profile port_last.txt names
-					// is still on the card (drawTitleBottom()).
+					// is still on the card -- or the card holds a single profile
+					// and port_last.txt has not named one yet (drawTitleBottom()).
 					g_titleContinueOk = false;
+					bool titleFromSole = false;
+					g_profileEntryCount = profile_list(g_profileEntries, BOOT_MAX_PROFILES);
 					if (g_portPrefs.profile[0]) {
-						g_profileEntryCount = profile_list(g_profileEntries, BOOT_MAX_PROFILES);
 						for (int pi = 0; pi < g_profileEntryCount && !g_titleContinueOk; pi++)
 							if (strcmp(g_profileEntries[pi].name, g_portPrefs.profile) == 0) {
 								g_titleContinueEntry = g_profileEntries[pi];
 								g_titleContinueOk = true;
 							}
-						if (g_titleContinueOk) {
-							g_titleSel = TITLE_HIT_CARD;
-							titleReadSummary();
-							// The prompt ("Press START button") greets the
-							// profile instead: A is Continue now, START the menu.
-							for (int wi = 0; wi < menu.screen.widgetCount && wi < FNG_MAX_WIDGETS; wi++)
-								if (menu.screen.widgets[wi].hasStringHash &&
-										menu.screen.widgets[wi].stringHash == PROMPT_STRING_HASH) {
-									char wb[96];
-									snprintf(wb, sizeof(wb), portstr(PS_TITLE_WELCOME_FMT),
-										g_titleContinueEntry.name);
-									menuSetWidgetText(&menu, menu.textBuf, wi, wb);
-								}
-						}
-						char cb[96];
-						snprintf(cb, sizeof(cb), "title: Continue %s (last profile \"%.31s\")",
+					}
+					if (!g_titleContinueOk && g_profileEntryCount == 1) {
+						g_titleContinueEntry = g_profileEntries[0];
+						g_titleContinueOk = true;
+						titleFromSole = true;
+					}
+					if (g_titleContinueOk) {
+						g_titleSel = TITLE_HIT_CARD;
+						titleReadSummary();
+						// The prompt ("Press START button") greets the
+						// profile instead: A / START is Continue now.
+						for (int wi = 0; wi < menu.screen.widgetCount && wi < FNG_MAX_WIDGETS; wi++)
+							if (menu.screen.widgets[wi].hasStringHash &&
+									menu.screen.widgets[wi].stringHash == PROMPT_STRING_HASH) {
+								char wb[96];
+								snprintf(wb, sizeof(wb), portstr(PS_TITLE_WELCOME_FMT),
+									g_titleContinueEntry.name);
+								menuSetWidgetText(&menu, menu.textBuf, wi, wb);
+							}
+					}
+					if (g_titleContinueOk || g_portPrefs.profile[0]) {
+						char cb[128];
+						snprintf(cb, sizeof(cb), "title: Continue %s (%s \"%.31s\")",
 							g_titleContinueOk ? "offered" : "not offered -- not on the card",
-							g_portPrefs.profile);
+							titleFromSole ? "sole profile" : "last profile",
+							g_titleContinueOk ? g_titleContinueEntry.name : g_portPrefs.profile);
 						dlog(cb);
 					}
 					// UG_LS_Splash's ctor (0x4A90F0) opens cheat entry (#446).
@@ -66730,26 +66741,38 @@ int main(int argc, char* argv[])
 					cheats_set_entry(false);
 					freeMenu(&menu);
 					g_titleContinueOk = false;
-					if (haveConfig && loadMainMenu(&cfg, &menu)) {
-						bootState = BOOT_MENU;
-						// StartCareerHelper's arms: past the prologue it opens
-						// the garage, whose Return to Explore Mode is taken
-						// here at once; in the prologue it enters free roam
-						// itself. Either way the world opens off the career.
-						// A career not started plays its first movie instead,
-						// from the main menu's Career.
-						const bool drive = go && gProfile.careerStarted;
-						if (drive) {
-							g_feCareerMode = true;
-							g_menuCareerCar = true;
-							g_wentToCribFromMainMenu = false;
-							g_cribEnterWorld = true;
+					// StartCareerHelper's arms: past the prologue it opens
+					// the garage, whose Return to Explore Mode is taken
+					// here at once; in the prologue it enters free roam
+					// itself. Either way the world opens off the career
+					// straight through Loading.fng, never drawing UI_Main.
+					// A career not started plays its first movie instead,
+					// from the main menu's Career.
+					const bool drive = go && gProfile.careerStarted;
+					if (drive) {
+						g_feNavBottom = true;
+						g_feCareerMode = true;
+						g_menuCareerCar = true;
+						g_wentToCribFromMainMenu = false;
+						g_cribEnterWorld = true;
+						loadCtxSet(LOADK_FREE_ROAM, NULL, false);
+						if (!(haveConfig && loadFngScreen(&cfg, LOADING_FNG, true, &menu)))
+							dlog("title: Loading.fng would not load -- entering without it");
+						if (haveEaTrax) {
+							eatraxStop();
+							eatraxDismissPopup();
 						}
+						bootState = BOOT_MENU;
+						char cb[128];
+						snprintf(cb, sizeof(cb), "title: Continue -- \"%.31s\" loaded, straight into free roam",
+							gProfile.name);
+						dlog(cb);
+					} else if (haveConfig && loadMainMenu(&cfg, &menu)) {
+						bootState = BOOT_MENU;
 						char cb[128];
 						snprintf(cb, sizeof(cb), "title: %s -- \"%.31s\" loaded, %s",
 							go ? "Continue" : "Main Menu", gProfile.name,
-							drive ? "into free roam off the career"
-							: go ? "its career has not started -- the main menu" : "the main menu");
+							go ? "its career has not started -- the main menu" : "the main menu");
 						dlog(cb);
 					} else {
 						dlog("title: UI_Main.fng failed to load -- holding on black");
@@ -68314,7 +68337,7 @@ int main(int argc, char* argv[])
 					loadCtxSet(LOADK_RACE, &g_qr.ev, lanStart && g_lanGo.set.mode == 8);
 				else if (g_mapEventPending)
 					loadCtxSet(LOADK_RACE, &g_mapEvent, false);
-				else
+				else if (!(loadingUp && g_loadCtx.kind == LOADK_FREE_ROAM))
 					loadCtxSet(LOADK_FREE_ROAM, NULL, false);
 				bool haveLoadUi = loadingUp || (haveConfig &&
 					loadFngScreen(&cfg, LOADING_FNG, true, &menu));
@@ -71442,7 +71465,7 @@ int main(int argc, char* argv[])
 		// room and the car on this one. Loading.fng, the one screen the menu
 		// state shows that is not laid out down there, keeps the top screen and
 		// has no room behind it. No screen loaded at all still shows the car.
-		const bool feNavBottom = bootState == BOOT_MENU && !(menu.loaded && !menu.navBottom);
+		const bool feNavBottom = bootState == BOOT_MENU && !g_cribEnterWorld && !(menu.loaded && !menu.navBottom);
 		// The frontend magazine's top screen is its cover, car and all
 		// (magRewardDrawTop()), not the room.
 		const bool magTop = feNavBottom && menu.loaded && menu.isMagReward &&
@@ -72055,7 +72078,10 @@ int main(int argc, char* argv[])
 				envmap_draw_debug(g_envMap);
 			drawSweepStatus(worldTextBuf, &cfg);
 			drawProbeStatus(worldTextBuf);
-		} else if (bootState == BOOT_TITLE)
+		} else if (bootState == BOOT_MENU && menu.loaded && menu.isLoadingScreen &&
+				g_loadCtx.kind != LOADK_NONE)
+			drawLoadingBottom();
+		else if (bootState == BOOT_TITLE)
 			drawTitleBottom();
 		else if (bootState == BOOT_DONE && haveSetupMessage)
 			C2D_DrawText(&setupHint, C2D_WithColor | C2D_WordWrap, 12.0f, 12.0f, 0.5f, 0.5f, 0.5f,
