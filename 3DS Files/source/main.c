@@ -60896,13 +60896,19 @@ static bool drawUiEngage(const MenuState* m) {
 	static char wrapped[1024];
 	C2D_TextBufClear(wrapBuf);
 	int lines = body[0] ? uiWrap(wrapBuf, body, bodyPx, pw - 24.0f, wrapped, sizeof(wrapped)) : 0;
+	// The event and shop dialogs' title. A failed challenge's is empty --
+	// retail's FEPrintf of "" -- and then its line goes, rather than leave
+	// a gap between the label and the message.
+	const char* title = race ? NULL : event ? uiAfterColon(g_engStr.subject) : g_engStr.title;
+	const bool titled = title && title[0];
 	float ph, py;
 	if (race) {
 		const float bodyH = lines > 0 ? (float)(lines < 5 ? lines : 5) * lh + 10.0f : 6.0f;
 		ph = fminf(H - 16.0f, 92.0f + bodyH + (nb ? 36.0f + 12.0f : 8.0f));
 		py = floorf((H - ph) * 0.5f);
 	} else {
-		ph = 52.0f + (float)(lines < 6 ? lines : 6) * lh + 10.0f + (nb ? 36.0f + 12.0f : 0.0f);
+		ph = (titled ? 52.0f : 32.0f) + (float)(lines < 6 ? lines : 6) * lh + 10.0f +
+			(nb ? 36.0f + 12.0f : 0.0f);
 		py = floorf((H - ph) * 0.5f);
 	}
 	uiRoundRect(px, py, pw, ph, 6.0f, UI_Z, C2D_Color32(0, 0, 0, 219));
@@ -60934,7 +60940,6 @@ static bool drawUiEngage(const MenuState* m) {
 		}
 		y = ty + 44.0f;
 	} else {
-		const char* title = event ? uiAfterColon(g_engStr.subject) : g_engStr.title;
 		uiLabel(buf, event ? (g_engageDlg.kind == ENGAGE_KIND_SHOWCASE ? portstr_caps(PS_MK_SHOWCASE)
 			: portstr(PS_WORLD_CHALLENGE)) : portstr(g_engageDlg.kind == ENGAGE_KIND_SHOP ? PS_SHOP : PS_CHALLENGE),
 			px + 12.0f, py + 14.0f, 0, UI_ACCENT);
@@ -60944,8 +60949,9 @@ static bool drawUiEngage(const MenuState* m) {
 			portstr_upper(fr);
 			uiLabel(buf, fr, px + pw - 12.0f, py + 14.0f, 2, UI_DIM);
 		}
-		uiText(buf, title, 19.0f, px + 12.0f, py + 33.0f, 0, UI_WHITE, pw - 24.0f);
-		y = py + 50.0f;
+		if (titled)
+			uiText(buf, title, 19.0f, px + 12.0f, py + 33.0f, 0, UI_WHITE, pw - 24.0f);
+		y = py + (titled ? 50.0f : 30.0f);
 	}
 	// The message: what fits above the buttons, the size stepped down to fit.
 	const float by = nb ? py + ph - 12.0f - 36.0f : py + ph - 8.0f;
@@ -61673,7 +61679,9 @@ static void dtDrawGps(C2D_TextBuf buf) {
 }
 
 // Last on the lower screen, over whatever the frame drew: depth ALWAYS, so
-// the order alone stacks it (citro2d's own test is GEQUAL, put back after).
+// the order alone stacks it -- the test the lower screen already runs under
+// (main.c sets it after C2D_Prepare(), stereo_composite() too), set again
+// here in case a screen left another, and left that way.
 static void dbgToolsDraw(void) {
 	if (!g_dt.on || !g_uiFont || (!g_dt.open && !(g_dt.gpsInfo && g_dt.world)))
 		return;
@@ -61723,7 +61731,6 @@ static void dbgToolsDraw(void) {
 			g_dt.note[0] ? UI_ACCENT : UI_DIM, DT_PW - 24.0f);
 	}
 	C2D_Flush();
-	C3D_DepthTest(true, GPU_GEQUAL, GPU_WRITE_ALL);
 }
 
 static void drawTouchCameraBtn(float x, float y, float w, float h) {
