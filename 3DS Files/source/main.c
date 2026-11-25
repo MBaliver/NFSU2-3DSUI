@@ -9851,22 +9851,23 @@ static void smsReaderResolve(MenuState* m) {
 // [0, lines - 10].
 // PORT: Scroll also starts the "Blink" script on the arrow it moves toward;
 // the arrows are drawn static here, as on the other screens.
-static void smsReaderScroll(MenuState* m, int dir, const char* how) {
+static bool smsReaderScroll(MenuState* m, int dir, const char* how) {
 	if (!m->isSmsReader || m->rdLines <= SMS_READER_LINES)
-		return;
+		return false;
 	int top = m->rdTop + dir;
 	if (top > m->rdLines - SMS_READER_LINES)
 		top = m->rdLines - SMS_READER_LINES;
 	if (top < 0)
 		top = 0;
 	if (top == m->rdTop)
-		return;
+		return false;
 	m->rdTop = top;
 	smsReaderShow(m);
 	char b[96];
 	snprintf(b, sizeof(b), "sms: reader %s -> lines %d-%d of %d", how, top + 1,
 		top + SMS_READER_LINES, m->rdLines);
 	dlog(b);
+	return true;
 }
 
 // Which row widget `i` is, following the parent chain so that the three
@@ -38863,10 +38864,14 @@ static void smsReaderTouch(MenuState* m) {
 	}
 	if (!touchTapped())
 		return;
-	if (menuTouchHitsWidget(m, m->rdSide[2], WM_TOUCH_MIN_PX, t->x, t->y))
-		smsReaderScroll(m, -1, "touch arrow");
-	else if (menuTouchHitsWidget(m, m->rdSide[3], WM_TOUCH_MIN_PX, t->x, t->y))
-		smsReaderScroll(m, +1, "touch arrow");
+	// PORT: a step by an arrow ticks as the lists do; a drag stays quiet.
+	if (menuTouchHitsWidget(m, m->rdSide[2], WM_TOUCH_MIN_PX, t->x, t->y)) {
+		if (smsReaderScroll(m, -1, "touch arrow"))
+			feSoundPlay(FE_EV_UP);
+	} else if (menuTouchHitsWidget(m, m->rdSide[3], WM_TOUCH_MIN_PX, t->x, t->y)) {
+		if (smsReaderScroll(m, +1, "touch arrow"))
+			feSoundPlay(FE_EV_DOWN);
+	}
 }
 
 // SMSMailboxViewer's NotificationMessage (0x800DD558) and the reader's
@@ -38928,6 +38933,7 @@ static bool smsBoxInput(const Config* cfg, MenuState* menu, u32 kDown) {
 		if (g_smsSkin) {
 			// The skinned reader scrolls its own wrap, a line a press, and
 			// follows a drag.
+			const float wasTop = g_smsReaderTop;
 			if (kDown & KEY_UP) g_smsReaderTop -= 19.0f;
 			if (kDown & KEY_DOWN) g_smsReaderTop += 19.0f;
 			static int s_dy;
@@ -38938,11 +38944,14 @@ static bool smsBoxInput(const Config* cfg, MenuState* menu, u32 kDown) {
 			}
 			if (g_smsReaderTop > g_smsReaderMax) g_smsReaderTop = g_smsReaderMax;
 			if (g_smsReaderTop < 0.0f) g_smsReaderTop = 0.0f;
+			// PORT: a line a press ticks as the lists do; a drag stays quiet.
+			if ((kDown & (KEY_UP | KEY_DOWN)) && g_smsReaderTop != wasTop)
+				feSoundPlay((kDown & KEY_UP) ? FE_EV_UP : FE_EV_DOWN);
 		} else {
-		if (kDown & KEY_UP)
-			smsReaderScroll(menu, -1, "up");
-		if (kDown & KEY_DOWN)
-			smsReaderScroll(menu, +1, "down");
+		if ((kDown & KEY_UP) && smsReaderScroll(menu, -1, "up"))
+			feSoundPlay(FE_EV_UP);
+		if ((kDown & KEY_DOWN) && smsReaderScroll(menu, +1, "down"))
+			feSoundPlay(FE_EV_DOWN);
 		smsReaderTouch(menu);
 		}
 		if (kDown & (KEY_Y | KEY_B)) {
@@ -46497,6 +46506,17 @@ static bool replayUiInput(MenuState* m, u32 kDown, float dt) {
 		kDown = 0;
 		dlog("replay: Hide -- the screen back");
 	}
+	// PORT: the deck's controls sound as the menus do (retail bank, FE_EV_*),
+	// pressed or touched: back to leave, accept to play or pause, the list's
+	// sideways tick for the jumps and the toggles.
+	if (kDown & KEY_START)
+		feSoundPlay(FE_EV_BACK);
+	else if (kDown & KEY_A)
+		feSoundPlay(FE_EV_ACCEPT);
+	else if (kDown & KEY_L)
+		feSoundPlay(FE_EV_LEFT);
+	else if (kDown & (KEY_R | KEY_B | KEY_Y | KEY_X))
+		feSoundPlay(FE_EV_RIGHT);
 	if (kDown & KEY_START) {   // 0xB5AF2461, StartExiting
 		return true;
 	} else if (kDown & KEY_A) {   // 0x0C407210, TogglePause
