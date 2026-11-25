@@ -34,6 +34,8 @@ typedef struct {
 	bool highContrast;   // solid panels, stronger text and rims
 	bool motionSteer;    // 3DS accelerometer tilt steering (driving only)
 	bool touchCamera;    // optional camera cycle button on the touch screen
+	char profile[32];    // the profile these came from: in port_last.txt, the
+	                     // one the title screen's Continue loads ("" = none)
 } PortPrefs;
 
 void portprefs_defaults(PortPrefs* p);

@@ -7224,6 +7224,10 @@ static void resolveProfileCar(const Config* cfg, const NfsProfile* p) {
 // PORT: the active profile's port settings to its port.txt and to
 // port_last.txt, the boot's settings before a profile loads (portprefs.h).
 static void portPrefsSave(void) {
+	// The title screen's Continue loads the last profile a save named; No
+	// Profile leaves the name of the one before it.
+	if (gProfile.isLoaded && gProfile.name[0])
+		snprintf(g_portPrefs.profile, sizeof(g_portPrefs.profile), "%s", gProfile.name);
 	char last[320];
 	portprefs_last_path(profile_save_root(), last, sizeof(last));
 	if (!portprefs_write(last, &g_portPrefs))
@@ -61274,6 +61278,46 @@ static void prPill(C2D_TextBuf buf, float x, float y, float w, float h, char key
 //                            the picked one signs), the terms' scroll and Sign (A)
 //   UI_postrace              one pill per item, the current one lit with A
 // The current / default action is lit and wears A.
+static void drawUiPostRace(MenuState* m);
+
+// PORT: the title screen's lower panel. With a profile to come back to, the
+// logo over Continue (A, or a touch) -- that profile loaded and, for a career
+// past the prologue, straight out of the garage into free roam -- and START's
+// usual way to the profile list and the main menu under it. With none, the
+// logo alone, as before.
+#define TITLE_CONT_X 40.0f
+#define TITLE_CONT_Y 108.0f
+#define TITLE_CONT_W 240.0f
+#define TITLE_CONT_H 46.0f
+#define TITLE_MENU_X 80.0f
+#define TITLE_MENU_Y 188.0f
+#define TITLE_MENU_W 160.0f
+#define TITLE_MENU_H 32.0f
+static bool g_titleContinueOk;
+static ProfileEntry g_titleContinueEntry;
+
+static bool titleHit(float tx, float ty, float x, float y, float w, float h) {
+	return tx >= x && tx < x + w && ty >= y && ty < y + h;
+}
+
+static void drawTitleBottom(void) {
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(512);
+	if (!g_titleContinueOk || !buf || !g_uiFont) {
+		drawBottomLogo();
+		return;
+	}
+	C2D_TextBufClear(buf);
+	drawBottomLogoAt(58.0f, 260.0f);
+	uiButton(buf, TITLE_CONT_X, TITLE_CONT_Y, TITLE_CONT_W, TITLE_CONT_H, 'A',
+		portstr(PS_PR_CONTINUE), true, true);
+	uiText(buf, g_titleContinueEntry.name, 14.0f, BOTTOM_W * 0.5f,
+		TITLE_CONT_Y + TITLE_CONT_H + 14.0f, 1, UI_WHITE, TITLE_CONT_W);
+	uiButton(buf, TITLE_MENU_X, TITLE_MENU_Y, TITLE_MENU_W, TITLE_MENU_H, 't',
+		portstr(PS_TITLE_MAIN_MENU), false, false);
+}
+
 static void drawUiPostRace(MenuState* m) {
 	static C2D_TextBuf buf = NULL;
 	if (!buf)
@@ -65566,11 +65610,19 @@ int main(int argc, char* argv[])
 			bool naturallyDone = audioIdle && videoIdle;
 			// IG_PlayMovie's skip (0xB5AF2461, 0x406415E3, 0xC3960EB9) is the
 			// accept and start buttons, so START ends the career movie as well.
-			const u32 skipKeys = bootState == BOOT_CAREER_MOVIE ? (KEY_A | KEY_START) : KEY_A;
+			// PORT: the boot's logos and the intro movie go together on any
+			// button or a touch, straight to the title screen -- one press,
+			// not one per clip.
+			const u32 bootSkip = KEY_A | KEY_B | KEY_X | KEY_Y | KEY_L | KEY_R | KEY_ZL | KEY_ZR |
+				KEY_START | KEY_SELECT | KEY_TOUCH;
+			const bool skipAll = bootState != BOOT_CAREER_MOVIE && (kDown & bootSkip);
+			const u32 skipKeys = bootState == BOOT_CAREER_MOVIE ? (KEY_A | KEY_START) : bootSkip;
 			if (naturallyDone || (kDown & skipKeys)) {
 				closeVideoStage(&vstage);
+				if (skipAll && bootState == BOOT_VIDEO)
+					dlog("boot sequence: skipped -- the rest of the logos and the intro movie with them");
 
-				if (bootState == BOOT_VIDEO) {
+				if (bootState == BOOT_VIDEO && !skipAll) {
 					videoStageIdx++;
 					char b[64];
 					snprintf(b, sizeof(b), "boot sequence: video stage %d done (%s)", videoStageIdx - 1,
@@ -65654,6 +65706,22 @@ int main(int argc, char* argv[])
 					// The real title screen, drawn entirely from its own
 					// package -- backdrop, scrim, prompt, copyright.
 					bootState = BOOT_TITLE;
+					// PORT: Continue, when the last profile port_last.txt names
+					// is still on the card (drawTitleBottom()).
+					g_titleContinueOk = false;
+					if (g_portPrefs.profile[0]) {
+						g_profileEntryCount = profile_list(g_profileEntries, BOOT_MAX_PROFILES);
+						for (int pi = 0; pi < g_profileEntryCount && !g_titleContinueOk; pi++)
+							if (strcmp(g_profileEntries[pi].name, g_portPrefs.profile) == 0) {
+								g_titleContinueEntry = g_profileEntries[pi];
+								g_titleContinueOk = true;
+							}
+						char cb[96];
+						snprintf(cb, sizeof(cb), "title: Continue %s (last profile \"%.31s\")",
+							g_titleContinueOk ? "offered" : "not offered -- not on the card",
+							g_portPrefs.profile);
+						dlog(cb);
+					}
 					// UG_LS_Splash's ctor (0x4A90F0) opens cheat entry (#446).
 					cheats_set_entry(true);
 					// The frontend's music starts here, on the title screen
@@ -65707,7 +65775,60 @@ int main(int argc, char* argv[])
 					dlog(cb);
 				}
 			}
-			if (kDown & (KEY_START | KEY_A)) {
+			// PORT: Continue (drawTitleBottom()) takes A and a touch on its
+			// button; START, and a touch on Main Menu, go the usual way below.
+			// The profile is loaded as the list's A loads it, the main menu
+			// goes up under it as the history, and a career past the prologue
+			// leaves at once the way the garage's Return to Explore Mode does
+			// (g_cribEnterWorld) -- out of the garage the save was made in.
+			if (g_titleContinueOk) {
+				bool go = (kDown & KEY_A) != 0;
+				if (kDown & KEY_TOUCH) {
+					touchPosition tp;
+					hidTouchRead(&tp);
+					if (titleHit(tp.px, tp.py, TITLE_CONT_X, TITLE_CONT_Y, TITLE_CONT_W, TITLE_CONT_H))
+						go = true;
+					else if (titleHit(tp.px, tp.py, TITLE_MENU_X, TITLE_MENU_Y, TITLE_MENU_W,
+							TITLE_MENU_H))
+						kDown |= KEY_START;
+				}
+				kDown &= ~(u32)KEY_A;
+				if (go && bootLoadProfile(&cfg, &gProfile, &g_titleContinueEntry)) {
+					feSoundPlay(FE_EV_ACCEPT);
+					cheats_set_entry(false);
+					freeMenu(&menu);
+					g_titleContinueOk = false;
+					kDown &= ~(u32)KEY_START;
+					if (haveConfig && loadMainMenu(&cfg, &menu)) {
+						bootState = BOOT_MENU;
+						// StartCareerHelper's arms: past the prologue it opens
+						// the garage, whose Return to Explore Mode is taken
+						// here at once; in the prologue it enters free roam
+						// itself. Either way the world opens off the career.
+						// A career not started plays its first movie instead,
+						// from the main menu's Career.
+						const bool drive = gProfile.careerStarted;
+						if (drive) {
+							g_feCareerMode = true;
+							g_menuCareerCar = true;
+							g_wentToCribFromMainMenu = false;
+							g_cribEnterWorld = true;
+						}
+						char cb[128];
+						snprintf(cb, sizeof(cb), "title: Continue -- \"%.31s\" loaded, %s",
+							gProfile.name, drive ? "into free roam off the career"
+							: "its career has not started -- the main menu");
+						dlog(cb);
+					} else {
+						dlog("title: Continue -- UI_Main.fng failed to load -- holding on black");
+						bootState = BOOT_DONE;
+					}
+				} else if (go) {
+					dlog("title: Continue -- the profile would not load, the usual way instead");
+					kDown |= KEY_START;
+				}
+			}
+			if (bootState == BOOT_TITLE && (kDown & (KEY_START | KEY_A))) {
 				dlog("boot sequence: title screen accepted START/A");
 				// Its dtor closes cheat entry.
 				cheats_set_entry(false);
@@ -71002,7 +71123,9 @@ int main(int argc, char* argv[])
 				envmap_draw_debug(g_envMap);
 			drawSweepStatus(worldTextBuf, &cfg);
 			drawProbeStatus(worldTextBuf);
-		} else if (bootState == BOOT_DONE && haveSetupMessage)
+		} else if (bootState == BOOT_TITLE)
+			drawTitleBottom();
+		else if (bootState == BOOT_DONE && haveSetupMessage)
 			C2D_DrawText(&setupHint, C2D_WithColor | C2D_WordWrap, 12.0f, 12.0f, 0.5f, 0.5f, 0.5f,
 				C2D_Color32(255, 255, 255, 255), 296.0f);
 		else

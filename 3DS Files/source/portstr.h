@@ -266,6 +266,8 @@ typedef enum {
 	PS_BOOT_CREATE,
 	PS_BOOT_NO_PROFILE,
 	PS_BOOT_CHANGE,
+	// the title screen's lower panel: Continue's alternative (START)
+	PS_TITLE_MAIN_MENU,
 	PS_COUNT
 } PortStr;
 

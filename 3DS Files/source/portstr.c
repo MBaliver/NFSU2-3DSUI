@@ -474,6 +474,8 @@ static const PortStrDef kStr[PS_COUNT] = {
 		"Nessun profilo", "Sin perfil", "Geen profiel", "Ingen profil", "Ingen profil" } },
 	[PS_BOOT_CHANGE] = { 0x548B4385u, 0, { "Change", "Changer", "\xC3\x84ndern", "Cambia", "Cambiar",
 		"Wijzigen", "\xC3\x84ndra", "Skift" } },
+	[PS_TITLE_MAIN_MENU] = { 0, 0, { "Main Menu", "Menu principal", "Hauptmen\xC3\xBC", "Menu principale",
+		"Men\xC3\xBA principal", "Hoofdmenu", "Huvudmeny", "Hovedmenu" } },
 };
 
 // Room for a resolved retail string and for any entry's capitals; the longest

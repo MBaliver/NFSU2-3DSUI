@@ -67,6 +67,8 @@ bool portprefs_read(const char* path, PortPrefs* p) {
 			p->motionSteer = atoi(v) != 0;
 		} else if (strcasecmp(k, "TouchCamera") == 0) {
 			p->touchCamera = atoi(v) != 0;
+		} else if (strcasecmp(k, "Profile") == 0) {
+			snprintf(p->profile, sizeof(p->profile), "%s", v);
 		}
 	}
 	fclose(f);
@@ -87,6 +89,8 @@ bool portprefs_write(const char* path, const PortPrefs* p) {
 	fprintf(f, "HighContrast=%d\n", p->highContrast ? 1 : 0);
 	fprintf(f, "MotionSteer=%d\n", p->motionSteer ? 1 : 0);
 	fprintf(f, "TouchCamera=%d\n", p->touchCamera ? 1 : 0);
+	if (p->profile[0])
+		fprintf(f, "Profile=%s\n", p->profile);
 	const bool ok = fclose(f) == 0;
 	if (!ok) {
 		remove(tmp);
