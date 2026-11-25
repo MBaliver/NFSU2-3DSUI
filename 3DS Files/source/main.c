@@ -58331,6 +58331,20 @@ static u32 uiWmeColour(int wme) {
 	return wme >= 0 && wme < GAMEMAP_WME_COUNT ? k[wme] : UI_WHITE;
 }
 
+// The World Map's art for an element type: the HUD map's own icons
+// (minimap.h, minimap_draw_icon()) -- the event ring, or the cross for a
+// sponsor event, the safe house for every shop and the garage, the star for
+// a showcase or a world challenge, the car for an AI racer.
+static u32 uiWmeIcon(int wme, bool sponsor) {
+	if (wme == GAMEMAP_WME_AIRACER)
+		return MINIMAP_ICON_CAR;
+	if (wme == GAMEMAP_WME_SHOWCASE)
+		return MINIMAP_ICON_STAR;
+	if (wme >= GAMEMAP_WME_PAINTSHOP)
+		return MINIMAP_ICON_SAFE_HOUSE;
+	return sponsor ? MINIMAP_ICON_CROSS : MINIMAP_ICON_CIRCUIT;
+}
+
 // The skinned map's view: GameMap's window, its width across the 320 px
 // panel and three quarters of it down, so the art keeps its aspect.
 static float s_wmA0u, s_wmA0v, s_wmWu, s_wmWv, s_wmOx, s_wmOy, s_wmSpan;
@@ -58408,12 +58422,35 @@ static bool drawUiWorldMap(const MenuState* m) {
 			const u32 c = (rc & 0x00FFFFFFu) | ((u32)a << 24);
 			uiaaArc(x, y, r - 1.0f, r + 1.0f, 0.0f, 2.0f * (float)M_PI, 32, c, 0.29f);
 		}
-		if (e->wme >= GAMEMAP_WME_PAINTSHOP) {
-			uiRoundRect(x - 8.5f, y - 8.5f, 17.0f, 17.0f, 4.0f, 0.3f, UI_PANEL_SOLID);
-			uiRoundRect(x - 6.5f, y - 6.5f, 13.0f, 13.0f, 3.0f, 0.31f, col);
-		} else {
-			C2D_DrawCircleSolid(x, y, 0.3f, 8.5f, UI_PANEL_SOLID);
-			C2D_DrawCircleSolid(x, y, 0.31f, 6.5f, col);
+		// The HUD map's icon for the type, in this map's colour for it (the
+		// user on the shapes that stood in for them, 2026-11-25: "use the
+		// events' icons, the same ones the map shows"). A card without the
+		// icons keeps a plain disc.
+		if (!minimap_draw_icon(g_minimap, uiWmeIcon(e->wme, e->sponsor), col, x, y, 16.0f, 0.0f, 0.31f)) {
+			uiRoundRect(x - 8.5f, y - 8.5f, 17.0f, 17.0f, 8.5f, 0.3f, UI_PANEL_SOLID);
+			uiRoundRect(x - 6.5f, y - 6.5f, 13.0f, 13.0f, 6.5f, 0.31f, col);
+		}
+	}
+	// ---- the AI cars: WorldMapWrapper's AICarWMElements, every AI car in
+	// the World's list while it is on the road (IsRenderable, Car +0x548) --
+	// free roam's two random-encounter racers (#268 H), the ones the HUD's
+	// map shows; drawGameMap() draws the same set. The HUD map's car icon,
+	// turned along the car's heading (minimap_draw()'s turn with the map
+	// north up), in the racers' orange.
+	{
+		const OpponentField* af = gmAiField();
+		const u32 ac = uiWmeColour(GAMEMAP_WME_AIRACER);
+		for (int k = 0; af && k < af->count; k++) {
+			const Opponent* o = &af->car[k];
+			float x, y;
+			if (!o->simReady || o->inactive || gmAiPoofed(k) ||
+					!wmPlace(gm, o->sim.pos[0], o->sim.pos[1], &x, &y))
+				continue;
+			if (!minimap_draw_icon(g_minimap, MINIMAP_ICON_CAR, ac, x, y, 15.0f,
+					(float)M_PI * 0.5f - o->sim.yaw, 0.32f)) {
+				uiArrow(x, y, -o->sim.yaw, 8.0f, UI_PANEL_SOLID);
+				uiArrow(x, y, -o->sim.yaw, 6.0f, ac);
+			}
 		}
 	}
 	// ---- the player ----
@@ -58475,17 +58512,20 @@ static bool drawUiWorldMap(const MenuState* m) {
 			const float px = sx + 6.0f, pw = sw - 12.0f - (n > vis ? 6.0f : 0.0f);
 			const bool on = gamemap_row_on(gm, r), focus = r == gm->highlight;
 			const u32 col = uiWmeColour(gm->rows[r].wme);
-			// On: a grey row, the type's colour in a solid dot and a tick.
-			// Off: an empty outline, the dot a ring, the name dim. The pad's
-			// row: a lime rim, no glow.
+			// On: a grey row, the type's icon in its colour (the same art the
+			// map's markers wear) and a tick. Off: an empty outline, the icon
+			// grey, the name dim. The pad's row: a lime rim, no glow.
 			if (on)
 				uiRoundRect(px, py, pw, ph, 3.0f, UI_Z, C2D_Color32(135, 135, 135, 90));
 			uiRing(px, py, pw, ph, 3.0f, focus ? 1.5f : 1.0f, UI_Z + 0.005f,
 				focus ? UI_ACCENT : C2D_Color32(255, 255, 255, on ? 61 : 41));
-			if (on)
-				C2D_DrawCircleSolid(px + 13.0f, cy, UI_Z + 0.02f, 5.0f, col);
-			else
-				uiRing(px + 8.0f, cy - 5.0f, 10.0f, 10.0f, 5.0f, 1.3f, UI_Z + 0.02f, UI_DIM);
+			if (!minimap_draw_icon(g_minimap, uiWmeIcon(gm->rows[r].wme, false),
+					on ? col : C2D_Color32(110, 110, 110, 255), px + 13.0f, cy, 15.0f, 0.0f, UI_Z + 0.02f)) {
+				if (on)
+					uiRoundRect(px + 8.0f, cy - 5.0f, 10.0f, 10.0f, 5.0f, UI_Z + 0.02f, col);
+				else
+					uiRing(px + 8.0f, cy - 5.0f, 10.0f, 10.0f, 5.0f, 1.3f, UI_Z + 0.02f, UI_DIM);
+			}
 			uiText(buf, name, 14.0f, px + 25.0f, cy, 0, focus ? UI_ACCENT : on ? UI_WHITE : UI_DIM,
 				pw - 25.0f - 26.0f);
 			// The tick on the right: shown or not, at a glance.
@@ -58539,7 +58579,10 @@ static bool drawUiWorldMap(const MenuState* m) {
 			const float gw = 25.0f + glw + 6.0f + uiMeasure(buf, g_markerTitle[g_gpsMarkerNow], 14.0f) + 10.0f;
 			const float gx = W - fminf(gw, W - fw - 12.0f);
 			uiTab(gx, fy, W - gx, 28.0f, 1, UI_PANEL);
-			C2D_DrawCircleSolid(gx + 16.0f, fy + 14.0f, UI_Z + 0.02f, 3.5f, c);
+			// The target's own icon, as its marker wears it.
+			if (!minimap_draw_icon(g_minimap, g_markers[g_gpsMarkerNow].texHash, c, gx + 16.0f, fy + 14.0f,
+					13.0f, 0.0f, UI_Z + 0.02f))
+				uiRoundRect(gx + 12.5f, fy + 10.5f, 7.0f, 7.0f, 3.5f, UI_Z + 0.02f, c);
 			uiLabel(buf, portstr(PS_GPS), gx + 25.0f, fy + 14.0f, 0, uiLighten(c, 0.35f));
 			uiText(buf, g_markerTitle[g_gpsMarkerNow], 14.0f, gx + 31.0f + glw, fy + 14.0f, 0, UI_WHITE,
 				W - 8.0f - (gx + 31.0f + glw));

@@ -551,6 +551,31 @@ bool minimap_map_art(const Minimap* m, C2D_Image* out, float* originX, float* or
 	return true;
 }
 
+bool minimap_draw_icon(const Minimap* m, u32 texHash, u32 rgba, float cx, float cy, float size,
+		float angle, float z) {
+	if (!m)
+		return false;
+	int slot = -1;
+	for (int k = 0; k < MM_COUNT; k++)
+		if (kTexHash[k] == texHash) {
+			slot = k;
+			break;
+		}
+	if (slot < 0 || !m->texValid[slot] || !m->sub[slot].width || !m->sub[slot].height)
+		return false;
+	// The colour multiplies the texels, as the markers' do (minimap_draw()).
+	C2D_ImageTint tint;
+	C2D_PlainImageTint(&tint, rgba, 1.0f);
+	C2D_SetTintMode(C2D_TintMult);
+	const float sx = size / (float)m->sub[slot].width, sy = size / (float)m->sub[slot].height;
+	if (angle != 0.0f)
+		C2D_DrawImageAtRotated(m->img[slot], cx, cy, z, angle, &tint, sx, sy);
+	else
+		C2D_DrawImageAt(m->img[slot], cx - size * 0.5f, cy - size * 0.5f, z, &tint, sx, sy);
+	C2D_SetTintMode(C2D_TintSolid);
+	return true;
+}
+
 bool minimap_satellite(const Minimap* m, C2D_Image* out) {
 	if (!m || !m->texValid[MM_SAT])
 		return false;

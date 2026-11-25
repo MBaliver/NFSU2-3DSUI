@@ -355,16 +355,22 @@ HUD, which stay on the top screen.
   the Drag Shift option, and the reskinned dialogs, World Map, mailbox and
   reader. Feedback from a play session is still pending.
 - Seen in Azahar (2026-11-25, through the debug tools): the help dialog
-  (`drawUiHelp`) and the race, shop and garage engage dialogs
-  (`drawUiEngage`) in the kit. The showcase and world challenge engage
-  dialogs, and the challenge's failure and uniques dialogs, need a career
-  that has them; not seen yet.
-- Known gaps: no AI cars on the reskinned World Map; the destination
-  strip's distance is a straight line, not along the route (the route's own
-  length is measured, `gps_route_polyline`'s `GpsRouteInfo`, and shown by
-  the debug tools' GPS readout).
+  (`drawUiHelp`) and every engage dialog (`drawUiEngage`) in the kit -- the
+  race, shop and garage ones raised for real, the showcase, world
+  challenge, failed challenge and uniques shop ones as previews; the World
+  Map with the HUD map's icons and the free-roam racers on it.
+- Known gaps: the failed challenge dialog's title is empty (retail's), and
+  the kit still keeps its line, a gap over the body.
+- The destination strip prints the distance along the GPS's road while it
+  follows a path (`gps_route_polyline`'s `GpsRouteInfo`), the straight
+  line otherwise.
+- The World Map (`drawUiWorldMap`) draws its markers, its legend rows and
+  its GPS tab with the HUD map's own icons (`minimap_draw_icon`): the event
+  ring, the sponsor cross, the shops' disc, the star, and the car for the
+  free-roam racers, turned along their heading, as `drawGameMap()` did.
 - The debug tools (L + R + SELECT with `DevCommands=1` or
   `DebugMenuEnabled=1`, or the command file's `dbg ID`, devcmd.h) raise
-  each of these for real: the car teleported into a race start, shop,
-  showcase or challenge zone and the Enter press made, a screen's help, and
-  the GPS sent to a race from the nearest road.
+  each of these: the car teleported into a race start, shop, showcase or
+  challenge zone and the Enter press made, or, for what the career has not
+  reached, a preview whose buttons only close it; a screen's help; the GPS
+  sent to a race from the nearest road.

@@ -343,6 +343,14 @@ typedef struct {
 // a showcase's trigger and a world challenge's start (#268 K).
 #define MINIMAP_ICON_STAR 0x9B34E14Cu
 
+// One of the icons above, for another screen: the World Map's markers and
+// its legend use this map's own art. `size` px square, centred on (cx, cy),
+// multiplied by `rgba` the way this map tints its markers, turned `angle`
+// radians (citro2d's, clockwise on screen; 0 upright). False when the icon
+// did not load.
+bool minimap_draw_icon(const Minimap* m, u32 texHash, u32 rgba, float cx, float cy, float size,
+	float angle, float z);
+
 // Swaps the map art for another track's, and with it the world-to-art
 // placement. This is the race route: every Location4 record's TRACKMAP<id>.BIN
 // is the same Bayview city plate with that track's route drawn on it in white
