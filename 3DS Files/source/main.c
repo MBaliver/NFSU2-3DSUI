@@ -57498,7 +57498,6 @@ static void drawWorldFeed(C2D_TextBuf buf, float x, float bottom) {
 #define WBOT_PAN_HOLD_MS 4000u
 static bool g_tapPending = false;
 static float g_tapX, g_tapY;
-static void uiTapFlashAt(float x, float y);
 static void worldMapTouch(float mapX, float mapY, float mapW, float mapH) {
 	static bool dragging = false;
 	static int lx = 0, ly = 0;
@@ -57510,7 +57509,6 @@ static void worldMapTouch(float mapX, float mapY, float mapW, float mapH) {
 		dragging = inMap;
 		lx = t->x;
 		ly = t->y;
-		uiTapFlashAt((float)t->x, (float)t->y);
 	}
 	if (dragging && t->held) {
 		if (t->drag && (t->x != lx || t->y != ly))
@@ -57889,49 +57887,6 @@ static int g_uiHitN;
 static void uiHit(float x, float y, float w, float h, int id) {
 	if (g_uiHitN < 16)
 		g_uiHit[g_uiHitN++] = (UiHit){ x, y, w, h, id };
-}
-
-// PORT: the button under a finger lights the moment it lands -- a white veil
-// over it that fades -- so a touch is seen to register before the lift that
-// acts (a drag pans the map instead, worldMapTouch()).
-#define UI_TAP_FLASH_MS 250u
-static UiHit g_tapFlash;
-static u64 g_tapFlashMs;
-static bool g_tapFlashPending;
-static float g_tapFlashX, g_tapFlashY;
-// Noted when the finger lands; matched to a button at the draw's end, once
-// this frame's targets are laid out (the touch is read mid-draw).
-static void uiTapFlashAt(float x, float y) {
-	g_tapFlashPending = true;
-	g_tapFlashX = x;
-	g_tapFlashY = y;
-}
-static void uiTapFlashDraw(void) {
-	if (g_tapFlashPending) {
-		g_tapFlashPending = false;
-		const float x = g_tapFlashX, y = g_tapFlashY;
-		for (int k = g_uiHitN - 1; k >= 0; k--) {
-			const UiHit* h = &g_uiHit[k];
-			if (x < h->x || x >= h->x + h->w || y < h->y || y >= h->y + h->h)
-				continue;
-			if (h->id != HIT_CARD) {
-				g_tapFlash = *h;
-				g_tapFlashMs = osGetTime();
-			}
-			break;
-		}
-	}
-	if (!g_tapFlashMs)
-		return;
-	const u64 dt = osGetTime() - g_tapFlashMs;
-	if (dt >= UI_TAP_FLASH_MS) {
-		g_tapFlashMs = 0;
-		return;
-	}
-	const UiHit* h = &g_tapFlash;
-	const float k = 1.0f - (float)dt / (float)UI_TAP_FLASH_MS;
-	const float r = h->w > h->h * 1.5f ? h->h * 0.5f : fminf(h->w, h->h) * 0.25f;
-	uiRoundRect(h->x, h->y, h->w, h->h, r, UI_Z + 0.06f, C2D_Color32(255, 255, 255, (u8)(110.0f * k)));
 }
 
 static int g_mmSel = -1;        // the marker whose card is up
@@ -62321,9 +62276,6 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	// ---- the bank pickup's indicator, over the map under the row ----
 	if (!g_raceRun.on && !(g_wc.active && g_wc.state == WC_STATE_COUNTING))
 		drawWorldBankReward(buf);
-
-	// ---- the pressed button's veil (uiTapFlashAt()) ----
-	uiTapFlashDraw();
 
 	// ---- the pager readout, on request ----
 	if (cfg->dbgWorldStatus)
