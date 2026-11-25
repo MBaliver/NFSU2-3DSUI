@@ -42,16 +42,11 @@ _A4_TAG = b"-a4-keep-colour"
 
 
 def tex3ds_path():
-    # DEVKITPRO is often an MSYS path (/opt/devkitpro), which Git Bash hands
-    # Python rewritten into its own tree; try it, then the usual install.
-    for root in (os.environ.get("DEVKITPRO"), r"C:\devkitPro"):
-        if root:
-            exe = os.path.join(root, "tools", "bin", "tex3ds.exe")
-            if os.path.isfile(exe):
-                return exe
-    exe = shutil.which("tex3ds")
+    # The apps' bin/tex3ds, devkitPro's tools/bin or the PATH (toolbin.py).
+    import toolbin
+    exe = toolbin.find_tex3ds()
     if not exe:
-        raise RuntimeError("tex3ds not found: install devkitPro's 3ds-tools")
+        raise toolbin.MissingTex3ds(toolbin.tex3ds_problem())
     return exe
 
 

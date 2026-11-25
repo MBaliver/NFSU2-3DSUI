@@ -115,11 +115,18 @@ nfsu2-3ds setup --pc "<PC game folder>" --gamedir E:\nfsu2 --list
 The apps are built from the Python in `tools/` (`python tools/build_apps.py`
 rebuilds them). On any system, the same runs from Python 3 with numpy,
 Pillow, lz4, pefile, unicorn and capstone installed, and ffmpeg (with
-libx264), vgmstream-cli and dspenc on the PATH:
+libx264), vgmstream-cli and dspenc on the PATH, and devkitPro's `tex3ds`
+(the tracks' textures; the Windows apps carry their own in `bin/tex3ds`):
 
 ```
 python3 tools/stage.py --pc "<PC game folder>" --gamedir <SD>/nfsu2
 ```
+
+If `tex3ds` is missing, Data Setup, the Mod Packer and `stage.py` stop before
+doing any work and offer to install it: on Windows they download devkitPro's
+official installer from its GitHub releases and run it (tick "3DS
+Development"); on Linux and macOS they run `sudo dkp-pacman -S 3dstools`
+when devkitPro's pacman is there. Answer no and they say where to get it.
 
 or, with a window, `tools/nfsu2_setup.pyw`.
 

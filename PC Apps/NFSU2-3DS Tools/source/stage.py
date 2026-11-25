@@ -599,6 +599,19 @@ def run_step(s, log, stop=None):
         raise RuntimeError("%s ran but its outputs are still stale: %s" % (s.name, after))
 
 
+TEX3DS_SCRIPTS = ("track_pack.py", "pack_world.py")
+
+
+def require_tex3ds(steps):
+    """Raises toolbin.MissingTex3ds when a step that will run encodes track
+    textures (etc1_tex.py) and tex3ds is nowhere."""
+    import toolbin
+    if any(n in s.scripts for s in steps for n in TEX3DS_SCRIPTS):
+        p = toolbin.tex3ds_problem()
+        if p:
+            raise toolbin.MissingTex3ds(p)
+
+
 def check_install(pc):
     """The PC install's must-haves, as a list of what is missing."""
     need = [("SPEED2.EXE",), ("CARS",), ("GLOBAL", "GLOBALB.BUN"), ("TRACKS",), ("LANGUAGES", "English.bin"),
@@ -642,9 +655,14 @@ def stage(pc, gd, only=(), tracks=ALL_TRACKS, force=False, list_only=False, log=
         if g not in GROUPS:
             raise SystemExit("unknown group '%s' (groups: %s)" % (g, ", ".join(GROUPS)))
     sel = [s for s in steps if not only or s.group in only]
+    states = [state(s) for s in sel]
+    # Said before any work, not as a failed pack_world.py an hour in: the
+    # tracks' textures need tex3ds (the apps offer to install it).
+    if not list_only:
+        require_tex3ds(s for s, st in zip(sel, states) if force or st != "ok")
     t0, ran, fresh = time.time(), 0, 0
     for i, s in enumerate(sel):
-        st = state(s)
+        st = states[i]
         if progress:
             progress(i, len(sel), s.name)
         if list_only:
@@ -757,6 +775,7 @@ def pack_mod(pc, gd, mod_dir, name=None, out=None, log=print, stop=None, progres
             sel.append(s)
         unused = sorted(rel for p, rel in mods.items() if p not in used)
         log("mod: %d file(s); %d step(s) read them" % (len(mods), len(sel)))
+        require_tex3ds(sel)
         for i, s in enumerate(sel):
             if progress:
                 progress(i, len(sel), s.name)
@@ -818,10 +837,22 @@ def main(argv=None):
         except Exception:
             pass
     tracks = [t for t in a.tracks.split(",") if t]
+    import toolbin
+
+    def run():
+        if a.mod:
+            pack_mod(a.pc, a.gamedir, a.mod, a.mod_name, a.mod_out, keep_work=a.keep_work)
+            return None
+        return stage(a.pc, a.gamedir, [g for g in a.only.split(",") if g], tracks, a.force, a.list)
+    try:
+        steps = run()
+    except toolbin.MissingTex3ds as e:
+        # Asked only at a console; a script or a pipe gets the message.
+        if not (sys.stdin and sys.stdin.isatty()) or not toolbin.prompt_install_tex3ds(e):
+            raise
+        steps = run()
     if a.mod:
-        pack_mod(a.pc, a.gamedir, a.mod, a.mod_name, a.mod_out, keep_work=a.keep_work)
         return 0
-    steps = stage(a.pc, a.gamedir, [g for g in a.only.split(",") if g], tracks, a.force, a.list)
     if a.report_extra:
         report_extra(steps, a.gamedir, tracks)
     return 0

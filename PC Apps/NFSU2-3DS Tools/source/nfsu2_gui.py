@@ -25,6 +25,7 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import stage  # noqa: E402
+import toolbin  # noqa: E402
 
 import tkinter as tk  # noqa: E402
 from tkinter import filedialog, messagebox, ttk  # noqa: E402
@@ -222,6 +223,11 @@ class App:
                     self._busy(False)
                     self.status.config(text=a)
                     self.refresh_mods()
+                elif kind == "tex3ds":
+                    self._busy(False)
+                    self._offer_tex3ds(*a)
+                elif kind == "tex3ds_done":
+                    self._tex3ds_done(*a)
         except queue.Empty:
             pass
         self.root.after(100, self.pump)
@@ -256,6 +262,11 @@ class App:
             except stage.Stopped:
                 msg = "Stopped."
                 log(msg)
+            except toolbin.MissingTex3ds as e:
+                # Asked on the window's thread (pump), which can run it again.
+                log("error: %s" % e)
+                self.q.put(("tex3ds", (fn, label, str(e))))
+                return
             except SystemExit as e:
                 msg = str(e)
                 log("error: " + msg)
@@ -265,6 +276,45 @@ class App:
             self.q.put(("done", msg))
         self.worker = threading.Thread(target=body, daemon=True)
         self.worker.start()
+
+    def _offer_tex3ds(self, fn, label, msg):
+        """tex3ds is missing: say so, offer to install it, then run the job
+        again."""
+        self.status.config(text="tex3ds is needed")
+        if not toolbin.can_install_tex3ds():
+            messagebox.showerror(TITLE, msg)
+            return
+        how = ("download devkitPro's official installer from GitHub and run it now? In the "
+               "installer, tick \"3DS Development\" and keep the folder C:\\devkitPro."
+               if os.name == "nt" else "run: sudo dkp-pacman -S 3dstools (in the terminal this "
+               "window was started from)?")
+        if not messagebox.askyesno(TITLE, msg + "\n\nInstall it for you -- " + how +
+                                   "\n\nThe job starts again once it is installed."):
+            self.status.config(text="tex3ds is needed: " + toolbin.DEVKITPRO_GUIDE)
+            return
+        self._busy(True)
+        self.write("=== install tex3ds")
+
+        def body():
+            log = lambda s: self.q.put(("log", s))  # noqa: E731
+            try:
+                ok = toolbin.install_tex3ds(log) is not None
+            except Exception as e:
+                log("tex3ds: install failed: %s" % e)
+                ok = False
+            self.q.put(("tex3ds_done", (fn, label, ok)))
+        self.worker = threading.Thread(target=body, daemon=True)
+        self.worker.start()
+
+    def _tex3ds_done(self, fn, label, ok):
+        self._busy(False)
+        if ok:
+            self.write("tex3ds installed; running the job again")
+            self._start(fn, label)
+        else:
+            self.status.config(text="tex3ds is still missing")
+            messagebox.showerror(TITLE, "tex3ds is still not installed.\n\n" +
+                                 (toolbin.tex3ds_problem() or ""))
 
     def pack_mod(self):
         mod, name = self.mod.get(), self.mod_name.get().strip()

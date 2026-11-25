@@ -12685,10 +12685,10 @@ static int  g_carbonSnap = 9;      // its SnapToItem slot
 static int  g_iceLastSlot;         // UI_ICEMAIN's FEngGetLastButton: the row a sub-screen left from
 // IceSelectionScreen's mode (0x803D84EC) for the trunk audio screens, each
 // UI_ICEMAIN again (CalcNextScreenFromChooseIceCategory leaves every mode but
-// 7 and 8 on it): 0 the shop, 2 the layouts with one fitted (StartBrowsing at
-// once), 3 a stock trunk's Audio Components / Trunk Layout, 4 and 5 the
+// 7 and 8 on it): 0 the shop, 2 a stock trunk's layouts (StartBrowsing at
+// once), 3 a fitted layout's Audio Components / Trunk Layout, 4 and 5 the
 // audio slots (from 3 and from a new layout). Kept across the screen loads.
-enum { ICE_MODE_MAIN = 0, ICE_MODE_TRUNK_LAYOUT = 2, ICE_MODE_TRUNK_STOCK = 3,
+enum { ICE_MODE_MAIN = 0, ICE_MODE_TRUNK_LAYOUT = 2, ICE_MODE_TRUNK_MENU = 3,
 	ICE_MODE_TRUNK_SLOTS = 4, ICE_MODE_TRUNK_SLOTS_NEW = 5 };
 static int  g_iceMode;
 static void bodyShopStartBrowsing(MenuState* m);
@@ -14380,12 +14380,12 @@ static void bodyShopItems(const Config* cfg, MenuState* out, const LangTable* la
 			bodyShopAddCategory(it->modeValue, it->iconHash, it->labelHash, it->fallbackLabel,
 				BODYSHOP_KIND_PARTS);
 		}
-	} else if (g_bodyShop.iceMode && (g_iceMode == ICE_MODE_TRUNK_STOCK ||
+	} else if (g_bodyShop.iceMode && (g_iceMode == ICE_MODE_TRUNK_MENU ||
 			g_iceMode == ICE_MODE_TRUNK_LAYOUT)) {
 		// Setup's mode 3: Audio Components (an IceCategoryThing on 0x23,
 		// +0x6C 4) and Trunk Layout (0x22); mode 2 the layouts alone, browsed
 		// at once (below).
-		if (g_iceMode == ICE_MODE_TRUNK_STOCK)
+		if (g_iceMode == ICE_MODE_TRUNK_MENU)
 			bodyShopAddCategory(0x23, 0x76167B7Eu, 0x28BF66F6u, "AUDIO COMPONENTS", BODYSHOP_KIND_ICE);
 		bodyShopAddCategory(0x22, 0xF7E5B04Au, 0xC8D23393u, "TRUNK LAYOUT", BODYSHOP_KIND_PARTS);
 	} else if (g_bodyShop.iceMode && g_iceMode != ICE_MODE_MAIN) {
@@ -23293,12 +23293,13 @@ static void bodyShopAcceptCategory(const Config* cfg, MenuState* m, MenuState* d
 			bodyShopStartBrowsing(m);
 			return;
 		}
-		// Trunk Audio (IceCategoryTrunkThing::React, 0x8030E590): mode 3 over
-		// a stock trunk (IsStockPartInstalled(0x22)), else 2, then
+		// Trunk Audio (IceCategoryTrunkThing::React, 0x8030E590): mode 3 when
+		// a layout is fitted (IsStockPartInstalled(0x22) == 0), mode 2 on a
+		// stock trunk (was inverted, so a fitted layout hid the slots), then
 		// ChangeToNextScreen -- UI_ICEMAIN again. Audio Components (mode 3's
 		// IceCategoryThing, +0x6C 4): mode 4.
 		if (c->slot == 0x22 && c->kind == BODYSHOP_KIND_ICE && g_iceMode == ICE_MODE_MAIN) {
-			g_iceMode = g_bodyShop.trunkLevel <= 0 ? ICE_MODE_TRUNK_STOCK : ICE_MODE_TRUNK_LAYOUT;
+			g_iceMode = g_bodyShop.trunkLevel <= 0 ? ICE_MODE_TRUNK_LAYOUT : ICE_MODE_TRUNK_MENU;
 			g_iceLastSlot = 0x22;
 			feNavPush(ICEMAIN_SCREEN);
 			snprintf(b, sizeof(b), "ice: A on Trunk Audio (layout level %d) -> mode %d, "
@@ -23306,7 +23307,7 @@ static void bodyShopAcceptCategory(const Config* cfg, MenuState* m, MenuState* d
 			dlog(b);
 			return;
 		}
-		if (c->slot == 0x23 && c->kind == BODYSHOP_KIND_ICE && g_iceMode == ICE_MODE_TRUNK_STOCK) {
+		if (c->slot == 0x23 && c->kind == BODYSHOP_KIND_ICE && g_iceMode == ICE_MODE_TRUNK_MENU) {
 			g_iceMode = ICE_MODE_TRUNK_SLOTS;
 			feNavPush(ICEMAIN_SCREEN);
 			dlog("ice: A on Audio Components -> mode 4, ChangeToNextScreen UI_ICEMAIN");
@@ -24310,8 +24311,8 @@ static void bodyShopInput(const Config* cfg, MenuState* m, MenuState* dlg, u32* 
 			// PAD_BACK with a mode set is the plain back, no question:
 			// CalcPrevScreenFromChooseIceCategory takes 4 to 3, the rest to 0.
 			const int from = g_iceMode;
-			g_iceMode = from == ICE_MODE_TRUNK_SLOTS ? ICE_MODE_TRUNK_STOCK : ICE_MODE_MAIN;
-			g_iceLastSlot = g_iceMode == ICE_MODE_TRUNK_STOCK ? 0x23 : 0x22;
+			g_iceMode = from == ICE_MODE_TRUNK_SLOTS ? ICE_MODE_TRUNK_MENU : ICE_MODE_MAIN;
+			g_iceLastSlot = g_iceMode == ICE_MODE_TRUNK_MENU ? 0x23 : 0x22;
 			snprintf(b, sizeof(b), "ice: B in trunk audio mode %d -> mode %d, ChangeToPrevScreen",
 				from, g_iceMode);
 			dlog(b);
@@ -24466,7 +24467,7 @@ static void bodyShopMessage(const Config* cfg, MenuState* m, u32 msg) {
 		g_iceMode = ICE_MODE_TRUNK_SLOTS_NEW;
 		feNavReload();
 		dlog("ice: MaybeChangeAudioScreens 0x495DC3F0 -> mode 5 (the audio slots)");
-	} else if (g_bodyShop.iceMode && g_iceMode == ICE_MODE_TRUNK_STOCK) {
+	} else if (g_bodyShop.iceMode && g_iceMode == ICE_MODE_TRUNK_MENU) {
 		g_iceMode = ICE_MODE_MAIN;
 		g_iceLastSlot = 0x22;
 		feNavPop();
@@ -25102,13 +25103,23 @@ static int feFrontEndClip(int idx) {
 // pitch 0x1000. The NDSP channel, -1 for none.
 // PORT: index 0x32 (trigger 0x49) is retail's one loop, kept at +0xC until
 // Stop; no screen the port has plays it, so it is dropped here.
+// PORT (#547, the user 2026-11-23: "The sound that's made when you're over a
+// point is louder than the music, needs to be equalized as well"): what the
+// next frontend one-shot is played at, 1 everywhere but the world's own
+// chimes (worldChimeCell()). In the world the music sits at the mix map's
+// SFXObj_Music level, 0x2D41 of 0x7FFF (-9 dB) under the sliders (#491), while
+// these played at the SFX slider's full level, so a marker's chime stood about
+// 9 dB over the music. The world's chimes take that same level.
+#define WORLD_CHIME_LEVEL (0x2D41 / 32767.0f)
+static float g_feSfxGain = 1.0f;
+
 static int feSoundPlayFrontEnd(int idx) {
 	if (idx == 0x32)
 		return -1;
 	idx = idx < 0 ? 0 : idx > 0x4B ? 0x4B : idx;
 	const int clip = feFrontEndClip(idx);
 	const int ch = clip < 0 ? -1
-		: audioSfxBankPlay(AUDIO_FEBANK_FRONTEND, clip, AUDIO_BUS_SFX, 1.0f, 0.0f);
+		: audioSfxBankPlay(AUDIO_FEBANK_FRONTEND, clip, AUDIO_BUS_SFX, g_feSfxGain, 0.0f);
 	char b[112];
 	snprintf(b, sizeof(b), "fe sfx: EAXFrontEnd trigger 0x%02X (index 0x%02X) clip %d -> ndsp ch %d",
 		idx + FE_SND_LAST_COMMON + 1, idx, clip, ch);
@@ -25127,7 +25138,7 @@ static int feSoundPlayTrigger(int trig) {
 	const int clip = feSoundClip(trig);
 	if (clip < 0)
 		return -1;
-	const int ch = audioSfxBankPlay(AUDIO_FEBANK_COMMON, clip, AUDIO_BUS_SFX, 1.0f, 0.0f);
+	const int ch = audioSfxBankPlay(AUDIO_FEBANK_COMMON, clip, AUDIO_BUS_SFX, g_feSfxGain, 0.0f);
 
 	// Once, so a silent build on hardware can be told apart from a bank
 	// that never loaded: this says a click really reached the DSP.
@@ -25155,6 +25166,16 @@ static int feSoundPlayCell(int ev, int trig) {
 	if (ev <= 0 || ev >= FE_SND_EVENTS || trig < 0 || trig >= FE_SND_TRIGGERS)
 		return -1;
 	return feSoundPlayTrigger(g_feSoundMap[ev][trig]);
+}
+
+// PORT (#547): feSoundPlayCell for a chime the world itself plays over the
+// music -- the Engage widget's (a marker entered, an event or shop offered)
+// and the SMS autopopup's -- at the music's own level (WORLD_CHIME_LEVEL).
+static int worldChimeCell(int ev, int trig) {
+	g_feSfxGain = WORLD_CHIME_LEVEL;
+	const int ch = feSoundPlayCell(ev, trig);
+	g_feSfxGain = 1.0f;
+	return ch;
 }
 
 // FilterSoundForHorizontalMenu (0x80152488), which every carousel screen's
@@ -50583,7 +50604,7 @@ static bool gameMapInput(const Config* cfg, MenuState* m, MenuState* dlg, u32 kD
 // EngageEvent::playSound's MakeFrontendSound(0xB, trigger) (engage.h).
 static void engageSound(int trig)
 {
-	const int ch = feSoundPlayCell(ENGAGE_SND_EVENT, trig);
+	const int ch = worldChimeCell(ENGAGE_SND_EVENT, trig);   // #547
 	char b[128];
 	snprintf(b, sizeof(b), "engage: sound, trigger %#x -> PlayUISoundFX(%#x), clip %d, ndsp ch %d",
 		trig, g_feSoundMap[ENGAGE_SND_EVENT][trig],
@@ -50721,7 +50742,7 @@ static void smsQueueTick(float dt) {
 static bool smsAutopopup(void) {
 	if (!g_smsDb || g_raceRun.on || g_qr.on || !sms_any_unseen_autopopups(&gProfile, g_smsDb))
 		return false;
-	const int ch = feSoundPlayCell(ENGAGE_SND_EVENT, 0x10);
+	const int ch = worldChimeCell(ENGAGE_SND_EVENT, 0x10);   // #547
 	sms_mark_all_autopopups_seen(&gProfile, g_smsDb);
 	char b[160];
 	snprintf(b, sizeof(b), "sms: DoAutopopup at career clock %.1f s -- MakeFrontendSound(0xB, 0x10) "
@@ -57384,8 +57405,12 @@ static void drawFeSweepStatus(C2D_TextBuf buf, const Config* cfg) {
 // GPS_Search_Group (minimap.h, "The GPS"). Retail authors it just above its
 // inset: icon_Satellite, 54 units square, centred (-17, -0.5) from the group;
 // 'Searching^Connection' bottom-aligned (Sj 8) at (13, -12); the error
-// top-aligned at (13, 8); both ConduitMdITC_TT14i at 0.9, all in
-// (230,190,130). The port's panel has no "above the map"; the user
+// top-aligned at (13, 8); both ConduitMdITC_TT14i at 0.9, all authored
+// (230,190,130) -- bytes the engine reads the other way round, as the GPS
+// rings' (minimap.c MM_GPS_COLOR, #286), so retail's colour is (130,190,230),
+// the light blue the PC shows. #487 drew them orange (the user 2026-11-22:
+// "The 'lost satellite communication' text is orange, not blue like its
+// supposed to be", #546). The port's panel has no "above the map"; the user
 // (2026-11-10, #487): "Move the satellite messages to bottom left on top
 // screen" -- on the bottom panel they ran over the minimap. So the group sits
 // in the top screen's bottom-left corner (the speedometer has the right, the
@@ -57395,9 +57420,25 @@ static void drawFeSweepStatus(C2D_TextBuf buf, const Config* cfg) {
 // satellite" comes and goes.
 #define WBOT_GPS_SCALE 0.75f
 #define WBOT_GPS_PAD   6.0f
-#define WBOT_GPS_COLOR C2D_Color32(230, 190, 130, 255)
+#define WBOT_GPS_COLOR C2D_Color32(130, 190, 230, 255)
+
+// PORT (#546, the user's own): the group follows the GPS Color option (#471).
+// Blue, the default, is retail's own light blue above; any other choice is
+// that colour lifted 45% towards white, the same lift retail's blue has over
+// the rings' (0,128,255), so a dark pick (Purple, Green) still reads over the
+// night city.
+static u32 wbotGpsColour(void) {
+	const u8 idx = gProfile.options.gameplay.gpsColour;
+	if (idx == 0 || idx >= OPTIONS_GPS_COLOURS)
+		return WBOT_GPS_COLOR;
+	const u32 rgb = options_gps_colour_rgb(idx);
+	const int r = (int)((rgb >> 16) & 0xFF), g = (int)((rgb >> 8) & 0xFF), bl = (int)(rgb & 0xFF);
+	return C2D_Color32((u8)(r + (255 - r) * 45 / 100), (u8)(g + (255 - g) * 45 / 100),
+		(u8)(bl + (255 - bl) * 45 / 100), 255);
+}
 
 static void drawWorldGpsSearch(C2D_TextBuf buf, int status) {
+	const u32 gpsCol = wbotGpsColour();
 	const bool lost = status == GPS_STATUS_LOST;
 	const bool noPath = status == GPS_STATUS_NO_PATH;
 	const float s = WBOT_GPS_SCALE;
@@ -57420,17 +57461,17 @@ static void drawWorldGpsSearch(C2D_TextBuf buf, int status) {
 	C2D_Image sat;
 	if (minimap_satellite(g_minimap, &sat)) {
 		C2D_ImageTint tint;
-		C2D_PlainImageTint(&tint, WBOT_GPS_COLOR, 1.0f);
+		C2D_PlainImageTint(&tint, gpsCol, 1.0f);
 		C2D_SetTintMode(C2D_TintMult);
 		C2D_DrawImageAt(sat, gx - 17.0f * s - half, gy - 0.5f * s - half, 0.6f, &tint,
 			2.0f * half / (float)sat.subtex->width, 2.0f * half / (float)sat.subtex->height);
 		C2D_SetTintMode(C2D_TintSolid);
 	}
 	C2D_DrawText(&search, C2D_WithColor, gx + 13.0f * s, gy - 12.0f * s - sh, 0.6f, ts, ts,
-		WBOT_GPS_COLOR);
+		gpsCol);
 	if (lost || noPath) {
 		C2D_DrawText(&err, C2D_WithColor, gx + 13.0f * s, gy + 8.0f * s, 0.6f, ts, ts,
-			WBOT_GPS_COLOR);
+			gpsCol);
 	}
 }
 
@@ -62913,9 +62954,12 @@ static MinimapMode worldMapContent(const MinimapMarker** marksOut, int* countOut
 		g_gpsRouteInfo.walked = 0;
 	}
 	// IsRenderable: with the GPS engaged in a stage, a zone's marker shows
-	// only while it is the GPS's own.
+	// only while it is the GPS's own. PORT (#543, the user 2026-11-22: "when
+	// GPS is activated in free roam ... hides all other minimap icons ...
+	// Only icon that should show is the place you activated GPS for"): in
+	// stage 0 as well, where retail kept every zone.
 	static MinimapMarker gpsMarks[8];
-	if (!g_raceRun.on && gps->engaged && !gps->stageZero) {
+	if (!g_raceRun.on && gps->engaged) {
 		int n = 0;
 		for (int i = 0; i < g_markerCount && n < 8; i++) {
 			if (!g_markerZone[i])
@@ -62937,8 +62981,11 @@ static MinimapMode worldMapContent(const MinimapMarker** marksOut, int* countOut
 	// while the GPS thins the zones out. GetWorldTelemetry reads the car's own
 	// position and heading; Tick pins them at the edge like any other element
 	// (their flags are 0).
+	// PORT (#543): not while the GPS is engaged -- the target is then the
+	// map's only icon. A getaway in progress keeps its racer: that is a race
+	// the player is in, not a map icon.
 	static MinimapMarker freeMarks[WORLD_MAX_MARKERS + ENCOUNTER_CARS];
-	if (!g_raceRun.on && g_enc.on && !(g_wc.active)) {
+	if (!g_raceRun.on && g_enc.on && !(g_wc.active) && (!gps->engaged || g_enc.ga.on)) {
 		int n = 0;
 		for (int i = 0; i < markCount && n < WORLD_MAX_MARKERS; i++)
 			freeMarks[n++] = marks[i];
@@ -63066,7 +63113,7 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 		C2D_TextOptimize(&t);
 		// Below the top corner brackets (128 px of art at MM_BORDER_SCALE), not
 		// across them -- white text over the arc is legible but looks like a bug.
-		C2D_DrawText(&t, C2D_WithColor | C2D_WordWrap, 12.0f, mapY + 72.0f, 0.5f,
+		C2D_DrawText(&t, C2D_WithColor | C2D_WordWrap, mapX + 12.0f, mapY + 72.0f, 0.5f,
 			0.5f, 0.5f, C2D_Color32(255, 255, 255, 255), mapW - 24.0f);
 	}
 
