@@ -120,6 +120,10 @@ extern gxCmdQueue_s __C3D_Context;
 #include "devcmd.h"
 #include "uiaa.h"
 
+// Entering the world primes the sections within this many metres of the car
+// and streams the rest (worldEnter(); DbgPageInM, 0 = the whole wanted ring).
+static float g_pageInNearM = 150.0f;
+
 // The UI font every String is drawn with (TASKS.md #425): Helvetica 67
 // Condensed Medium Oblique, the user's .ttf (repo root), converted to citro2d's
 // .bcfnt glyph-atlas format with devkitPro's mkbcfnt (-s 28: a 41x44 cell, the
@@ -1464,6 +1468,13 @@ static bool loadConfig(int argc, char** argv, Config* out) {
 			g_hlDefer = atoi(val) != 0;     // #412's A/B
 		} else if (strcmp(key, "DbgBeamScissor") == 0) {
 			g_hlScissor = atoi(val) != 0;   // #412's A/B
+		} else if (strcmp(key, "DbgSlowSd") == 0) {
+			// <KB/s>[,<us per call>]: the 3DS card's speed in Azahar (loadpump.h).
+			char* e = NULL;
+			g_slowSdKBs = (u32)strtoul(val, &e, 10);
+			g_slowSdCallUs = (e && *e == ',') ? (u32)strtoul(e + 1, NULL, 10) : 0;
+		} else if (strcmp(key, "DbgPageInM") == 0) {
+			g_pageInNearM = strtof(val, NULL);
 		} else if (strcmp(key, "DbgFramePace") == 0) {
 			g_framePace = atoi(val) != 0;   // #349's A/B: 0 is C3D_FrameSync again
 		} else if (strcmp(key, "DbgBlendCut") == 0) {
@@ -41189,11 +41200,13 @@ static bool worldEnter(const Config* cfg, void (*tick)(void*), void* tickUd) {
 		hfog_close();
 		return false;
 	}
-	// Fill the resident ring before the first frame rather than one section
-	// per frame: entering the world is the one moment a load pause belongs,
-	// and a first frame showing a single tile of a city looks like a bug.
-	// That pause is a second or more of SD reads, which is exactly what the
-	// loading screen `tick` draws over.
+	// Fill the ground round the car before the first frame rather than one
+	// section per frame: a first frame showing a single tile of a city looks
+	// like a bug. But only round the car: the whole 400 m wanted ring was ~32
+	// sections and ~5 s of SD reads (Azahar at card speed, 2026-11-25), most
+	// of it far blocks the streamer brings in on its own within the first
+	// seconds of driving. g_pageInNearM (DbgPageInM) is that radius; 0 fills
+	// the whole ring as before.
 	worldEnterStep("markers + spawn", tick, tickUd);
 	PrimeTick pt = { tick, tickUd };
 	if (tick)
@@ -41202,6 +41215,9 @@ static bool worldEnter(const Config* cfg, void (*tick)(void*), void* tickUd) {
 		if (tick)
 			primeTick(&pt);
 		if (!world_prime(g_world, g_worldPos))
+			break;
+		if (g_pageInNearM > 0.0f &&
+				world_wanted_missing_within(g_world, g_worldPos, g_pageInNearM) == 0)
 			break;
 	}
 	world_set_prime_tick(NULL, NULL);

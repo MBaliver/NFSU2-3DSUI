@@ -77,11 +77,28 @@ void loadpump_take_stats(int* frames, u32* longestMs, u32* drawMs) {
 // frame between them when one is due, and a small one is followed by a poll.
 size_t __real_fread(void* buf, size_t size, size_t n, FILE* f);
 
+u32 g_slowSdKBs, g_slowSdCallUs;
+
+// __real_fread, held to the card's speed when DbgSlowSd asks (loadpump.h).
+static size_t cardFread(void* buf, size_t size, size_t n, FILE* f) {
+	if (!g_slowSdKBs)
+		return __real_fread(buf, size, n, f);
+	const u64 t0 = svcGetSystemTick();
+	const size_t got = __real_fread(buf, size, n, f);
+	// What the card would have taken, in ticks; sleep whatever the host saved.
+	const u64 want = (u64)g_slowSdCallUs * (SYSCLOCK_ARM11 / 1000000)
+		+ (u64)(got * size) * 1000u * TICKS_PER_MS / ((u64)g_slowSdKBs * 1024u);
+	const u64 took = svcGetSystemTick() - t0;
+	if (want > took)
+		svcSleepThread((s64)((want - took) * 1000000000ull / SYSCLOCK_ARM11));
+	return got;
+}
+
 size_t __wrap_fread(void* buf, size_t size, size_t n, FILE* f) {
 	if (!s_tick || size == 0)
-		return __real_fread(buf, size, n, f);
+		return cardFread(buf, size, n, f);
 	if (size * n <= LOADPUMP_READ_PIECE || size > LOADPUMP_READ_PIECE) {
-		const size_t got = __real_fread(buf, size, n, f);
+		const size_t got = cardFread(buf, size, n, f);
 		loadpump_poll();
 		return got;
 	}
@@ -89,7 +106,7 @@ size_t __wrap_fread(void* buf, size_t size, size_t n, FILE* f) {
 	size_t done = 0;
 	while (done < n) {
 		const size_t want = n - done < per ? n - done : per;
-		const size_t got = __real_fread((u8*)buf + done * size, size, want, f);
+		const size_t got = cardFread((u8*)buf + done * size, size, want, f);
 		done += got;
 		loadpump_poll();
 		if (got < want)

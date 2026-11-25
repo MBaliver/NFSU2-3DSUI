@@ -367,6 +367,10 @@ void world_set_groups(World* w, int trackId, int careerStage,
 
 int  world_section_count(const World* w);
 int  world_resident_count(const World* w);
+// Wanted, drivable sections within `radius` m of `pos` that are not loaded
+// yet: what a first frame there would show as holes. Entering the world
+// primes until this is 0 for a short radius and leaves the rest to streaming.
+int  world_wanted_missing_within(const World* w, const float pos[3], float radius);
 // How many sections the last world_draw() submitted after distance and frustum
 // culling. The resident count alone says nothing about what a frame costs.
 int  world_drawn_count(const World* w);

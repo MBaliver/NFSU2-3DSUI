@@ -41,4 +41,10 @@ void loadpump_mark(u64 frameTicks);
 // drawing them since the last call, for the load log.
 void loadpump_take_stats(int* frames, u32* longestMs, u32* drawMs);
 
+// DbgSlowSd=<KB/s>[,<us per call>] (config): every fread() takes at least
+// what the 3DS card would -- bytes at that rate plus a fixed cost per call --
+// by sleeping the rest. Azahar reads off the host disk, so a load or a
+// stream that would stall on hardware shows up in the emulator too. 0 = off.
+extern u32 g_slowSdKBs, g_slowSdCallUs;
+
 #endif

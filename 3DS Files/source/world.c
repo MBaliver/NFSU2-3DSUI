@@ -5377,6 +5377,20 @@ int world_resident_count(const World* w) {
 	return w ? w->resident : 0;
 }
 
+int world_wanted_missing_within(const World* w, const float pos[3], float radius) {
+	if (!w)
+		return 0;
+	const float r2 = radius * radius;
+	int n = 0;
+	for (int i = 0; i < w->count; i++) {
+		const WorldSection* s = &w->secs[i];
+		if (s->tier == STREAM_WANTED && !s->model && !s->failed && !(s->flags & SECTION_FAR) &&
+				distSqToBox(s, pos) <= r2)
+			n++;
+	}
+	return n;
+}
+
 u32 world_resident_bytes(const World* w) {
 	// Section blobs plus the bank pixels they are holding resident -- the two
 	// halves of what the world is actually costing, and what the budget in
