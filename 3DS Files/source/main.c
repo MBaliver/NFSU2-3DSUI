@@ -26958,7 +26958,7 @@ static void wmScrollRegion(MenuState* m, int dir, u64 now, float dt, const char*
 // the current node sits -- and a drag up or down the strip steps the
 // selection a node per stride of travel, the way the strip itself moves. The
 // region arrows and the side arrows take a tap while RefreshHeader shows them.
-#define WM_TOUCH_MIN_PX 24.0f
+#define WM_TOUCH_MIN_PX 32.0f
 static bool fskLive(const MenuState* m);
 static void wmTouch(MenuState* m, const Config* cfg, MenuState* dlg, u64 now, float dt) {
 	static bool s_stripDrag = false;
@@ -27059,7 +27059,7 @@ static void wmTouch(MenuState* m, const Config* cfg, MenuState* dlg, u64 now, fl
 //
 // The world map has its own (wmTouch()). Returns the keys to OR into this
 // frame's kDown; `kDown` is the pad's own, any press of which ends a queue.
-#define FE_TOUCH_MIN_PX 24.0f
+#define FE_TOUCH_MIN_PX 32.0f
 #define FE_TOUCH_CAR_STRIDE 40.0f
 static int s_feTouchSteps = 0;
 static u32 s_feTouchKey = 0;
@@ -49432,7 +49432,7 @@ static bool shootSaveTick(const Config* cfg, MenuState* m) {
 }
 
 // A tap on button k: its String or anything in its box.
-#define SHOOT_TOUCH_MIN_PX 24.0f
+#define SHOOT_TOUCH_MIN_PX 32.0f
 static bool shootButtonHit(MenuState* m, int k) {
 	const int n = m->screen.widgetCount < FNG_MAX_WIDGETS ? m->screen.widgetCount : FNG_MAX_WIDGETS;
 	if (g_shoot.btn[k] < 0 || m->layoutHidden[g_shoot.btn[k]])
@@ -57478,7 +57478,7 @@ static void drawWorldFeed(C2D_TextBuf buf, float x, float bottom) {
 	// Bottom-anchored, newest lowest, chips in the HUD kit's style (drawn
 	// after it is defined, so only the shapes are repeated here).
 	const u64 now = osGetTime();
-	const float px = 13.0f, sc = px / g_fontUnitPx, h = 22.0f;
+	const float px = 14.0f, sc = px / g_fontUnitPx, h = 22.0f;
 	x = 0.0f; // U2-UI: a tab off the left edge
 	float y = bottom - h;
 	for (int i = 0; i < WBOT_FEED_N; i++) {
@@ -58679,7 +58679,7 @@ static bool drawUiSmsReader(const MenuState* m) {
 	char fl[96];
 	snprintf(fl, sizeof(fl), portstr(PS_FROM_FMT), from);
 	portstr_upper(fl);
-	uiText(buf, fl, 11.0f, hx, 10.0f, 0, UI_ACCENT, W - hx - 8.0f);
+	uiText(buf, fl, 12.0f, hx, 10.0f, 0, UI_ACCENT, W - hx - 8.0f);
 	uiText(buf, subj, 15.0f, hx, 25.0f, 0, UI_WHITE, W - hx - 8.0f);
 	// The body.
 	const float by = UI_HEAD_H + 8.0f, bh = H - UI_FOOT_H - 8.0f - by, lh = 19.0f;
@@ -59474,14 +59474,11 @@ static bool drawUiIconGrid(const MenuState* m) {
 			else if (m->hasItemLabel[i])
 				uiCText(&m->itemLabels[i], 18.0f, x + tw * 0.5f, nameY, 1, ink, tw - 12.0f);
 		} else {
-			// The name, wrapped under the icon: two lines at 12 px, three at 11.
-			float px = 12.0f;
+			// The name, wrapped under the icon at 12 px (the label floor), up
+			// to three lines -- the icon gives way, the text does not shrink.
+			const float px = 12.0f;
 			static char wr[256];
-			int lines = name[0] ? uiWrap(buf, name, px, tw - 8.0f, wr, sizeof(wr)) : (m->hasItemLabel[i] ? 1 : 0);
-			if (lines > 2 && name[0]) {
-				px = 11.0f;
-				lines = uiWrap(buf, name, px, tw - 8.0f, wr, sizeof(wr));
-			}
+			const int lines = name[0] ? uiWrap(buf, name, px, tw - 8.0f, wr, sizeof(wr)) : (m->hasItemLabel[i] ? 1 : 0);
 			const float lh = px + 1.0f, textH = (float)(lines < 3 ? lines : 3) * lh;
 			const float room = th - textH - 12.0f;
 			const float iw = fminf(tw - 10.0f, 92.0f);
@@ -59916,7 +59913,9 @@ static bool drawUiTrackSelect(const MenuState* m) {
 	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_TRACK_SELECT),
 		feHelpHash(m->screenName) != 0);
 	// ---- the map and the selected track's numbers ----
-	const float y0 = UI_HEAD_H + 6.0f, mapS = 116.0f, mx = 8.0f;
+	// The map 100 px square, so its three facts (race type, distance, best)
+	// stay above the footer: at 116 the best time sat under it.
+	const float y0 = UI_HEAD_H + 6.0f, mapS = 100.0f, mx = 8.0f;
 	uiRoundRect(mx, y0, mapS, mapS, 3.0f, UI_Z, UI_DEEP);
 	uiRing(mx, y0, mapS, mapS, 3.0f, 1.0f, UI_Z + 0.005f, C2D_Color32(255, 255, 255, 40));
 	if (m->trackMap.valid && m->trackMap.image.subtex && m->trackMap.image.subtex->width > 0) {
@@ -59940,7 +59939,7 @@ static bool drawUiTrackSelect(const MenuState* m) {
 		uiCText(&m->itemBestText[sel], 14.0f, mx + mapS, iy, 2, UI_WHITE, mapS * 0.6f);
 	}
 	// ---- the tracks ----
-	const float lx = mx + mapS + 8.0f, rowH = 28.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const float lx = mx + mapS + 8.0f, rowH = 32.0f, bottom = H - UI_FOOT_H - 4.0f;
 	const int vis = (int)((bottom - y0) / rowH);
 	const int top = uiListTop(sel, n, vis, &s_top);
 	const float lw = W - lx - 8.0f - (n > vis ? 10.0f : 0.0f);
@@ -59994,7 +59993,7 @@ static bool drawUiPerfPackage(const MenuState* m) {
 	if (pp->browsing && g_perfMenu.loaded) {
 		// ---- the parts list ----
 		const int n = perfPartsRows();
-		const float rowH = 30.0f;
+		const float rowH = 32.0f;
 		const int vis = (int)((bottom - y0) / rowH);
 		const int top = uiListTop(pp->sel, n, vis, &s_top);
 		g_fskListSel = pp->sel;
@@ -60158,7 +60157,7 @@ static bool drawUiMcList(const MenuState* m) {
 	uiSkinHeader(buf, boot ? portstr(PS_BOOT_NO_PROFILE) : portstr(PS_BACK),
 		m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_PROFILES),
 		!boot && feHelpHash(m->screenName) != 0);
-	const float y0 = UI_HEAD_H + 6.0f, rowH = 30.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const float y0 = UI_HEAD_H + 6.0f, rowH = 32.0f, bottom = H - UI_FOOT_H - 4.0f;
 	const int vis = (int)((bottom - y0) / rowH), n = m->listCount;
 	g_fskListSel = m->listSel;
 	const float rw = W - 16.0f - (n > MCLIST_VISIBLE_ROWS ? 10.0f : 0.0f);
@@ -60210,7 +60209,9 @@ static bool drawUiTrax(const MenuState* m) {
 	uiSkinHeader(buf, portstr(PS_BACK), m->hasScreenTitle ? &m->screenTitleText : NULL, portstr(PS_T_TRAX),
 		feHelpHash(m->screenName) != 0);
 	// ---- the play order ----
-	const float ty = UI_HEAD_H + 6.0f, th = 22.0f, fw = W - 16.0f;
+	// The order strip's target is 32 px tall, from the header down, and the
+	// four song rows 32 px each (the touch floor), the footer's margin 2 px.
+	const float ty = UI_HEAD_H + 4.0f, th = 22.0f, fw = W - 16.0f;
 	uiRoundRect(8.0f, ty, fw, th, th * 0.5f, UI_Z, UI_DEEP);
 	uiRing(8.0f, ty, fw, th, th * 0.5f, 1.0f, UI_Z + 0.005f, C2D_Color32(255, 255, 255, 61));
 	drawPadGlyph('L', 8.0f + 14.0f, ty + th * 0.5f, 12.0f, UI_Z + 0.04f);
@@ -60218,9 +60219,9 @@ static bool drawUiTrax(const MenuState* m) {
 	const char* order = m->traxModeStr[gProfile.options.audio.playOrder ? 1 : 0];
 	uiText(buf, order[0] ? order : portstr(gProfile.options.audio.playOrder ? PS_RANDOM : PS_SEQUENTIAL), 13.0f,
 		W * 0.5f, ty + th * 0.5f, 1, UI_ACCENT, fw - 60.0f);
-	fskHit(8.0f, ty - 3.0f, fw, th + 6.0f, FSK_KEY, KEY_R);
+	fskHit(8.0f, UI_HEAD_H, fw, 32.0f, FSK_KEY, KEY_R);
 	// ---- the songs ----
-	const float y0 = ty + th + 6.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const float y0 = UI_HEAD_H + 32.0f, bottom = H - UI_FOOT_H - 2.0f;
 	const float rowH = (bottom - y0) / (float)EATRAX_VISIBLE_ROWS;
 	g_fskListSel = m->traxSel;
 	const float rw = W - 16.0f - 10.0f, valW = 74.0f;
@@ -60247,7 +60248,7 @@ static bool drawUiTrax(const MenuState* m) {
 		uiArrow(vx + 5.0f, y + h * 0.5f, (float)M_PI, 4.5f, ac);
 		uiArrow(vx + valW - 5.0f, y + h * 0.5f, 0.0f, 4.5f, ac);
 		if (cell[4] >= 0 && m->hasText[cell[4]])
-			uiCText(&m->texts[cell[4]], 13.0f, vx + valW * 0.5f, y + h * 0.5f, 1, UI_WHITE, valW - 20.0f);
+			uiCText(&m->texts[cell[4]], 14.0f, vx + valW * 0.5f, y + h * 0.5f, 1, UI_WHITE, valW - 20.0f);
 		fskHit(8.0f, y, vx - 8.0f, h + 4.0f, FSK_LIST, (u32)r);
 		if (cur) {
 			fskHit(vx - 4.0f, y, valW * 0.5f + 4.0f, h + 4.0f, FSK_KEY, KEY_LEFT);
@@ -60355,7 +60356,7 @@ static bool drawUiTuneGraph(const MenuState* m) {
 		C2D_DrawRectSolid(gx, y, UI_Z + 0.005f, gw, 1.0f, C2D_Color32(255, 255, 255, 22));
 		char t[16];
 		snprintf(t, sizeof(t), "%d", (int)(g_tgraph.gmin + range * (float)k / 5.0f + 0.5f));
-		uiText(buf, t, 10.0f, gx - 4.0f, y, 2, UI_DIM, 0.0f);
+		uiText(buf, t, 12.0f, gx - 4.0f, y, 2, UI_DIM, 0.0f);
 	}
 	const float step = gw / (float)n, bw = step * 0.62f;
 	for (int i = 0; i < n; i++) {
@@ -60374,10 +60375,10 @@ static bool drawUiTuneGraph(const MenuState* m) {
 		if (cur) {
 			char t[16];
 			snprintf(t, sizeof(t), "%.0f", (double)g_tgraph.cur[i]);
-			uiText(buf, t, 13.0f, cx, fmaxf(gy + 6.0f, yv - 12.0f), 1, UI_ACCENT, 0.0f);
+			uiText(buf, t, 14.0f, cx, fmaxf(gy + 6.0f, yv - 12.0f), 1, UI_ACCENT, 0.0f);
 		}
 	}
-	uiText(buf, portstr(PS_TUNE_HINT), 10.0f, W * 0.5f, UI_HEAD_H + 9.0f, 1, UI_DIM, 0.0f);
+	uiText(buf, portstr(PS_TUNE_HINT), 12.0f, W * 0.5f, UI_HEAD_H + 9.0f, 1, UI_DIM, 0.0f);
 	const UiAct acts[2] = { { portstr(PS_TIP), 'X', KEY_X, false }, { portstr(PS_RESET), 'Y', KEY_Y, false } };
 	uiSkinFooter(buf, acts, 2);
 	return true;
@@ -60427,8 +60428,8 @@ static bool drawUiTuneNos(const MenuState* m) {
 	C2D_DrawCircleSolid(g_uiNos.knob, sy, UI_Z + 0.02f, 6.5f, UI_ACCENT);
 	uiArrow(gx + 8.0f, sy, (float)M_PI, 6.0f, UI_WHITE);
 	uiArrow(gx + gw - 8.0f, sy, 0.0f, 6.0f, UI_WHITE);
-	fskHit(gx - 6.0f, sy - 14.0f, 26.0f, 28.0f, FSK_KEY, KEY_LEFT);
-	fskHit(gx + gw - 20.0f, sy - 14.0f, 26.0f, 28.0f, FSK_KEY, KEY_RIGHT);
+	fskHit(gx - 9.0f, sy - 16.0f, 32.0f, 32.0f, FSK_KEY, KEY_LEFT);
+	fskHit(gx + gw - 23.0f, sy - 16.0f, 32.0f, 32.0f, FSK_KEY, KEY_RIGHT);
 	const UiAct acts[2] = { { portstr(PS_TIP), 'X', KEY_X, false }, { portstr(PS_RESET), 'Y', KEY_Y, false } };
 	uiSkinFooter(buf, acts, 2);
 	return true;
@@ -60463,15 +60464,15 @@ static bool drawUiDynoChart(const MenuState* m) {
 		C2D_DrawRectSolid(gx, y, UI_Z + 0.005f, gw, 1.0f, C2D_Color32(255, 255, 255, 20));
 		char t[16];
 		snprintf(t, sizeof(t), "%d", (int)((float)k * hpMax / 5.0f + 0.5f));
-		uiText(buf, t, 9.0f, gx - 3.0f, y, 2, ch, 0.0f);
+		uiText(buf, t, 12.0f, gx - 3.0f, y, 2, ch, 0.0f);
 		snprintf(t, sizeof(t), "%d", (int)((float)k * tqMax / 5.0f + 0.5f));
-		uiText(buf, t, 9.0f, gx + gw + 3.0f, y, 0, ct, 0.0f);
+		uiText(buf, t, 12.0f, gx + gw + 3.0f, y, 0, ct, 0.0f);
 	}
 	for (int k = 1; k <= 9; k++) {
 		const float x = gx + gw * (float)k / 10.0f;
 		C2D_DrawRectSolid(x, gy, UI_Z + 0.005f, 1.0f, gh, C2D_Color32(255, 255, 255, 12));
 	}
-	uiText(buf, portstr(PS_RPM_AXIS), 9.0f, gx + gw, gy + gh + 9.0f, 2, UI_DIM, 0.0f);
+	uiText(buf, portstr(PS_RPM_AXIS), 12.0f, gx + gw, gy + gh + 9.0f, 2, UI_DIM, 0.0f);
 	const DynoRecord* r = &g_dynoLive;
 	const float p = dynoProgress();
 	const float upTo = done ? 1.0e9f : p * (r->limiter - 200.0f);
@@ -60595,7 +60596,7 @@ static bool drawUiCribMap(const MenuState* m) {
 			fskHit(sx + sw * 0.5f, 0.0f, sw * 0.5f + 4.0f, UI_HEAD_H, FSK_KEY, KEY_RIGHT);
 	}
 	// ---- the events ----
-	const float y0 = UI_HEAD_H + 6.0f, rowH = 26.0f, bottom = H - UI_FOOT_H - 4.0f;
+	const float y0 = UI_HEAD_H + 6.0f, rowH = 32.0f, bottom = H - UI_FOOT_H - 4.0f;
 	const float lw = 150.0f;
 	const int n = cm->nodeCount, vis = (int)((bottom - y0) / rowH);
 	const int top = uiListTop(cm->current, n, vis, &s_top);
@@ -60694,7 +60695,8 @@ static bool drawUiRows(const MenuState* m) {
 		feHelpHash(m->screenName) != 0);
 	// The Quick Race pages go on with A; the options page saves on Back.
 	const bool foot = !m->modeIsOptions;
-	const float y0 = UI_HEAD_H + 6.0f, rowH = 31.0f, bottom = foot ? H - UI_FOOT_H - 4.0f : H - 4.0f;
+	// PORT: 32 px a row, the touch target its whole pitch (the floor).
+	const float y0 = UI_HEAD_H + 6.0f, rowH = 32.0f, bottom = foot ? H - UI_FOOT_H - 4.0f : H - 4.0f;
 	const int n = m->modeRowCount, vis = (int)((bottom - y0) / rowH);
 	const int sel = m->modeRowSel;
 	if (s_for != m) {
@@ -60724,8 +60726,8 @@ static bool drawUiRows(const MenuState* m) {
 			if (f > 0.0f)
 				uiRoundRect(bx, cy - 3.0f, fmaxf(6.0f, bw * f), 6.0f, 3.0f, UI_Z + 0.015f, UI_ACCENT);
 			C2D_DrawCircleSolid(bx + bw * f, cy, UI_Z + 0.02f, 6.0f, UI_WHITE);
-			fskHit(vx, y, valW * 0.5f, h, FSK_ROWL, (u32)r);
-			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, h, FSK_ROWR, (u32)r);
+			fskHit(vx, y, valW * 0.5f, rowH, FSK_ROWL, (u32)r);
+			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, rowH, FSK_ROWR, (u32)r);
 		} else if (m->modeIsTune && r < OPTIONS_MAX_ROWS) {
 			// A tuning slider: the tuneable range shaded over the bar, the
 			// value's knob, the number above it.
@@ -60737,19 +60739,19 @@ static bool drawUiRows(const MenuState* m) {
 					C2D_Color32(255, 255, 255, 70));
 			C2D_DrawCircleSolid(bx + bw * f[1], by, UI_Z + 0.02f, 4.5f, cur ? UI_ACCENT : UI_WHITE);
 			if (m->hasModeRowValue[r])
-				uiCText(&m->modeRowValue[r], 13.0f, vx + valW * 0.5f, cy - 6.0f, 1, UI_WHITE, valW - 16.0f);
-			fskHit(vx - 4.0f, y, valW * 0.5f + 4.0f, h, FSK_ROWL, (u32)r);
-			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, h, FSK_ROWR, (u32)r);
+				uiCText(&m->modeRowValue[r], 14.0f, vx + valW * 0.5f, cy - 6.0f, 1, UI_WHITE, valW - 16.0f);
+			fskHit(vx - 4.0f, y, valW * 0.5f + 4.0f, rowH, FSK_ROWL, (u32)r);
+			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, rowH, FSK_ROWR, (u32)r);
 		} else if (!button) {
 			const u32 ac = cur ? UI_ACCENT : UI_DIM;
 			uiArrow(vx + 6.0f, cy, (float)M_PI, 5.0f, ac);
 			uiArrow(vx + valW - 6.0f, cy, 0.0f, 5.0f, ac);
 			if (m->hasModeRowValue[r])
 				uiCText(&m->modeRowValue[r], 15.0f, vx + valW * 0.5f, cy, 1, UI_WHITE, valW - 28.0f);
-			fskHit(vx - 4.0f, y, valW * 0.5f + 4.0f, h, FSK_ROWL, (u32)r);
-			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, h, FSK_ROWR, (u32)r);
+			fskHit(vx - 4.0f, y, valW * 0.5f + 4.0f, rowH, FSK_ROWL, (u32)r);
+			fskHit(vx + valW * 0.5f, y, valW * 0.5f + 10.0f, rowH, FSK_ROWR, (u32)r);
 		}
-		fskHit(rx, y, button ? rw : rw - valW - 10.0f, h, button ? FSK_ROWA : FSK_ROW, (u32)r);
+		fskHit(rx, y, button ? rw : rw - valW - 10.0f, rowH, button ? FSK_ROWA : FSK_ROW, (u32)r);
 	}
 	uiListBar(s_top, vis, n, y0, rowH);
 	if (foot && m->modeIsTune) {
@@ -62061,7 +62063,7 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 				snprintf(nm, sizeof(nm), portstr(PS_RACER_FMT), rw->place);
 			const u32 gc = st->drift ? UI_DIM : (meRow >= 0 && i < meRow ? UI_AHEAD : UI_BEHIND);
 			const float fw = rw->figure[0]
-				? uiText(buf, rw->figure, 13.0f, cx0 + cw - 14.0f, rcy, 2, gc, 0.0f) : 0.0f;
+				? uiText(buf, rw->figure, 14.0f, cx0 + cw - 14.0f, rcy, 2, gc, 0.0f) : 0.0f;
 			uiText(buf, p, 14.0f, cx0 + 18.0f, rcy, 1, rw->me ? UI_ACCENT : UI_DIM, 0.0f);
 			uiText(buf, nm, 15.0f, cx0 + 30.0f, rcy, 0, rw->me ? UI_ACCENT : UI_WHITE,
 				cw - 44.0f - fw - 6.0f);
@@ -64320,7 +64322,7 @@ static bool drawUiLan(const MenuState* m) {
 				W * 0.5f, (y0 + bottom) * 0.5f, 1, UI_DIM, W - 32.0f);
 			break;
 		}
-		const float rowH = 28.0f;
+		const float rowH = 32.0f;
 		const int vis = (int)((bottom - y0) / rowH);
 		const int top = uiListTop(m->lanSel, n, vis, &s_top);
 		const float rw = W - 16.0f - (n > vis ? 10.0f : 0.0f);
