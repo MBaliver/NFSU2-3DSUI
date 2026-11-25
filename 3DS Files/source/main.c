@@ -51507,14 +51507,17 @@ static void worldInput(u32 kHeld, u32 kDown, float dt) {
 			}
 			accelVector av = { 0, 0, 0 };
 			hidAccelRead(&av);
-			// 3DS landscape: 1G ~= 512 raw units; +X tilts right (turn right -> negative steer).
+			// 3DS landscape: 1G ~= 512 raw units. Tilting the console right
+			// reads -X on hardware (the user, 2026-11-25: "the motion control
+			// is inverted" with +X taken as right), and a right turn is a
+			// negative steer, so the raw X is the steer's own sign.
 			// Deadzone ~4 deg (35), full lock ~38 deg (315), low-pass smoothed.
 			s_motionFilt += ((float)av.x - s_motionFilt) * 0.35f;
 			const float dead = 35.0f, full = 315.0f;
 			const float mag = fabsf(s_motionFilt);
 			if (mag > dead) {
 				const float norm = fminf(1.0f, (mag - dead) / (full - dead));
-				steer -= (s_motionFilt > 0.0f ? norm : -norm);
+				steer += (s_motionFilt > 0.0f ? norm : -norm);
 			}
 		} else if (s_accelOn) {
 			HIDUSER_DisableAccelerometer();
