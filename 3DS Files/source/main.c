@@ -61130,6 +61130,7 @@ static struct {
 // path (-1 off it), the points it walked, and what the walk took.
 static GpsRouteInfo g_gpsRouteInfo = { -1.0f, 0 };
 static float g_gpsWalkMs, g_gpsWalkMaxMs;
+static u64 g_gpsRouteAt;   // osGetTime() of that walk
 
 // A marker's kind as the tools sort them; -1 for none of theirs.
 static int dtMarkerKind(int i) {
@@ -61691,8 +61692,29 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 		if (dest >= 0) {
 			const float dx = g_markers[dest].worldX - g_worldPos[0];
 			const float dy = g_markers[dest].worldY - g_worldPos[1];
+			// PORT: with the GPS following a path, the road still ahead -- the
+			// route walk's own sum (worldMapContent(), 4 a second) -- rather
+			// than the straight line, which reads 18-27 % short across town.
+			// The straight line while it searches, with it off (Nearest) or
+			// once the car has been off the path a second: held that long so
+			// a wheel over the kerb does not flick the figure. A new target
+			// drops the last one's road at once.
+			static float s_roadM = -1.0f;
+			static u64 s_roadAt = 0, s_destAt = 0;
+			static int s_roadDest = -1;
+			const u64 nowMs = osGetTime();
+			if (dest != s_roadDest) {
+				s_roadDest = dest;
+				s_roadM = -1.0f;
+				s_destAt = nowMs;
+			}
+			if (gpsOn && g_gpsRouteInfo.aheadM >= 0.0f && g_gpsRouteAt > s_destAt) {
+				s_roadM = g_gpsRouteInfo.aheadM;
+				s_roadAt = nowMs;
+			}
+			const bool road = gpsOn && s_roadM >= 0.0f && nowMs - s_roadAt < 1000;
 			char d[24];
-			uiDistance(sqrtf(dx * dx + dy * dy), d, sizeof(d));
+			uiDistance(road ? s_roadM : sqrtf(dx * dx + dy * dy), d, sizeof(d));
 			const float dw = uiText(buf, d, 16.0f, right, cy, 2, UI_WHITE, 0.0f);
 			// The way to it, as the map shows it.
 			float cxp, cyp, txp, typ;
@@ -62676,6 +62698,7 @@ static MinimapMode worldMapContent(const MinimapMarker** marksOut, int* countOut
 			// GPS readout), and what it costs.
 			const u64 t0 = svcGetSystemTick();
 			s_routeN = gps_route_polyline(g_worldPos, s_route, 512, 6.0f, &g_gpsRouteInfo);
+			g_gpsRouteAt = nowMs;
 			g_gpsWalkMs = (float)TKMS(t0, svcGetSystemTick());
 			if (g_gpsWalkMs > g_gpsWalkMaxMs)
 				g_gpsWalkMaxMs = g_gpsWalkMs;
