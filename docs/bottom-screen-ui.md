@@ -354,6 +354,17 @@ HUD, which stay on the top screen.
   the current race panel, the GPS route and target colours, the finish flag,
   the Drag Shift option, and the reskinned dialogs, World Map, mailbox and
   reader. Feedback from a play session is still pending.
-- Known gaps: no AI cars on the reskinned World Map; the help dialog and
-  engage dialogs keep the old layout; the GPS distance is a straight line,
-  not along the route.
+- Seen in Azahar (2026-11-25, through the debug tools): the help dialog
+  (`drawUiHelp`) and the race, shop and garage engage dialogs
+  (`drawUiEngage`) in the kit. The showcase and world challenge engage
+  dialogs, and the challenge's failure and uniques dialogs, need a career
+  that has them; not seen yet.
+- Known gaps: no AI cars on the reskinned World Map; the destination
+  strip's distance is a straight line, not along the route (the route's own
+  length is measured, `gps_route_polyline`'s `GpsRouteInfo`, and shown by
+  the debug tools' GPS readout).
+- The debug tools (L + R + SELECT with `DevCommands=1` or
+  `DebugMenuEnabled=1`, or the command file's `dbg ID`, devcmd.h) raise
+  each of these for real: the car teleported into a race start, shop,
+  showcase or challenge zone and the Enter press made, a screen's help, and
+  the GPS sent to a race from the nearest road.

@@ -2461,7 +2461,12 @@ float gps_intersection_length(int i, int side, bool fwd) {
 	return -(a < b ? a : b);
 }
 
-int gps_route_polyline(const float carPos[2], float (*out)[2], int max, float stepM) {
+int gps_route_polyline(const float carPos[2], float (*out)[2], int max, float stepM,
+		GpsRouteInfo* info) {
+	if (info) {
+		info->aheadM = -1.0f;
+		info->walked = 0;
+	}
 	if (!mgr.started || ctl.state != 1 || gn != &g_net[GPS_NET_FREEROAM] || !gn->loaded ||
 			max < 2)
 		return 0;
@@ -2469,11 +2474,14 @@ int gps_route_polyline(const float carPos[2], float (*out)[2], int max, float st
 	int p = n->start;
 	bool fwd = n->startFwd;
 	int decIdx = 0;
-	int count = 0, carAt = -1;
+	int count = 0, carAt = -1, guard = 0;
 	float lx = 0.0f, ly = 0.0f;
+	// The road still ahead, summed over every point from the one after the
+	// car's (the car stands somewhere on its own point's stretch).
+	float ahead = 0.0f, ax = 0.0f, ay = 0.0f;
 	// The whole path is walked; output restarts where the car is found on it,
 	// so a car part-way along gets only the road still ahead.
-	for (int guard = 0; p >= 0 && guard < 40000; guard++) {
+	for (; p >= 0 && guard < 40000; guard++) {
 		if (carAt < 0 && ptOutLateral(p, carPos[0], carPos[1]) < 5.0f &&
 				ptOutAlong(p, carPos[0], carPos[1]) < 5.0f) {
 			carAt = p;
@@ -2483,8 +2491,16 @@ int gps_route_polyline(const float carPos[2], float (*out)[2], int max, float st
 			lx = carPos[0];
 			ly = carPos[1];
 			count++;
+			ahead = 0.0f;
+			ax = carPos[0];
+			ay = carPos[1];
 		}
 		const float x = ptX(p), y = ptY(p);
+		if (carAt >= 0 && p != carAt) {
+			ahead += hypotf(x - ax, y - ay);
+			ax = x;
+			ay = y;
+		}
 		if (count == 0 || hypotf(x - lx, y - ly) >= stepM) {
 			if (count < max - 1) {
 				out[count][0] = x;
@@ -2495,8 +2511,11 @@ int gps_route_polyline(const float carPos[2], float (*out)[2], int max, float st
 			ly = y;
 		}
 		if (ptOutLateral(p, n->goal[0], n->goal[1]) < 0.0f &&
-				ptOutAlong(p, n->goal[0], n->goal[1]) < 0.0f)
+				ptOutAlong(p, n->goal[0], n->goal[1]) < 0.0f) {
+			if (carAt >= 0)
+				ahead += hypotf(n->goal[0] - ax, n->goal[1] - ay);
 			break;
+		}
 		int taken = -1;
 		bool plain = false;
 		const int ns = ptNumSigns(p);
@@ -2532,6 +2551,10 @@ int gps_route_polyline(const float carPos[2], float (*out)[2], int max, float st
 		out[count][0] = n->goal[0];
 		out[count][1] = n->goal[1];
 		count++;
+	}
+	if (info) {
+		info->walked = guard + 1;
+		info->aheadM = carAt >= 0 ? ahead : -1.0f;
 	}
 	return count;
 }

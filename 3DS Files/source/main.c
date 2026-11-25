@@ -472,6 +472,8 @@ static void loadTimeEnd(const char* step) {
 //                    (Azahar). Default 0.
 //   DevCommands      1 lets the PC drive the game through sdmc:/nfsu2_cmd.txt
 //                    (buttons, touch, sticks, screenshots; devcmd.h). Default 0.
+//                    With it (or DebugMenuEnabled=1), L + R + SELECT opens the
+//                    debug tools on the lower screen (dbgToolsTick()).
 //   Language         EN, FR, DE, IT, ES, NL, SV, DA (or the name): which
 //                    LANGUAGES/<name>.bin replaces English.bin, when it is on
 //                    the card. Default English. Read at boot only.
@@ -61077,6 +61079,458 @@ static bool drawUiHelp(const MenuState* m) {
 	return true;
 }
 
+// ------------------------------------------------------------ the debug tools
+//
+// PORT (a development aid, the user's ask 2026-11-25): a menu over the lower
+// screen that puts the game where a screen can be checked -- the engage
+// dialogs raised for real at a race start, a shop, a showcase or a world
+// challenge (the car teleported into the zone, then the Enter press), the
+// screen's help, the GPS sent to a race with a readout of its straight and
+// route distances. L + R held and SELECT pressed opens it anywhere, with
+// DevCommands=1 or DebugMenuEnabled=1; while it is up the game gets no input
+// (devcmd.h, the grab). The command file's `dbg ID` runs an item without it.
+// Not the Debug Menu (#448), the main menu's page of Dbg* settings.
+typedef enum {
+	DT_RACE, DT_SHOP, DT_SHOWCASE, DT_CHALLENGE, DT_GPS, DT_GPSINFO, DT_HELP, DT_N
+} DtItem;
+static const char* const kDtId[DT_N] = {
+	"race", "shop", "showcase", "challenge", "gps", "gpsinfo", "help",
+};
+static const char* const kDtName[DT_N] = {
+	"Race offer", "Shop entry", "Showcase offer", "World challenge", "GPS to a race",
+	"GPS readout", "Screen help",
+};
+// What each one does, on the menu's foot for the selected row.
+static const char* const kDtWhat[DT_N] = {
+	"Teleport to the next race start, raise its dialog",
+	"Teleport to the next shop, raise its dialog",
+	"Teleport to the next showcase, raise its dialog",
+	"Teleport to the next world challenge, raise its dialog",
+	"Car onto the nearest road, GPS to the next race start",
+	"Show the GPS's straight and route distances",
+	"Open this screen's help (ZL)",
+};
+static struct {
+	bool on;            // allowed: DevCommands=1 or DebugMenuEnabled=1
+	bool open;
+	int  sel;           // in rows[]
+	DtItem rows[DT_N];
+	int  rowN;
+	int  next[DT_N];    // each kind's next marker, cycling through them
+	bool gpsInfo;
+	int  enterIn;       // scans to the Enter press after a teleport
+	bool touchWas;
+	char note[96];      // the last item's outcome, until the selection moves
+	// This scan's context, from main().
+	bool world;         // career free roam, driving, no overlay up
+	bool fe;            // a frontend screen
+	const char* screen;
+} g_dt;
+// The GPS's route walk, kept by worldMapContent(): metres ahead along the
+// path (-1 off it), the points it walked, and what the walk took.
+static GpsRouteInfo g_gpsRouteInfo = { -1.0f, 0 };
+static float g_gpsWalkMs, g_gpsWalkMaxMs;
+
+// A marker's kind as the tools sort them; -1 for none of theirs.
+static int dtMarkerKind(int i) {
+	const TrackPathZone* z = g_markerZone[i];
+	if (!z)
+		return -1;
+	const u8 el = g_markers[i].element;
+	if (el >= MINIMAP_ELEM_CRIB && el <= MINIMAP_ELEM_CARLOT)
+		return DT_SHOP;
+	if (el >= MINIMAP_ELEM_CIRCUITEVENT)
+		return DT_RACE;
+	if (el == MINIMAP_ELEM_SHOWCASE)
+		return eventdb_showcase_by_trigger(&g_shops, trackpath_handle(z)) ? DT_SHOWCASE : DT_CHALLENGE;
+	return -1;
+}
+static int dtMarkerCount(int kind) {
+	int n = 0;
+	for (int i = 0; i < g_markerCount; i++)
+		n += dtMarkerKind(i) == kind;
+	return n;
+}
+static int dtMarkerNth(int kind, int nth) {
+	for (int i = 0; i < g_markerCount; i++)
+		if (dtMarkerKind(i) == kind && nth-- == 0)
+			return i;
+	return -1;
+}
+// The marker list an item walks: the GPS's is the race starts.
+static int dtKindOf(DtItem k) {
+	return k == DT_GPS ? DT_RACE : (int)k;
+}
+
+static bool dtInZone(const TrackPathZone* z, float x, float y) {
+	const u32 type = z->type;
+	for (const TrackPathZone* f = trackpath_find(g_paths, x, y, type, NULL); f;
+			f = trackpath_find(g_paths, x, y, type, f))
+		if (f == z)
+			return true;
+	return false;
+}
+
+// The car put down inside `z`, standing, facing the zone's way: the box's
+// middle when it is inside the polygon, else the entry point or between the
+// two. The ground found the way worldResetToZonePoint() finds it, but the
+// car is placed without the reset's roll, so it stays in the zone.
+static void dtTeleportInto(const TrackPathZone* z) {
+	const float ex = z->entry[0], ey = z->entry[1];
+	const float bx = (z->bbMin[0] + z->bbMax[0]) * 0.5f, by = (z->bbMin[1] + z->bbMax[1]) * 0.5f;
+	const float cand[3][2] = { { bx, by }, { ex, ey }, { (bx + ex) * 0.5f, (by + ey) * 0.5f } };
+	int pick = 1;
+	for (int c = 0; c < 3; c++)
+		if (dtInZone(z, cand[c][0], cand[c][1])) {
+			pick = c;
+			break;
+		}
+	const float yaw = (float)race_bangle(z->dir[0], z->dir[1]) * (2.0f * (float)M_PI / 65536.0f);
+	float p[3] = { cand[pick][0], cand[pick][1], g_worldPos[2] };
+	world_retarget(g_world, p);
+	for (int i = 0; i < WORLD_PAGE_IN_STEPS; i++)
+		if (!world_prime(g_world, p))
+			break;
+	float ground;
+	if (world_ground_z(g_world, p, 200.0f, &ground))
+		p[2] = ground;
+	worldTeleport(p, yaw);
+	char b[160];
+	snprintf(b, sizeof(b), "dbgtools: teleported to %.1f,%.1f,%.1f (%s) -- %s the zone",
+		p[0], p[1], p[2], pick == 0 ? "box middle" : pick == 1 ? "entry" : "between",
+		dtInZone(z, g_worldPos[0], g_worldPos[1]) ? "inside" : "NOT inside");
+	dlog(b);
+}
+
+// The GPS's search starts from a route point posted for players (bit 27)
+// under the car, so a car on a lot, an alley or a zone off the road reads
+// "lost": the nearest such point -- by distance plus ten times the height,
+// the search's own measure -- takes the car, facing along it, unless the car
+// is on it already. False when it stayed.
+static bool dtOntoRoad(void) {
+	const int n = gps_num_points();
+	int best = -1;
+	float bd = 1e30f, b2d = 0.0f;
+	for (int p = 0; p < n; p++) {
+		if (!((gps_point_bits(p) >> 27) & 1u))
+			continue;
+		float q[3];
+		gps_point_pos(p, q);
+		const float d2 = hypotf(q[0] - g_worldPos[0], q[1] - g_worldPos[1]);
+		const float d = d2 + 10.0f * fabsf(q[2] - g_worldPos[2]);
+		if (d < bd) {
+			bd = d;
+			b2d = d2;
+			best = p;
+		}
+	}
+	if (best < 0 || b2d < gps_point_half(best))
+		return false;
+	float q[3], f[2];
+	gps_point_pos(best, q);
+	gps_point_fwd(best, f);
+	const float yaw = (float)race_bangle(f[0], f[1]) * (2.0f * (float)M_PI / 65536.0f);
+	float pos[3] = { q[0], q[1], q[2] + 2.0f };
+	world_retarget(g_world, pos);
+	for (int i = 0; i < WORLD_PAGE_IN_STEPS; i++)
+		if (!world_prime(g_world, pos))
+			break;
+	float ground;
+	if (world_ground_z(g_world, pos, 4.0f, &ground))
+		pos[2] = ground;
+	worldTeleport(pos, yaw);
+	char b[128];
+	snprintf(b, sizeof(b), "dbgtools: onto the road -- route point %d, %.0f m off, at %.1f,%.1f,%.1f",
+		best, (double)b2d, pos[0], pos[1], pos[2]);
+	dlog(b);
+	return true;
+}
+
+static void dtNote(const char* s) {
+	snprintf(g_dt.note, sizeof(g_dt.note), "%s", s);
+	char b[128];
+	snprintf(b, sizeof(b), "dbgtools: %s", s);
+	dlog(b);
+}
+
+static bool dtAvailable(DtItem k) {
+	switch (k) {
+	case DT_RACE: case DT_SHOP: case DT_SHOWCASE: case DT_CHALLENGE: case DT_GPS:
+		return g_dt.world && dtMarkerCount(dtKindOf(k)) > 0;
+	case DT_GPSINFO:
+		return g_dt.world;
+	case DT_HELP:
+		return g_dt.fe && g_dt.screen && feHelpHash(g_dt.screen) != 0 && !g_feDialog.up;
+	default:
+		return false;
+	}
+}
+
+static void dtValue(DtItem k, char* out, size_t cap) {
+	switch (k) {
+	case DT_GPSINFO:
+		snprintf(out, cap, "%s", g_dt.gpsInfo ? "On" : "Off");
+		return;
+	case DT_HELP:
+		snprintf(out, cap, "%s", dtAvailable(k) ? "ZL" : "none here");
+		return;
+	default: {
+		const int n = g_dt.world ? dtMarkerCount(dtKindOf(k)) : 0;
+		if (n)
+			snprintf(out, cap, "%d / %d", g_dt.next[k] % n + 1, n);
+		else
+			snprintf(out, cap, "%s", g_dt.world ? "none" : "--");
+		return;
+	}
+	}
+}
+
+// Runs an item. True when the menu should go so the result can be seen.
+static bool dtRun(DtItem k) {
+	char b[96];
+	if (!dtAvailable(k)) {
+		snprintf(b, sizeof(b), "%s: not available here", kDtName[k]);
+		dtNote(b);
+		return false;
+	}
+	switch (k) {
+	case DT_GPSINFO:
+		g_dt.gpsInfo = !g_dt.gpsInfo;
+		g_gpsWalkMaxMs = 0.0f;
+		snprintf(b, sizeof(b), "GPS readout %s", g_dt.gpsInfo ? "on" : "off");
+		dtNote(b);
+		return false;
+	case DT_HELP:
+		devcmd_press(KEY_ZL, 4);
+		snprintf(b, sizeof(b), "help: ZL on %s", g_dt.screen);
+		dtNote(b);
+		return true;
+	default:
+		break;
+	}
+	const int kind = dtKindOf(k), n = dtMarkerCount(kind);
+	const int nth = g_dt.next[k] % n;
+	g_dt.next[k] = nth + 1;
+	const int i = dtMarkerNth(kind, nth);
+	if (i < 0)
+		return false;
+	if (k == DT_GPS) {
+		dtOntoRoad();
+		worldGpsToMarker(i);
+		g_dt.gpsInfo = true;
+		g_gpsWalkMaxMs = 0.0f;
+		snprintf(b, sizeof(b), "GPS %d/%d: %s at %.0f,%.0f", nth + 1, n, g_markerTitle[i],
+			g_markers[i].worldX, g_markers[i].worldY);
+		dtNote(b);
+		return true;
+	}
+	dtTeleportInto(g_markerZone[i]);
+	g_dt.enterIn = 8;
+	snprintf(b, sizeof(b), "%s %d/%d: %s", kDtName[k], nth + 1, n, g_markerTitle[i]);
+	dtNote(b);
+	return true;
+}
+
+static void dtOpen(bool open) {
+	if (g_dt.open == open)
+		return;
+	g_dt.open = open;
+	devcmd_grab(open);
+	if (open)
+		g_dt.note[0] = '\0';   // the foot says what the row does, not the last run
+	dlog(open ? "dbgtools: menu up" : "dbgtools: menu closed");
+}
+
+// The panel's frame and rows, shared by the draw and the touch.
+#define DT_PX 8.0f
+#define DT_PY 4.0f
+#define DT_PW (BOTTOM_W - 16.0f)
+#define DT_PH (BOTTOM_H - 8.0f)
+#define DT_RY (DT_PY + 30.0f)
+#define DT_RH 30.0f
+static int dtRowAt(int x, int y) {
+	if (x < DT_PX || x > DT_PX + DT_PW || y < DT_PY || y > DT_PY + DT_PH)
+		return -2;
+	const int r = y >= DT_RY ? (int)(((float)y - DT_RY) / DT_RH) : -1;
+	return r >= 0 && r < g_dt.rowN ? r : -1;
+}
+
+// Once a scan, after the input is read: `world` is career free roam with no
+// overlay up, `fe` a frontend screen named `screen`.
+static void dbgToolsTick(bool world, bool fe, const char* screen) {
+	if (!g_dt.on)
+		return;
+	g_dt.world = world;
+	g_dt.fe = fe;
+	g_dt.screen = screen;
+	g_dt.rowN = 0;
+	if (world)
+		for (int k = DT_RACE; k <= DT_GPSINFO; k++)
+			g_dt.rows[g_dt.rowN++] = (DtItem)k;
+	if (fe)
+		g_dt.rows[g_dt.rowN++] = DT_HELP;
+	if (g_dt.sel >= g_dt.rowN)
+		g_dt.sel = 0;
+
+	// A teleport's Enter press, once the zone under the car has been found.
+	if (g_dt.enterIn > 0 && --g_dt.enterIn == 0) {
+		char b[320];
+		snprintf(b, sizeof(b), "dbgtools: Enter -- under the car: event %s, shop %s, showcase %s, "
+			"challenge %s%s", g_eventHere ? g_eventHere->name : "-", g_shopHere ? g_shopHere->name : "-",
+			g_showcaseHere ? g_showcaseHere->name : "-", g_challengeHere ? g_challengeHere->name : "-",
+			world ? "" : " (not driving any more: no press)");
+		dlog(b);
+		if (world)
+			g_touchEnter = true;
+	}
+
+	char id[32];
+	if (devcmd_take_dbg(id, sizeof(id))) {
+		int k = -1;
+		for (int i = 0; i < DT_N; i++)
+			if (strcasecmp(id, kDtId[i]) == 0)
+				k = i;
+		if (strcasecmp(id, "open") == 0)
+			dtOpen(true);
+		else if (strcasecmp(id, "close") == 0)
+			dtOpen(false);
+		else if (k >= 0) {
+			if (dtRun((DtItem)k))
+				dtOpen(false);
+		} else {
+			char b[64];
+			snprintf(b, sizeof(b), "no item \"%s\"", id);
+			dtNote(b);
+		}
+	}
+
+	touchPosition tp;
+	const bool touch = devcmd_raw_touch(&tp);
+	const bool touchDown = touch && !g_dt.touchWas;
+	g_dt.touchWas = touch;
+	if (devcmd_take_combo()) {
+		dtOpen(!g_dt.open);
+		return;
+	}
+	if (!g_dt.open)
+		return;
+	const u32 d = devcmd_raw_down();
+	if (d & KEY_B) {
+		dtOpen(false);
+		return;
+	}
+	const int was = g_dt.sel;
+	if (g_dt.rowN > 0) {
+		if (d & KEY_DUP)
+			g_dt.sel = (g_dt.sel + g_dt.rowN - 1) % g_dt.rowN;
+		if (d & KEY_DDOWN)
+			g_dt.sel = (g_dt.sel + 1) % g_dt.rowN;
+		if ((d & KEY_A) && dtRun(g_dt.rows[g_dt.sel]))
+			dtOpen(false);
+	}
+	if (touchDown) {
+		const int r = dtRowAt(tp.px, tp.py);
+		if (r >= 0) {
+			g_dt.sel = r;
+			if (dtRun(g_dt.rows[r]))
+				dtOpen(false);
+		} else if (r == -2) {
+			dtOpen(false);
+		}
+	}
+	if (g_dt.sel != was)
+		g_dt.note[0] = '\0';
+}
+
+// The GPS readout: what it tracks, the straight line to it and the road to
+// it, and what the route walk costs.
+static void dtDrawGps(C2D_TextBuf buf) {
+	static const char* const kSt[] = { "searching", "lost", "no path", "following", "off" };
+	const int st = gps_status();
+	float tx = 0.0f, ty = 0.0f;
+	bool have = false;
+	if (g_gpsMarkerNow >= 0) {
+		tx = g_markers[g_gpsMarkerNow].worldX;
+		ty = g_markers[g_gpsMarkerNow].worldY;
+		have = true;
+	} else {
+		float icon[2];
+		if (gps_icon(icon)) {
+			tx = icon[0];
+			ty = icon[1];
+			have = true;
+		}
+	}
+	const float x = 8.0f, y = 38.0f, w = BOTTOM_W - 16.0f, h = 58.0f;
+	uiRoundRect(x, y, w, h, 4.0f, UI_Z, C2D_Color32(0, 0, 0, 215));
+	uiRing(x, y, w, h, 4.0f, 1.0f, UI_Z, UI_ACCENT);
+	char l[128];
+	snprintf(l, sizeof(l), "GPS %s%s%s", st >= 0 && st <= 4 ? kSt[st] : "?",
+		g_gpsMarkerNow >= 0 ? " -> " : "", g_gpsMarkerNow >= 0 ? g_markerTitle[g_gpsMarkerNow] : "");
+	uiText(buf, l, 14.0f, x + 10.0f, y + 12.0f, 0, UI_ACCENT, w - 20.0f);
+	const float straight = have ? hypotf(tx - g_worldPos[0], ty - g_worldPos[1]) : -1.0f;
+	const float route = g_gpsRouteInfo.aheadM;
+	char s1[32] = "--", s2[32] = "--";
+	if (straight >= 0.0f)
+		snprintf(s1, sizeof(s1), "%.0f m", (double)straight);
+	if (route >= 0.0f && straight > 0.0f)
+		snprintf(s2, sizeof(s2), "%.0f m (%+.0f%%)", (double)route,
+			(double)((route / straight - 1.0f) * 100.0f));
+	else if (route >= 0.0f)
+		snprintf(s2, sizeof(s2), "%.0f m", (double)route);
+	snprintf(l, sizeof(l), "Straight %s    Route %s", s1, s2);
+	uiText(buf, l, 14.0f, x + 10.0f, y + 30.0f, 0, UI_WHITE, w - 20.0f);
+	snprintf(l, sizeof(l), "Route walk %.2f ms (peak %.2f), %d points, every 250 ms",
+		(double)g_gpsWalkMs, (double)g_gpsWalkMaxMs, g_gpsRouteInfo.walked);
+	uiText(buf, l, 12.0f, x + 10.0f, y + 47.0f, 0, UI_DIM, w - 20.0f);
+}
+
+// Last on the lower screen, over whatever the frame drew: depth ALWAYS, so
+// the order alone stacks it (citro2d's own test is GEQUAL, put back after).
+static void dbgToolsDraw(void) {
+	if (!g_dt.on || !g_uiFont || (!g_dt.open && !(g_dt.gpsInfo && g_dt.world)))
+		return;
+	static C2D_TextBuf buf = NULL;
+	if (!buf)
+		buf = C2D_TextBufNew(2048);
+	if (!buf)
+		return;
+	C2D_TextBufClear(buf);
+	scissorReset();
+	C2D_Flush();
+	C3D_DepthTest(true, GPU_ALWAYS, GPU_WRITE_ALL);
+	if (!g_dt.open) {
+		dtDrawGps(buf);
+	} else {
+		C2D_DrawRectSolid(0.0f, 0.0f, UI_Z, BOTTOM_W, BOTTOM_H, C2D_Color32(0, 0, 0, 150));
+		uiRoundRect(DT_PX, DT_PY, DT_PW, DT_PH, 6.0f, UI_Z, C2D_Color32(0, 0, 0, 232));
+		uiDialogRing(DT_PX, DT_PY, DT_PW, DT_PH);
+		uiLabel(buf, "DEBUG TOOLS", DT_PX + 12.0f, DT_PY + 15.0f, 0, UI_ACCENT);
+		uiLabel(buf, "L + R + SELECT", DT_PX + DT_PW - 12.0f, DT_PY + 15.0f, 2, UI_DIM);
+		for (int r = 0; r < g_dt.rowN; r++) {
+			const DtItem k = g_dt.rows[r];
+			const bool avail = dtAvailable(k), sel = r == g_dt.sel;
+			const float y = DT_RY + (float)r * DT_RH, cy = y + (DT_RH - 2.0f) * 0.5f;
+			uiRowBar(DT_PX + 8.0f, y, DT_PW - 16.0f, DT_RH - 2.0f, sel);
+			char v[32];
+			dtValue(k, v, sizeof(v));
+			const float vw = uiText(buf, v, 14.0f, DT_PX + DT_PW - 18.0f, cy, 2,
+				avail ? UI_ACCENT : UI_DIM, 110.0f);
+			uiText(buf, kDtName[k], 15.0f, DT_PX + 18.0f, cy, 0, avail ? UI_WHITE : UI_DIM,
+				DT_PW - 50.0f - vw);
+		}
+		if (g_dt.rowN == 0)
+			uiText(buf, "Nothing to check on this screen", 14.0f, BOTTOM_W * 0.5f, DT_RY + 40.0f, 1,
+				UI_DIM, DT_PW - 24.0f);
+		const char* foot = g_dt.note[0] ? g_dt.note
+			: g_dt.rowN ? kDtWhat[g_dt.rows[g_dt.sel]] : "B closes";
+		uiText(buf, foot, 12.0f, DT_PX + 12.0f, DT_PY + DT_PH - 14.0f, 0,
+			g_dt.note[0] ? UI_ACCENT : UI_DIM, DT_PW - 24.0f);
+	}
+	C2D_Flush();
+	C3D_DepthTest(true, GPU_GEQUAL, GPU_WRITE_ALL);
+}
+
 static void drawTouchCameraBtn(float x, float y, float w, float h) {
 	const float cx = x + w * 0.5f, cy = y + h * 0.5f;
 	// A round button, the shape of what it does: a disc as wide as the slot,
@@ -62218,13 +62672,21 @@ static MinimapMode worldMapContent(const MinimapMarker** marksOut, int* countOut
 		const u64 nowMs = osGetTime();
 		if (nowMs - s_routeAt > 250) {
 			s_routeAt = nowMs;
-			s_routeN = gps_route_polyline(g_worldPos, s_route, 512, 6.0f);
+			// The same walk measures the road still ahead (the debug tools'
+			// GPS readout), and what it costs.
+			const u64 t0 = svcGetSystemTick();
+			s_routeN = gps_route_polyline(g_worldPos, s_route, 512, 6.0f, &g_gpsRouteInfo);
+			g_gpsWalkMs = (float)TKMS(t0, svcGetSystemTick());
+			if (g_gpsWalkMs > g_gpsWalkMaxMs)
+				g_gpsWalkMaxMs = g_gpsWalkMs;
 		}
 		gps->route = (const float (*)[2])s_route;
 		gps->routeN = s_routeN;
 		gps->routeRgba = uiLighten(uiGpsColour(), 0.15f);
 	} else {
 		s_routeN = 0;
+		g_gpsRouteInfo.aheadM = -1.0f;
+		g_gpsRouteInfo.walked = 0;
 	}
 	// IsRenderable: with the GPS engaged in a stage, a zone's marker shows
 	// only while it is the GPS's own.
@@ -65041,6 +65503,10 @@ int main(int argc, char* argv[])
 	// can say why; with no config at all it stays off.
 	dbglog_start(cfg.debugLogging);
 	devcmd_init(haveConfig && cfg.devCommands, dlog);
+	// The debug tools (dbgToolsTick()): L + R + SELECT, wherever the command
+	// file or the Debug Menu is allowed.
+	g_dt.on = haveConfig && (cfg.devCommands || cfg.debugMenuEnabled);
+	devcmd_tools_enable(g_dt.on);
 	g_dbgExitDirty = haveConfig && cfg.dbgExitDirty;
 	g_cfgMain = haveConfig ? &cfg : NULL;
 	// The local wireless link's soak (#321a, wirelesstest.h), in place of the
@@ -65528,6 +65994,11 @@ int main(int argc, char* argv[])
 		// itself (controlsKeysFor()). A held direction repeats (navRepeat()).
 		u32 kDown = navRepeat(controls_menu_keys(hidKeysDown()), hidKeysHeld());
 		touchUpdate();
+		// The debug tools' menu and items (L + R + SELECT; the reads above
+		// come back empty while it holds the pad).
+		dbgToolsTick(bootState == BOOT_WORLD && g_world && g_simReady && worldUi == WORLD_UI_NONE &&
+				!g_raceRun.on && !encounter_racing(&g_enc) && !stage0HasControl() && g_paths != NULL,
+			bootState == BOOT_MENU && menu.loaded, menu.loaded ? menu.screenName : NULL);
 		// No global "START quits" handler. That is the devkitPro homebrew
 		// template's default, and it was still here from the first bring-up
 		// commit -- but START is real game input in this port: the title
@@ -71317,6 +71788,8 @@ int main(int argc, char* argv[])
 				C2D_Color32(255, 255, 255, 255), 296.0f);
 		else
 			drawBottomLogo();
+		// The debug tools over everything (L + R + SELECT).
+		dbgToolsDraw();
 		if (gpuwatch_tracing()) {
 			C2D_Flush();
 			gpuwatch_trace("bottom screen");

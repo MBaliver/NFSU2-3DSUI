@@ -29,8 +29,19 @@
 //   log   text                   a line in the debug log
 //   text  string                 the next system keyboard (a profile's name)
 //                                takes this instead of opening
+//   dbg   ID                     runs the debug tools' item ID (main.c's
+//                                dbgTools: race, shop, showcase, challenge,
+//                                gps, gpsinfo, help, open, close) as if picked
+//                                from its menu; the log says what it did
 //
 // KEY names: A B X Y L R ZL ZR START SELECT UP DOWN LEFT RIGHT.
+//
+// The debug tools' grab (devcmd_tools_enable): L + R held and SELECT pressed
+// opens main.c's debug tools menu on the lower screen, anywhere. While it is
+// up the game's reads see no buttons, touch or sticks -- the menu reads them
+// through devcmd_raw_*() -- and the grab outlasts the menu until every button
+// and the touch are let go, so the press that picked an item never reaches
+// the game. It works with or without the command file.
 //
 // main.c routes its hid* calls through here (DEVCMD_WRAP_HID); with the
 // commands off the wrappers return libctru's own reads unchanged.
@@ -46,6 +57,25 @@ bool devcmd_enabled(void);
 bool devcmd_active(void);
 // The pending `text`, taken (true) once; false with none.
 bool devcmd_take_text(char* out, size_t cap);
+// The pending `dbg` item's ID, taken (true) once; false with none.
+bool devcmd_take_dbg(char* out, size_t cap);
+
+// The debug tools (see above). `on` lets the combo open them.
+void devcmd_tools_enable(bool on);
+// The combo was pressed this scan (taken once).
+bool devcmd_take_combo(void);
+// The grab on (the menu up) or off; off holds until everything is let go.
+void devcmd_grab(bool on);
+bool devcmd_grabbed(void);
+// What was pressed this scan, the console's and the command file's together,
+// grabbed or not. `touch` is false with nothing touching.
+u32  devcmd_raw_down(void);
+u32  devcmd_raw_held(void);
+bool devcmd_raw_touch(touchPosition* pos);
+// A press made for the game once the grab is off: `keys` held `frames` scans
+// (a screen's help is ZL: the tools press it rather than reach into the
+// frontend's dialog).
+void devcmd_press(u32 keys, int frames);
 
 void devcmd_hidScanInput(void);
 u32  devcmd_hidKeysDown(void);

@@ -122,7 +122,17 @@ bool gps_icon(float out[2]);
 // Writes at most `max` points, (x, y) in world metres; 0 while the GPS is not
 // following a path or the free-roam network is not the one selected. Walks
 // the route network, so call it a few times a second, not every frame.
-int gps_route_polyline(const float carPos[2], float (*out)[2], int max, float stepM);
+//
+// `info` (may be NULL) gets what the same walk measured: `aheadM`, the
+// metres from the car to the goal along the path -- every route point summed,
+// not just the ones written out -- or -1 when the car was not found on the
+// path; and `walked`, the route points visited (the walk's whole cost).
+typedef struct {
+	float aheadM;
+	int   walked;
+} GpsRouteInfo;
+int gps_route_polyline(const float carPos[2], float (*out)[2], int max, float stepM,
+	GpsRouteInfo* info);
 // RealController +0x3EC, the follow's eGPSState: 0 off, 1 following, 3 no
 // path. MinimapWrapper::UpdateGPS hides the searching group while it reads 1
 // or 2.

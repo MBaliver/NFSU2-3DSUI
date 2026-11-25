@@ -22,6 +22,7 @@ typedef enum {
 	OP_SHOT,
 	OP_LOG,
 	OP_TEXT,   // the next keyboard's text
+	OP_DBG,    // a debug tools item (main.c's dbgTools)
 } OpKind;
 
 typedef struct {
@@ -44,6 +45,20 @@ static u64 s_nextPollMs, s_scriptStartMs;
 static char s_errors[512];
 static char s_text[64];
 static bool s_textSet;
+static char s_dbg[32];
+static bool s_dbgSet;
+
+// The debug tools' combo and grab (devcmd.h).
+static bool s_toolsOn;
+static bool s_combo;          // pressed this scan, not taken yet
+static bool s_grab;
+static bool s_grabRelease;    // let go of: off once nothing is held
+static u32 s_rawDown, s_rawHeld;
+static bool s_rawTouch;
+static touchPosition s_rawTouchPos;
+// devcmd_press: a press made for the game.
+static u32 s_synthKeys;
+static int s_synthFrames;
 
 // This scan's injection.
 static bool s_inj;
@@ -72,7 +87,8 @@ void devcmd_init(bool enabled, void (*log)(const char*)) {
 }
 
 bool devcmd_enabled(void) { return s_on; }
-bool devcmd_active(void) { return s_inj; }
+// The grab counts: worldSimPad's own read of the pad must stand down too.
+bool devcmd_active(void) { return s_inj || s_grab; }
 
 static u32 keyByName(const char* n) {
 	static const struct { const char* n; u32 k; } kKeys[] = {
@@ -157,6 +173,12 @@ static bool parseLine(char* line, int lineNo, Op* op) {
 		}
 		op->kind = OP_WAIT;
 		op->ms = (u32)n[0];
+	} else if (strcasecmp(cmd, "dbg") == 0) {
+		if (sscanf(rest, "%31s", op->text) != 1) {
+			addError(lineNo, "dbg ID");
+			return false;
+		}
+		op->kind = OP_DBG;
 	} else if (strcasecmp(cmd, "shot") == 0 || strcasecmp(cmd, "log") == 0 ||
 			strcasecmp(cmd, "text") == 0) {
 		op->kind = (cmd[0] == 's' || cmd[0] == 'S') ? OP_SHOT : (cmd[0] == 't' || cmd[0] == 'T') ? OP_TEXT : OP_LOG;
@@ -312,6 +334,15 @@ static void step(void) {
 			s_opIdx++;
 			continue;
 		}
+		if (op->kind == OP_DBG) {
+			if (s_dbgSet)
+				return;   // the last one is not taken yet: one a scan
+			snprintf(s_dbg, sizeof(s_dbg), "%s", op->text);
+			s_dbgSet = true;
+			logf_("devcmd: dbg %s", op->text);
+			s_opIdx++;
+			continue;
+		}
 		if (op->kind == OP_WAIT) {
 			if (s_opFrame == 0)
 				s_opStartMs = osGetTime();
@@ -359,10 +390,10 @@ static void step(void) {
 
 void devcmd_hidScanInput(void) {
 	hidScanInput();
-	if (!s_on)
+	if (!s_on && !s_toolsOn)
 		return;
 	const u64 now = osGetTime();
-	if (s_opCount == 0 && now >= s_nextPollMs) {
+	if (s_on && s_opCount == 0 && now >= s_nextPollMs) {
 		s_nextPollMs = now + DEVCMD_POLL_MS;
 		struct stat st;
 		if (stat(DEVCMD_FILE, &st) == 0)
@@ -376,10 +407,33 @@ void devcmd_hidScanInput(void) {
 		s_held = 0;
 		s_touch = s_stick = s_cstick = false;
 	}
+	// The tools' press for the game, once they have let go of the pad.
+	if (s_synthFrames > 0 && !s_grab) {
+		s_held |= s_synthKeys;
+		s_synthFrames--;
+	}
 	s_down = s_held & ~s_heldWas;
 	s_up = s_heldWas & ~s_held;
 	s_heldWas = s_held;
 	s_inj = s_held || s_touch || s_stick || s_cstick || s_up;
+
+	// What the tools read: the console's and the file's, grabbed or not.
+	s_rawHeld = hidKeysHeld() | s_held;
+	s_rawDown = hidKeysDown() | s_down;
+	s_rawTouch = s_touch || (hidKeysHeld() & KEY_TOUCH) != 0;
+	if (s_touch)
+		s_rawTouchPos = s_touchPos;
+	else if (s_rawTouch)
+		hidTouchRead(&s_rawTouchPos);
+	if (s_toolsOn && (s_rawDown & KEY_SELECT) && (s_rawHeld & (KEY_L | KEY_R)) == (KEY_L | KEY_R)) {
+		s_combo = true;
+		s_grab = true;   // from this scan: the game never sees the SELECT
+		s_grabRelease = false;
+	}
+	if (s_grab && s_grabRelease && !s_rawHeld && !s_rawTouch) {
+		s_grab = false;
+		s_grabRelease = false;
+	}
 }
 
 bool devcmd_take_text(char* out, size_t cap) {
@@ -390,26 +444,76 @@ bool devcmd_take_text(char* out, size_t cap) {
 	return true;
 }
 
-u32 devcmd_hidKeysDown(void) { return hidKeysDown() | s_down; }
-u32 devcmd_hidKeysHeld(void) { return hidKeysHeld() | s_held; }
-u32 devcmd_hidKeysUp(void) { return hidKeysUp() | s_up; }
+bool devcmd_take_dbg(char* out, size_t cap) {
+	if (!s_dbgSet)
+		return false;
+	snprintf(out, cap, "%s", s_dbg);
+	s_dbgSet = false;
+	return true;
+}
+
+void devcmd_tools_enable(bool on) {
+	s_toolsOn = on;
+	if (on)
+		logf_("devcmd: debug tools %s", "on (L + R + SELECT)");
+}
+
+bool devcmd_take_combo(void) {
+	const bool c = s_combo;
+	s_combo = false;
+	return c;
+}
+
+void devcmd_grab(bool on) {
+	if (on) {
+		s_grab = true;
+		s_grabRelease = false;
+	} else if (s_grab) {
+		s_grabRelease = true;
+	}
+}
+
+bool devcmd_grabbed(void) { return s_grab; }
+u32 devcmd_raw_down(void) { return s_rawDown; }
+u32 devcmd_raw_held(void) { return s_rawHeld; }
+
+bool devcmd_raw_touch(touchPosition* pos) {
+	if (s_rawTouch && pos)
+		*pos = s_rawTouchPos;
+	return s_rawTouch;
+}
+
+void devcmd_press(u32 keys, int frames) {
+	s_synthKeys = keys;
+	s_synthFrames = frames;
+}
+
+u32 devcmd_hidKeysDown(void) { return s_grab ? 0 : hidKeysDown() | s_down; }
+u32 devcmd_hidKeysHeld(void) { return s_grab ? 0 : hidKeysHeld() | s_held; }
+u32 devcmd_hidKeysUp(void) { return s_grab ? 0 : hidKeysUp() | s_up; }
 
 void devcmd_hidTouchRead(touchPosition* pos) {
-	if (s_touch)
+	if (s_grab)
+		pos->px = pos->py = 0;
+	else if (s_touch)
 		*pos = s_touchPos;
 	else
 		hidTouchRead(pos);
 }
 
 void devcmd_hidCircleRead(circlePosition* pos) {
-	if (s_stick)
+	if (s_grab)
+		pos->dx = pos->dy = 0;
+	else if (s_stick)
 		*pos = s_stickPos;
 	else
 		hidCircleRead(pos);
 }
 
 void devcmd_hidCstickRead(circlePosition* pos) {
-	if (s_cstick)
+	if (s_grab)
+		pos->dx = pos->dy = 0;
+	else if (s_cstick)
 		*pos = s_cstickPos;
 	else
 		hidCstickRead(pos);
