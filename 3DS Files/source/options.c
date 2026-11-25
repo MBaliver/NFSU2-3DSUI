@@ -315,6 +315,9 @@ static void buildGameplay(const OptTarget* t, RowSink* sink) {
 	addTextRow(sink, OPT_GPS_COLOUR, portstr(PS_OPT_GPS_COLOR), false);
 	// PORT (the user's): shifting on the shoulder triggers in a drag.
 	addTextRow(sink, OPT_DRAG_TRIGGER_SHIFT, portstr(PS_OPT_DRAG_SHIFT), false);
+	// PORT (the user's): optional camera cycle button on the touch screen.
+	if (t->port)
+		addTextRow(sink, OPT_TOUCH_CAMERA, portstr(PS_OPT_TOUCH_CAMERA), false);
 }
 
 // SPEED2.EXE:0x4B7CD0 -- twelve rows for player [0x836364], none of them gated
@@ -645,6 +648,10 @@ void options_row_value(const OptTarget* t, OptKind kind, OptValue* out) {
 		out->valueHash = g->dragTriggerShift ? VAL_ON : VAL_OFF;
 		break;
 
+	case OPT_TOUCH_CAMERA: // PORT
+		out->valueHash = (t->port && t->port->touchCamera) ? VAL_ON : VAL_OFF;
+		break;
+
 	case OPT_SPEEDO_UNITS: // 0x49AEE0
 		out->valueHash = g->speedoUnits ? VAL_KMH : VAL_MPH;
 		break;
@@ -873,6 +880,11 @@ bool options_adjust(const OptTarget* t, OptKind kind, bool right) {
 		g->dragTriggerShift = g->dragTriggerShift ? 0 : 1;
 		break;
 
+	case OPT_TOUCH_CAMERA: // PORT: an On / Off toggle
+		if (t->port)
+			t->port->touchCamera = !t->port->touchCamera;
+		break;
+
 	case OPT_GPS_COLOUR: // PORT (#471), wrapping
 		g->gpsColour = (u8)wrapStep(g->gpsColour < OPTIONS_GPS_COLOURS ? g->gpsColour : 0,
 			OPTIONS_GPS_COLOURS - 1, right);
@@ -1018,6 +1030,8 @@ OptAccept options_accept(const OptTarget* t, OptKind kind) {
 	case OPT_STEREO_STYLE:
 	case OPT_GPS_COLOUR: // PORT (#471)
 	case OPT_DRAG_TRIGGER_SHIFT:
+	case OPT_TOUCH_CAMERA:
+	case OPT_WHEEL_OPTIONS:
 	case OPT_ACC_LANGUAGE: // PORT: the Accessibility page
 	case OPT_ACC_LARGE_TEXT:
 	case OPT_ACC_HIGH_CONTRAST:

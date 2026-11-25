@@ -33,6 +33,7 @@ typedef struct {
 	bool largeText;      // the kit (and the top HUD) at ~1.25x
 	bool highContrast;   // solid panels, stronger text and rims
 	bool motionSteer;    // 3DS accelerometer tilt steering (driving only)
+	bool touchCamera;    // optional camera cycle button on the touch screen
 } PortPrefs;
 
 void portprefs_defaults(PortPrefs* p);

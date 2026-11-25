@@ -6083,7 +6083,8 @@ static OptTarget optionsTarget(void) {
 // labels are in the new one.
 static bool portPrefsRowChanged(OptKind kind) {
 	if (kind != OPT_ACC_LANGUAGE && kind != OPT_ACC_LARGE_TEXT &&
-			kind != OPT_ACC_HIGH_CONTRAST && kind != OPT_WHEEL_OPTIONS)
+			kind != OPT_ACC_HIGH_CONTRAST && kind != OPT_WHEEL_OPTIONS &&
+			kind != OPT_TOUCH_CAMERA)
 		return false;
 	portPrefsApply(g_cfgMain);
 	portPrefsSave();
@@ -57829,7 +57830,7 @@ static void uiArrow(float x, float y, float a, float size, u32 c) {
 
 // The HUD's touch targets, laid out by the draw and hit by the next tap.
 enum { HIT_BANK = 1, HIT_SMS, HIT_ZOOM_IN, HIT_ZOOM_OUT, HIT_RECENTER, HIT_STRIP_GPS,
-	HIT_STRIP_CANCEL, HIT_CARD_GPS, HIT_CARD, HIT_RACE_BOARD };
+	HIT_STRIP_CANCEL, HIT_CARD_GPS, HIT_CARD, HIT_RACE_BOARD, HIT_ENTER, HIT_CAMERA };
 typedef struct { float x, y, w, h; int id; } UiHit;
 static UiHit g_uiHit[16];
 static int g_uiHitN;
@@ -57841,6 +57842,7 @@ static void uiHit(float x, float y, float w, float h, int id) {
 static int g_mmSel = -1;        // the marker whose card is up
 static int g_nearestEvent = -1; // the destination strip's offer with the GPS off
 static bool g_raceBoardOpen = false; // race bottom strip: expanded standings card
+static bool g_touchEnter = false;    // touch button for Enter Shop / Event / Challenge
 
 static u32 uiMarkerColour(int i);
 static u32 uiLighten(u32 c, float k);
@@ -57905,6 +57907,13 @@ static void worldHandleTap(void) {
 			break;
 		case HIT_RACE_BOARD:
 			g_raceBoardOpen = !g_raceBoardOpen;
+			break;
+		case HIT_ENTER:
+			g_touchEnter = true;
+			break;
+		case HIT_CAMERA:
+			if (!g_shoot.up && !nisPlaying())
+				worldCycleCamera();
 			break;
 		default: break;
 		}
@@ -61024,10 +61033,22 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 			C2D_DrawRectSolid(cx - 1.0f, cy - 6.0f, UI_Z + 0.03f, 2.0f, 12.0f, UI_WHITE);
 		uiHit(zx - 4.0f, y - 2.0f, 40.0f, 34.0f, k == 0 ? HIT_ZOOM_IN : HIT_ZOOM_OUT);
 	}
+	// ---- optional Touch Camera button (Gameplay > Touch Camera) ----
+	if (g_portPrefs.touchCamera) {
+		const float cy0 = 144.0f, cx = zx + 15.0f, cy = cy0 + 15.0f;
+		uiChip(zx, cy0, 30.0f, 30.0f, 0);
+		// Simple crisp camera icon: body + viewfinder bump + lens circle.
+		uiRoundRect(cx - 8.0f, cy - 4.5f, 16.0f, 10.5f, 2.0f, UI_Z + 0.025f, UI_WHITE);
+		C2D_DrawRectSolid(cx - 4.0f, cy - 7.0f, UI_Z + 0.025f, 8.0f, 3.0f, UI_WHITE);
+		C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.03f, 3.6f, UI_PANEL_SOLID);
+		C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.035f, 1.8f, UI_ACCENT);
+		uiHit(zx - 4.0f, cy0 - 2.0f, 40.0f, 34.0f, HIT_CAMERA);
+	}
 	if (minimap_panned(g_minimap)) {
-		const float w = uiMeasure(buf, portstr(PS_RECENTER), 14.0f) + 28.0f, x = W - 6.0f - w, y = 148.0f;
-		uiButton(buf, x, y, w, 26.0f, 0, portstr(PS_RECENTER), false, false);
-		uiHit(x - 2.0f, y - 3.0f, w + 4.0f, 32.0f, HIT_RECENTER);
+		const float ry = g_portPrefs.touchCamera ? 180.0f : 148.0f;
+		const float w = uiMeasure(buf, portstr(PS_RECENTER), 14.0f) + 28.0f, x = W - 6.0f - w;
+		uiButton(buf, x, ry, w, 26.0f, 0, portstr(PS_RECENTER), false, false);
+		uiHit(x - 2.0f, ry - 3.0f, w + 4.0f, 32.0f, HIT_RECENTER);
 	}
 
 	// ---- action, bottom: where the GPS goes, or the nearest race ----
@@ -61047,6 +61068,29 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 	const int dest = gpsOn ? gpsM : g_nearestEvent;
 	const float sh = 36.0f, sy = H - sh;
 	float feedBottom = H - 6.0f;
+	// ---- contextual Enter / Challenge touch pill when over a shop, event or Outrun ----
+	if (!encounter_racing(&g_enc) && !g_tune.on &&
+			(g_shopHere || g_engageZone || encounter_offer_up(&g_enc))) {
+		const char* lbl = g_shopHere ? portstr(PS_SHOP)
+			: g_engageZone ? portstr(PS_EVENT) : portstr(PS_CHALLENGE);
+		const float ew = fmaxf(120.0f, uiMeasure(buf, lbl, 16.0f) + 46.0f);
+		const float eh = 34.0f;
+		const float ex = floorf((W - ew) * 0.5f);
+		const float ey = (dest >= 0 || gpsOn) ? sy - eh - 8.0f : H - eh - 10.0f;
+		uiPill(ex, ey, ew, eh, true, UI_Z + 0.02f);
+		const float ecy = ey + eh * 0.5f;
+		const float tw = uiMeasure(buf, lbl, 16.0f);
+		const float iconW = g_padSheetState == 1 ? 22.0f : 12.0f;
+		const float tx = ex + (ew - (iconW + 6.0f + tw)) * 0.5f;
+		if (g_padSheetState == 1) {
+			drawPadGlyphRaw('d', tx + 7.0f, ecy, 14.0f, UI_Z + 0.04f);
+			uiArrow(tx + 18.0f, ecy, -(float)M_PI * 0.5f, 3.5f, UI_ACCENT);
+		} else {
+			uiArrow(tx + 5.0f, ecy, -(float)M_PI * 0.5f, 4.5f, UI_ACCENT);
+		}
+		uiText(buf, lbl, 16.0f, tx + iconW + 6.0f, ecy, 0, UI_ACCENT, ew - iconW - 18.0f);
+		uiHit(ex - 4.0f, ey - 4.0f, ew + 8.0f, eh + 8.0f, HIT_ENTER);
+	}
 	if (dest >= 0 || gpsOn) {
 		// Tracking: the target's own colour on the band's top line, lifted for
 		// the label and the compass.
@@ -61773,6 +61817,15 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 			if (k == 0)
 				C2D_DrawRectSolid(cx - 1.0f, cy - 6.0f, UI_Z + 0.03f, 2.0f, 12.0f, UI_WHITE);
 			uiHit(zx - 4.0f, zy - 2.0f, 40.0f, 34.0f, k == 0 ? HIT_ZOOM_IN : HIT_ZOOM_OUT);
+		}
+		if (g_portPrefs.touchCamera) {
+			const float cy0 = 144.0f, cx = zx + 15.0f, cy = cy0 + 15.0f;
+			uiChip(zx, cy0, 30.0f, 30.0f, 0);
+			uiRoundRect(cx - 8.0f, cy - 4.5f, 16.0f, 10.5f, 2.0f, UI_Z + 0.025f, UI_WHITE);
+			C2D_DrawRectSolid(cx - 4.0f, cy - 7.0f, UI_Z + 0.025f, 8.0f, 3.0f, UI_WHITE);
+			C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.03f, 3.6f, UI_PANEL_SOLID);
+			C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.035f, 1.8f, UI_ACCENT);
+			uiHit(zx - 4.0f, cy0 - 2.0f, 40.0f, 34.0f, HIT_CAMERA);
 		}
 	}
 
@@ -68594,7 +68647,9 @@ int main(int argc, char* argv[])
 					encounter_offer_up(&g_enc);
 				const bool enterPress = !simHold && want == WORLD_UI_NONE && haveConfig && !encRacing &&
 					!g_tune.on &&
-					((controls_menu_phys(kDown) & controlsKeysFor(OPT_ACT_ENTER_SHOP)) != 0 || dbgAccept);
+					((controls_menu_phys(kDown) & controlsKeysFor(OPT_ACT_ENTER_SHOP)) != 0 ||
+					dbgAccept || g_touchEnter);
+				g_touchEnter = false;
 				if (dbgAccept && enterPress)
 					dlog("dbg: DbgOutrunAccept -- D-pad Up pressed for the player, an Outrun on offer");
 				const bool summoned = !simHold && want == WORLD_UI_NONE && haveConfig && !enterPress &&

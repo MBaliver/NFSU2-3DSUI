@@ -261,6 +261,8 @@ typedef enum {
 	OPT_GPS_COLOUR,
 	// PORT: Drag Shift: ZL/ZR, after GPS Color.
 	OPT_DRAG_TRIGGER_SHIFT,
+	// PORT: optional Camera cycle button on the touch screen.
+	OPT_TOUCH_CAMERA,
 	// PORT (#447): the Controls page's rows, one per rebindable action in
 	// controls.h's order (controls_action_hash), then Default Settings, then
 	// (#527, the user's) Delete All Controls.
