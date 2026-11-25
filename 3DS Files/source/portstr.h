@@ -269,6 +269,7 @@ typedef enum {
 	// the title screen's lower panel: Continue's alternative (START)
 	PS_TITLE_MAIN_MENU,
 	PS_TITLE_CAREER,
+	PS_TITLE_RESUME,
 	// the title screen's top prompt with a profile to Continue: its name
 	PS_TITLE_WELCOME_FMT,
 	PS_COUNT

@@ -478,6 +478,8 @@ static const PortStrDef kStr[PS_COUNT] = {
 		"Men\xC3\xBA principal", "Hoofdmenu", "Huvudmeny", "Hovedmenu" } },
 	// UI_Main's Career item (MENU_ITEMS_MAIN).
 	[PS_TITLE_CAREER] = { 0x5E7E1192u, 0, { "Career" } },
+	// UI_StartCareer's Resume Career item (MENU_ITEMS_STARTCAREER).
+	[PS_TITLE_RESUME] = { 0xE072DB21u, 0, { "Resume Career" } },
 	[PS_TITLE_WELCOME_FMT] = { 0, 0, { "Welcome back, %s", "Bon retour, %s", "Willkommen zur\xC3\xBC" "ck, %s",
 		"Bentornato, %s", "Bienvenido de nuevo, %s", "Welkom terug, %s", "V\xC3\xA4lkommen tillbaka, %s",
 		"Velkommen tilbage, %s" } },

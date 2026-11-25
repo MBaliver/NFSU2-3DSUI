@@ -61364,6 +61364,7 @@ static bool g_titleContinueOk;
 static ProfileEntry g_titleContinueEntry;
 static unsigned g_titleCash;
 static int g_titleStage;
+static bool g_titleStarted;   // its career has started: Continue resumes it
 // The panel's targets, laid out by the draw for the next touch.
 enum { TITLE_HIT_CARD, TITLE_HIT_MENU, TITLE_HIT_CHANGE, TITLE_HIT_N };
 static float g_titleHit[TITLE_HIT_N][4];
@@ -61380,8 +61381,10 @@ static void titleReadSummary(void) {
 	static NfsProfile p;   // tens of KB, off the stack
 	g_titleCash = 0;
 	g_titleStage = 0;
+	g_titleStarted = false;
 	if (profile_load_file(g_titleContinueEntry.path, &p)) {
 		g_titleCash = p.cash;
+		g_titleStarted = p.careerStarted;
 		g_titleStage = p.careerStarted ? (int)p.careerStage : 0;
 	}
 }
@@ -61408,32 +61411,39 @@ static void drawTitleBottom(void) {
 		uiHighlight(cx, cy, cw, ch, 4.0f, UI_Z + 0.005f, UI_ACCENT);
 	else
 		uiRing(cx, cy, cw, ch, 4.0f, 1.0f, UI_Z + 0.005f, UI_RIM);
-	const float ix = cx + 16.0f, textR = cx + cw - 52.0f;
+	const float ix = cx + 16.0f, right = cx + cw - 14.0f;
 	uiRoundRect(ix, cy + 16.0f, 22.0f, 3.0f, 1.5f, UI_Z + 0.01f, onCard ? UI_ACCENT : UI_DIM);
 	uiLabel(buf, portstr_caps(PS_TITLE_CAREER), ix + 30.0f, cy + 18.0f, 0, UI_DIM);
-	uiText(buf, g_titleContinueEntry.name, 28.0f, ix, cy + ch * 0.5f + 2.0f, 0, UI_WHITE, textR - ix);
-	// Its bank, and its stage once past the prologue.
+	uiText(buf, g_titleContinueEntry.name, 28.0f, ix, cy + ch * 0.5f + 2.0f, 0, UI_WHITE, right - ix);
+	// The bottom line: what A does, at the right -- Resume Career (or
+	// Continue, for a career not started yet) -- and the bank and stage left.
+	const float sy = cy + ch - 20.0f;
+	const char* act = portstr(g_titleStarted ? PS_TITLE_RESUME : PS_PR_CONTINUE);
+	const float aw = uiMeasure(buf, act, 16.0f);
+	uiArrow(right - 1.0f, sy, 0.0f, 5.5f, onCard ? UI_ACCENT : UI_DIM);
+	const float ax = right - 14.0f - aw;
+	uiText(buf, act, 16.0f, ax, sy, 0, onCard ? UI_ACCENT : UI_DIM, 0.0f);
+	float actL = ax;
+	if (onCard) {
+		drawPadGlyph('A', ax - 12.0f, sy, 17.0f, UI_Z + 0.04f);
+		actL = ax - 24.0f;
+	}
 	{
 		char cash[32], v[40];
 		formatCashGrouped(g_titleCash, cash, sizeof(cash));
 		snprintf(v, sizeof(v), "$%s", cash);
-		const float sy = cy + ch - 20.0f;
 		const float lw = uiLabel(buf, portstr_caps(PS_BANK), ix, sy, 0, UI_ACCENT);
 		float x = ix + lw + 7.0f;
-		x += uiText(buf, v, 17.0f, x, sy, 0, UI_WHITE, 0.0f);
-		if (g_titleStage > 0) {
+		x += uiText(buf, v, 17.0f, x, sy, 0, UI_WHITE, actL - 10.0f - x);
+		if (g_titleStage > 0 && actL - x > 70.0f) {
 			char st[48];
 			snprintf(st, sizeof(st), portstr(PS_STAGE_FMT), g_titleStage);
 			x += 12.0f;
 			C2D_DrawCircleSolid(x, sy, UI_Z + 0.02f, 2.0f, UI_DIM);
 			x += 10.0f;
-			uiText(buf, st, 17.0f, x, sy, 0, UI_WHITE, textR - x);
+			uiText(buf, st, 17.0f, x, sy, 0, UI_WHITE, actL - 10.0f - x);
 		}
 	}
-	// A's badge on the lit choice, and the way on.
-	if (onCard)
-		drawPadGlyph('A', cx + cw - 36.0f, cy + ch * 0.5f, 20.0f, UI_Z + 0.04f);
-	uiArrow(cx + cw - 15.0f, cy + ch * 0.5f, 0.0f, 6.0f, onCard ? UI_ACCENT : UI_DIM);
 	g_titleHit[TITLE_HIT_CARD][0] = cx;
 	g_titleHit[TITLE_HIT_CARD][1] = cy;
 	g_titleHit[TITLE_HIT_CARD][2] = cw;
@@ -61454,10 +61464,10 @@ static void drawTitleBottom(void) {
 	const float ry = cy + ch + 10.0f, rh = 40.0f;
 	uiRowBar(cx, ry, cw, rh, !onCard);
 	uiText(buf, portstr(PS_TITLE_MAIN_MENU), 16.0f, ix, ry + rh * 0.5f, 0, onCard ? UI_WHITE : UI_ACCENT,
-		textR - ix);
+		right - 40.0f - ix);
 	if (!onCard)
-		drawPadGlyph('A', cx + cw - 36.0f, ry + rh * 0.5f, 18.0f, UI_Z + 0.04f);
-	uiArrow(cx + cw - 15.0f, ry + rh * 0.5f, 0.0f, 5.0f, onCard ? UI_DIM : UI_ACCENT);
+		drawPadGlyph('A', right - 26.0f, ry + rh * 0.5f, 17.0f, UI_Z + 0.04f);
+	uiArrow(right - 1.0f, ry + rh * 0.5f, 0.0f, 5.5f, onCard ? UI_DIM : UI_ACCENT);
 	g_titleHit[TITLE_HIT_MENU][0] = cx;
 	g_titleHit[TITLE_HIT_MENU][1] = ry;
 	g_titleHit[TITLE_HIT_MENU][2] = cw;
