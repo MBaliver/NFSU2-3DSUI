@@ -61354,16 +61354,18 @@ static void drawUiPostRace(MenuState* m);
 // back to: under the logo, two choices in one column -- a card for the
 // profile (Career, the name, its bank and stage), which is Continue, and a
 // Main Menu row under it. Up / down move the highlight, A takes the lit one,
-// START is Main Menu from either, a touch takes what it lands on. Continue
-// loads that profile and, for a career that has started, goes straight out of
-// the garage into free roam; Main Menu is the usual way to the profile list.
+// START is Continue from either, a touch takes what it lands on. Both load
+// that profile without the list: Continue then goes, for a career that has
+// started, straight out of the garage into free roam; Main Menu stops at
+// UI_Main (Quick Race, LAN, ...). The card's Change (Y, or a touch) is the
+// way to another profile: the profile list, as START was before.
 // The top screen's prompt greets the profile by name. With none, the logo.
 static bool g_titleContinueOk;
 static ProfileEntry g_titleContinueEntry;
 static unsigned g_titleCash;
 static int g_titleStage;
 // The panel's targets, laid out by the draw for the next touch.
-enum { TITLE_HIT_CARD, TITLE_HIT_MENU, TITLE_HIT_N };
+enum { TITLE_HIT_CARD, TITLE_HIT_MENU, TITLE_HIT_CHANGE, TITLE_HIT_N };
 static float g_titleHit[TITLE_HIT_N][4];
 static int g_titleSel;   // TITLE_HIT_CARD or TITLE_HIT_MENU: the lit choice
 
@@ -61436,13 +61438,25 @@ static void drawTitleBottom(void) {
 	g_titleHit[TITLE_HIT_CARD][1] = cy;
 	g_titleHit[TITLE_HIT_CARD][2] = cw;
 	g_titleHit[TITLE_HIT_CARD][3] = ch;
+	// Change, in the card's top corner: another profile, off the list.
+	{
+		const char* chg = portstr(PS_BOOT_CHANGE);
+		const float bw = uiMeasure(buf, chg, 14.0f) + 13.0f + 6.0f + 28.0f, bh = 26.0f;
+		const float bx = cx + cw - 8.0f - bw, by = cy + 8.0f;
+		uiButton(buf, bx, by, bw, bh, 'Y', chg, false, false);
+		g_titleHit[TITLE_HIT_CHANGE][0] = bx - 4.0f;
+		g_titleHit[TITLE_HIT_CHANGE][1] = cy;
+		g_titleHit[TITLE_HIT_CHANGE][2] = bw + 12.0f;
+		g_titleHit[TITLE_HIT_CHANGE][3] = bh + 12.0f;
+	}
 
-	// ---- Main Menu, a row under it: START, or A when lit ----
+	// ---- Main Menu, a row under it: A when lit ----
 	const float ry = cy + ch + 10.0f, rh = 40.0f;
 	uiRowBar(cx, ry, cw, rh, !onCard);
 	uiText(buf, portstr(PS_TITLE_MAIN_MENU), 16.0f, ix, ry + rh * 0.5f, 0, onCard ? UI_WHITE : UI_ACCENT,
 		textR - ix);
-	drawPadGlyph(onCard ? 't' : 'A', cx + cw - 36.0f, ry + rh * 0.5f, onCard ? 14.0f : 18.0f, UI_Z + 0.04f);
+	if (!onCard)
+		drawPadGlyph('A', cx + cw - 36.0f, ry + rh * 0.5f, 18.0f, UI_Z + 0.04f);
 	uiArrow(cx + cw - 15.0f, ry + rh * 0.5f, 0.0f, 5.0f, onCard ? UI_DIM : UI_ACCENT);
 	g_titleHit[TITLE_HIT_MENU][0] = cx;
 	g_titleHit[TITLE_HIT_MENU][1] = ry;
@@ -65927,6 +65941,7 @@ int main(int argc, char* argv[])
 			// goes up under it as the history, and a career past the prologue
 			// leaves at once the way the garage's Return to Explore Mode does
 			// (g_cribEnterWorld) -- out of the garage the save was made in.
+			bool titleToList = false;
 			if (g_titleContinueOk) {
 				// Up / down light the other choice; A takes the lit one.
 				if ((kDown & (KEY_UP | KEY_DOWN)) && !(kDown & KEY_A)) {
@@ -65936,24 +65951,30 @@ int main(int argc, char* argv[])
 						feSoundPlay((kDown & KEY_UP) ? FE_EV_UP : FE_EV_DOWN);
 					}
 				}
-				bool go = (kDown & KEY_A) && g_titleSel == TITLE_HIT_CARD;
-				if ((kDown & KEY_A) && g_titleSel == TITLE_HIT_MENU)
-					kDown |= KEY_START;
+				// Continue: A on the card, a touch on it, or START -- the quick
+				// way in. Main Menu: A on its row or a touch on it.
+				bool go = ((kDown & KEY_A) && g_titleSel == TITLE_HIT_CARD) || (kDown & KEY_START);
+				bool toMenu = (kDown & KEY_A) && g_titleSel == TITLE_HIT_MENU;
+				// Change: Y, or a touch on it -- the profile list.
+				titleToList = (kDown & KEY_Y) != 0;
 				if (kDown & KEY_TOUCH) {
 					touchPosition tp;
 					hidTouchRead(&tp);
-					if (titleHitAt(TITLE_HIT_CARD, tp.px, tp.py))
+					if (titleHitAt(TITLE_HIT_CHANGE, tp.px, tp.py))
+						titleToList = true;
+					else if (titleHitAt(TITLE_HIT_CARD, tp.px, tp.py))
 						go = true;
 					else if (titleHitAt(TITLE_HIT_MENU, tp.px, tp.py))
-						kDown |= KEY_START;
+						toMenu = true;
 				}
-				kDown &= ~(u32)KEY_A;
-				if (go && bootLoadProfile(&cfg, &gProfile, &g_titleContinueEntry)) {
+				if (titleToList)
+					go = toMenu = false;
+				kDown &= ~(u32)(KEY_A | KEY_START);
+				if ((go || toMenu) && bootLoadProfile(&cfg, &gProfile, &g_titleContinueEntry)) {
 					feSoundPlay(FE_EV_ACCEPT);
 					cheats_set_entry(false);
 					freeMenu(&menu);
 					g_titleContinueOk = false;
-					kDown &= ~(u32)KEY_START;
 					if (haveConfig && loadMainMenu(&cfg, &menu)) {
 						bootState = BOOT_MENU;
 						// StartCareerHelper's arms: past the prologue it opens
@@ -65962,7 +65983,7 @@ int main(int argc, char* argv[])
 						// itself. Either way the world opens off the career.
 						// A career not started plays its first movie instead,
 						// from the main menu's Career.
-						const bool drive = gProfile.careerStarted;
+						const bool drive = go && gProfile.careerStarted;
 						if (drive) {
 							g_feCareerMode = true;
 							g_menuCareerCar = true;
@@ -65970,20 +65991,21 @@ int main(int argc, char* argv[])
 							g_cribEnterWorld = true;
 						}
 						char cb[128];
-						snprintf(cb, sizeof(cb), "title: Continue -- \"%.31s\" loaded, %s",
-							gProfile.name, drive ? "into free roam off the career"
-							: "its career has not started -- the main menu");
+						snprintf(cb, sizeof(cb), "title: %s -- \"%.31s\" loaded, %s",
+							go ? "Continue" : "Main Menu", gProfile.name,
+							drive ? "into free roam off the career"
+							: go ? "its career has not started -- the main menu" : "the main menu");
 						dlog(cb);
 					} else {
-						dlog("title: Continue -- UI_Main.fng failed to load -- holding on black");
+						dlog("title: UI_Main.fng failed to load -- holding on black");
 						bootState = BOOT_DONE;
 					}
-				} else if (go) {
-					dlog("title: Continue -- the profile would not load, the usual way instead");
-					kDown |= KEY_START;
+				} else if (go || toMenu) {
+					dlog("title: the profile would not load -- the profile list instead");
+					titleToList = true;
 				}
 			}
-			if (bootState == BOOT_TITLE && (kDown & (KEY_START | KEY_A))) {
+			if (bootState == BOOT_TITLE && ((kDown & (KEY_START | KEY_A)) || titleToList)) {
 				dlog("boot sequence: title screen accepted START/A");
 				// Its dtor closes cheat entry.
 				cheats_set_entry(false);
