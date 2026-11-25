@@ -41561,6 +41561,20 @@ static void worldExit(void) {
 // it afterwards.
 static bool engageEventDialogOpen(const Config* cfg, MenuState* menu, EngageKind kind);
 
+// PORT (the debug tools, dbgToolsTick()): an engage dialog raised on a record
+// the career has not reached -- a showcase, a world challenge, a challenge's
+// failure or its uniques shop -- through the Enter press like any other.
+// engageDialogOpen() takes it first; the dialog is then a preview
+// (g_engagePreview), whose buttons move and sound as ever but only close it:
+// no shoot, no challenge entered or failed, no shop walked into.
+static struct {
+	EngageKind kind;
+	const WorldChallengeRec* challenge;
+	const ShowcaseRec* showcase;
+	const ShopRec* shop;
+} g_engageForce;
+static bool g_engagePreview;
+
 // SummonTheRightEngageDialog (0x800E6CEC), for D-Pad Up or for the career's
 // own RCMessage 0x11 (g_engageRequested): a failed challenge's dialog first,
 // then a race start's, a showcase's and a world challenge's -- the shop arm
@@ -41571,6 +41585,27 @@ static bool engageEventDialogOpen(const Config* cfg, MenuState* menu, EngageKind
 // which is the case PlayerCareerState::CanWeEngage answers no to.
 static bool careerWcAtGoalShop(void);
 static bool engageDialogOpen(const Config* cfg, MenuState* menu) {
+	g_engagePreview = false;
+	if (g_engageForce.kind != ENGAGE_KIND_NONE) {
+		// The "here" records engageEventDialogOpen() reads, lent for the
+		// open and put back: the zone search owns them.
+		const ShopRec* sh = g_shopHere;
+		const ShowcaseRec* sc = g_showcaseHere;
+		const WorldChallengeRec* ch = g_challengeHere;
+		const EngageKind k = g_engageForce.kind;
+		g_shopHere = g_engageForce.shop;
+		g_showcaseHere = g_engageForce.showcase;
+		g_challengeHere = g_engageForce.challenge;
+		memset(&g_engageForce, 0, sizeof(g_engageForce));
+		const bool ok = engageEventDialogOpen(cfg, menu, k);
+		g_shopHere = sh;
+		g_showcaseHere = sc;
+		g_challengeHere = ch;
+		g_engagePreview = ok;
+		if (ok)
+			dlog("world ui: engage -- a debug tools preview: its buttons only close it");
+		return ok;
+	}
 	if (g_wc.active && g_wc.failed)
 		return engageEventDialogOpen(cfg, menu, ENGAGE_KIND_FAILURE);
 	if (careerWcAtGoalShop())
@@ -46914,7 +46949,7 @@ static bool engageEventDialogOpen(const Config* cfg, MenuState* menu, EngageKind
 	} else if (kind == ENGAGE_KIND_UNIQUES) {
 		g_engageDlg.shop = g_shopHere;
 		snprintf(b, sizeof(b), "world ui: engage -- %s at its goal shop %s, the uniques dialog",
-			g_wc.active->name, g_shopHere->name);
+			g_wc.active ? g_wc.active->name : "(a preview)", g_shopHere->name);
 	} else if (kind == ENGAGE_KIND_SHOP) {
 		const ShopRec* shop = g_shopHere;
 		g_engageDlg.shop = shop;
@@ -46929,7 +46964,7 @@ static bool engageEventDialogOpen(const Config* cfg, MenuState* menu, EngageKind
 				: "the generic one");
 	} else {
 		snprintf(b, sizeof(b), "world ui: engage -- %s ran out of time, the failure dialog",
-			g_wc.active->name);
+			g_wc.active ? g_wc.active->name : "(a preview)");
 	}
 	dlog(b);
 	const bool ok = loadFngScreen(cfg, engageDialogFng(), false, menu);
@@ -49678,6 +49713,15 @@ static bool shootInput(const Config* cfg, MenuState* m, MenuState* dlg, u32 kDow
 static bool engageDialogInput(const Config* cfg, MenuState* m, u32 kDown) {
 	const EngageKind kind = g_engageDlg.kind;
 	char b[192];
+	// A debug tools preview (g_engagePreview): A or B only closes it.
+	if (g_engagePreview && (kDown & (KEY_A | KEY_B)) &&
+			(kind == ENGAGE_KIND_SHOWCASE || !(kDown & (KEY_LEFT | KEY_RIGHT)))) {
+		feSoundPlay(FE_EV_BACK);
+		dlog("world ui: engage preview closed -- nothing done");
+		memset(&g_engageDlg, 0, sizeof(g_engageDlg));
+		g_engagePreview = false;
+		return true;
+	}
 	if (kind == ENGAGE_KIND_SHOWCASE) {
 		if (!(kDown & KEY_A))
 			return false;
@@ -61084,41 +61128,49 @@ static bool drawUiHelp(const MenuState* m) {
 // PORT (a development aid, the user's ask 2026-11-25): a menu over the lower
 // screen that puts the game where a screen can be checked -- the engage
 // dialogs raised for real at a race start, a shop, a showcase or a world
-// challenge (the car teleported into the zone, then the Enter press), the
-// screen's help, the GPS sent to a race with a readout of its straight and
-// route distances. L + R held and SELECT pressed opens it anywhere, with
+// challenge (the car teleported into the zone, then the Enter press) -- or,
+// for the ones the career has not reached, a preview on a record of the
+// game's own (g_engageForce): any showcase or challenge, a challenge's
+// failure, its uniques shop -- the screen's help, the GPS sent to a race
+// with a readout of its straight and route distances. L + R held and SELECT pressed opens it anywhere, with
 // DevCommands=1 or DebugMenuEnabled=1; while it is up the game gets no input
 // (devcmd.h, the grab). The command file's `dbg ID` runs an item without it.
 // Not the Debug Menu (#448), the main menu's page of Dbg* settings.
 typedef enum {
-	DT_RACE, DT_SHOP, DT_SHOWCASE, DT_CHALLENGE, DT_GPS, DT_GPSINFO, DT_HELP, DT_N
+	DT_RACE, DT_SHOP, DT_SHOWCASE, DT_CHALLENGE, DT_FAILED, DT_UNIQUES, DT_GPS, DT_GPSINFO,
+	DT_HELP, DT_N
 } DtItem;
 static const char* const kDtId[DT_N] = {
-	"race", "shop", "showcase", "challenge", "gps", "gpsinfo", "help",
+	"race", "shop", "showcase", "challenge", "failed", "uniques", "gps", "gpsinfo", "help",
 };
 static const char* const kDtName[DT_N] = {
-	"Race offer", "Shop entry", "Showcase offer", "World challenge", "GPS to a race",
-	"GPS readout", "Screen help",
+	"Race offer", "Shop entry", "Showcase offer", "World challenge", "Challenge failed",
+	"Uniques shop", "GPS to a race", "GPS readout", "Screen help",
 };
 // What each one does, on the menu's foot for the selected row.
 static const char* const kDtWhat[DT_N] = {
 	"Teleport to the next race start, raise its dialog",
 	"Teleport to the next shop, raise its dialog",
-	"Teleport to the next showcase, raise its dialog",
-	"Teleport to the next world challenge, raise its dialog",
+	"Next showcase: teleport there, or a preview if none is open",
+	"Next challenge: teleport there, or a preview if none is open",
+	"Preview: a world challenge ran out of time",
+	"Preview: a challenge reached its uniques shop",
 	"Car onto the nearest road, GPS to the next race start",
 	"Show the GPS's straight and route distances",
 	"Open this screen's help (ZL)",
 };
+#define DT_VIS 6   // rows the panel shows; more scroll
 static struct {
 	bool on;            // allowed: DevCommands=1 or DebugMenuEnabled=1
 	bool open;
 	int  sel;           // in rows[]
+	int  top;           // the first row shown
 	DtItem rows[DT_N];
 	int  rowN;
 	int  next[DT_N];    // each kind's next marker, cycling through them
 	bool gpsInfo;
 	int  enterIn;       // scans to the Enter press after a teleport
+	int  forceIn;       // scans a preview's g_engageForce is given to open
 	bool touchWas;
 	char note[96];      // the last item's outcome, until the selection moves
 	// This scan's context, from main().
@@ -61161,6 +61213,39 @@ static int dtMarkerNth(int kind, int nth) {
 // The marker list an item walks: the GPS's is the race starts.
 static int dtKindOf(DtItem k) {
 	return k == DT_GPS ? DT_RACE : (int)k;
+}
+
+// What a preview walks instead: every showcase or challenge record, and the
+// challenges whose goal is a shop (the uniques runs) with that shop.
+static int dtPreviewCount(DtItem k) {
+	switch (k) {
+	case DT_SHOWCASE: return g_shops.showcaseCount;
+	case DT_CHALLENGE: return g_shops.challengeCount;
+	case DT_FAILED: return 1;
+	case DT_UNIQUES: {
+		int n = 0;
+		for (int i = 0; i < g_shops.challengeCount; i++)
+			n += eventdb_shop_by_handle(&g_shops, g_shops.challenges[i].goalHandle) != NULL;
+		return n;
+	}
+	default: return 0;
+	}
+}
+static const WorldChallengeRec* dtUniquesNth(int nth, const ShopRec** shop) {
+	for (int i = 0; i < g_shops.challengeCount; i++) {
+		const ShopRec* sh = eventdb_shop_by_handle(&g_shops, g_shops.challenges[i].goalHandle);
+		if (sh && nth-- == 0) {
+			*shop = sh;
+			return &g_shops.challenges[i];
+		}
+	}
+	return NULL;
+}
+// A showcase or challenge row previews while the career has none open.
+static bool dtPreviews(DtItem k) {
+	if (k == DT_FAILED || k == DT_UNIQUES)
+		return true;
+	return (k == DT_SHOWCASE || k == DT_CHALLENGE) && dtMarkerCount(k) == 0;
 }
 
 static bool dtInZone(const TrackPathZone* z, float x, float y) {
@@ -61256,8 +61341,10 @@ static void dtNote(const char* s) {
 
 static bool dtAvailable(DtItem k) {
 	switch (k) {
-	case DT_RACE: case DT_SHOP: case DT_SHOWCASE: case DT_CHALLENGE: case DT_GPS:
+	case DT_RACE: case DT_SHOP: case DT_GPS:
 		return g_dt.world && dtMarkerCount(dtKindOf(k)) > 0;
+	case DT_SHOWCASE: case DT_CHALLENGE: case DT_FAILED: case DT_UNIQUES:
+		return g_dt.world && (dtMarkerCount(k) > 0 || dtPreviewCount(k) > 0);
 	case DT_GPSINFO:
 		return g_dt.world;
 	case DT_HELP:
@@ -61275,7 +61362,18 @@ static void dtValue(DtItem k, char* out, size_t cap) {
 	case DT_HELP:
 		snprintf(out, cap, "%s", dtAvailable(k) ? "ZL" : "none here");
 		return;
+	case DT_FAILED:
+		snprintf(out, cap, "%s", g_dt.world ? "preview" : "--");
+		return;
 	default: {
+		if (g_dt.world && dtPreviews(k)) {
+			const int n = dtPreviewCount(k);
+			if (n)
+				snprintf(out, cap, "preview %d / %d", g_dt.next[k] % n + 1, n);
+			else
+				snprintf(out, cap, "none");
+			return;
+		}
 		const int n = g_dt.world ? dtMarkerCount(dtKindOf(k)) : 0;
 		if (n)
 			snprintf(out, cap, "%d / %d", g_dt.next[k] % n + 1, n);
@@ -61308,6 +61406,39 @@ static bool dtRun(DtItem k) {
 		return true;
 	default:
 		break;
+	}
+	if (dtPreviews(k)) {
+		// The real dialog on a record of the game's own, through the Enter
+		// press (engageDialogOpen() takes g_engageForce first).
+		const int n = dtPreviewCount(k), nth = g_dt.next[k] % n;
+		g_dt.next[k] = nth + 1;
+		memset(&g_engageForce, 0, sizeof(g_engageForce));
+		if (k == DT_SHOWCASE) {
+			g_engageForce.kind = ENGAGE_KIND_SHOWCASE;
+			g_engageForce.showcase = &g_shops.showcases[nth];
+			snprintf(b, sizeof(b), "Showcase preview %d/%d: %s (type %d)", nth + 1, n,
+				g_engageForce.showcase->name, (int)g_engageForce.showcase->type);
+		} else if (k == DT_CHALLENGE) {
+			g_engageForce.kind = ENGAGE_KIND_CHALLENGE;
+			g_engageForce.challenge = &g_shops.challenges[nth];
+			snprintf(b, sizeof(b), "Challenge preview %d/%d: %s (type %d)", nth + 1, n,
+				g_engageForce.challenge->name, (int)g_engageForce.challenge->type);
+		} else if (k == DT_FAILED) {
+			g_engageForce.kind = ENGAGE_KIND_FAILURE;
+			snprintf(b, sizeof(b), "Failed challenge preview");
+		} else {
+			const ShopRec* sh = NULL;
+			const WorldChallengeRec* c = dtUniquesNth(nth, &sh);
+			if (!c)
+				return false;
+			g_engageForce.kind = ENGAGE_KIND_UNIQUES;
+			g_engageForce.shop = sh;
+			snprintf(b, sizeof(b), "Uniques preview %d/%d: %s at %s", nth + 1, n, c->name, sh->name);
+		}
+		g_touchEnter = true;
+		g_dt.forceIn = 4;
+		dtNote(b);
+		return true;
 	}
 	const int kind = dtKindOf(k), n = dtMarkerCount(kind);
 	const int nth = g_dt.next[k] % n;
@@ -61353,7 +61484,7 @@ static int dtRowAt(int x, int y) {
 	if (x < DT_PX || x > DT_PX + DT_PW || y < DT_PY || y > DT_PY + DT_PH)
 		return -2;
 	const int r = y >= DT_RY ? (int)(((float)y - DT_RY) / DT_RH) : -1;
-	return r >= 0 && r < g_dt.rowN ? r : -1;
+	return r >= 0 && r < DT_VIS && g_dt.top + r < g_dt.rowN ? g_dt.top + r : -1;
 }
 
 // Once a scan, after the input is read: `world` is career free roam with no
@@ -61372,7 +61503,15 @@ static void dbgToolsTick(bool world, bool fe, const char* screen) {
 		g_dt.rows[g_dt.rowN++] = DT_HELP;
 	if (g_dt.sel >= g_dt.rowN)
 		g_dt.sel = 0;
+	if (g_dt.top > g_dt.sel || g_dt.top + DT_VIS > g_dt.rowN + DT_VIS - 1)
+		g_dt.top = 0;
 
+	// A preview the Enter press did not open (the world was not driving)
+	// must not wait for the next real D-Pad Up.
+	if (g_dt.forceIn > 0 && --g_dt.forceIn == 0 && g_engageForce.kind != ENGAGE_KIND_NONE) {
+		memset(&g_engageForce, 0, sizeof(g_engageForce));
+		dtNote("the preview did not open -- dropped");
+	}
 	// A teleport's Enter press, once the zone under the car has been found.
 	if (g_dt.enterIn > 0 && --g_dt.enterIn == 0) {
 		char b[320];
@@ -61441,6 +61580,10 @@ static void dbgToolsTick(bool world, bool fe, const char* screen) {
 	}
 	if (g_dt.sel != was)
 		g_dt.note[0] = '\0';
+	if (g_dt.sel < g_dt.top)
+		g_dt.top = g_dt.sel;
+	if (g_dt.sel >= g_dt.top + DT_VIS)
+		g_dt.top = g_dt.sel - DT_VIS + 1;
 }
 
 // The GPS readout: what it tracks, the straight line to it and the road to
@@ -61508,10 +61651,11 @@ static void dbgToolsDraw(void) {
 		uiDialogRing(DT_PX, DT_PY, DT_PW, DT_PH);
 		uiLabel(buf, "DEBUG TOOLS", DT_PX + 12.0f, DT_PY + 15.0f, 0, UI_ACCENT);
 		uiLabel(buf, "L + R + SELECT", DT_PX + DT_PW - 12.0f, DT_PY + 15.0f, 2, UI_DIM);
-		for (int r = 0; r < g_dt.rowN; r++) {
+		for (int v = 0; v < DT_VIS && g_dt.top + v < g_dt.rowN; v++) {
+			const int r = g_dt.top + v;
 			const DtItem k = g_dt.rows[r];
 			const bool avail = dtAvailable(k), sel = r == g_dt.sel;
-			const float y = DT_RY + (float)r * DT_RH, cy = y + (DT_RH - 2.0f) * 0.5f;
+			const float y = DT_RY + (float)v * DT_RH, cy = y + (DT_RH - 2.0f) * 0.5f;
 			uiRowBar(DT_PX + 8.0f, y, DT_PW - 16.0f, DT_RH - 2.0f, sel);
 			char v[32];
 			dtValue(k, v, sizeof(v));
@@ -61519,6 +61663,13 @@ static void dbgToolsDraw(void) {
 				avail ? UI_ACCENT : UI_DIM, 110.0f);
 			uiText(buf, kDtName[k], 15.0f, DT_PX + 18.0f, cy, 0, avail ? UI_WHITE : UI_DIM,
 				DT_PW - 50.0f - vw);
+		}
+		if (g_dt.rowN > DT_VIS) {
+			const float sh = (float)DT_VIS * DT_RH - 2.0f, th = sh * (float)DT_VIS / (float)g_dt.rowN;
+			const float sx = DT_PX + DT_PW - 6.0f;
+			uiRoundRect(sx, DT_RY, 3.0f, sh, 1.5f, UI_Z, C2D_Color32(255, 255, 255, 26));
+			uiRoundRect(sx, DT_RY + (sh - th) * (float)g_dt.top / (float)(g_dt.rowN - DT_VIS), 3.0f, th,
+				1.5f, UI_Z, UI_ACCENT);
 		}
 		if (g_dt.rowN == 0)
 			uiText(buf, "Nothing to check on this screen", 14.0f, BOTTOM_W * 0.5f, DT_RY + 40.0f, 1,
@@ -69508,7 +69659,7 @@ int main(int argc, char* argv[])
 					g_engageRequested = false;
 					menu.touchBottomWhole = true;
 				} else if (enterPress && !atShop && !g_engageZone && !(g_wc.active && g_wc.failed) &&
-						encounter_offer_up(&g_enc)) {
+						g_engageForce.kind == ENGAGE_KIND_NONE && encounter_offer_up(&g_enc)) {
 					if (encounter_request_getaway(&g_enc, dlog)) {
 						engage_events_remove(&g_engageEvents, ENGAGE_EVENT_RANDOM_ENCOUNTER);
 						g_encOfferIcon = false;

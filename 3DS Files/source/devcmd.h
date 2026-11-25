@@ -31,8 +31,9 @@
 //                                takes this instead of opening
 //   dbg   ID                     runs the debug tools' item ID (main.c's
 //                                dbgTools: race, shop, showcase, challenge,
-//                                gps, gpsinfo, help, open, close) as if picked
-//                                from its menu; the log says what it did
+//                                failed, uniques, gps, gpsinfo, help, open,
+//                                close) as if picked from its menu; the log
+//                                says what it did. One a scan: a second waits
 //
 // KEY names: A B X Y L R ZL ZR START SELECT UP DOWN LEFT RIGHT.
 //
