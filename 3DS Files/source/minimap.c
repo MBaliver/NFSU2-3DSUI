@@ -168,26 +168,58 @@ static const u32 kElementColor[MINIMAP_ELEM_COUNT] = {
 static u32 s_gpsColor = MM_GPS_COLOR;
 
 static bool s_square = false;
+static float s_pinTop = 0.0f, s_pinRight = 0.0f, s_pinBottom = 0.0f, s_pinLeft = 0.0f;
 
 void minimap_set_square(bool square) {
 	s_square = square;
 }
 
+void minimap_set_pin_margins(float top, float right, float bottom, float left) {
+	s_pinTop    = top    > 0.0f ? top    : 0.0f;
+	s_pinRight  = right  > 0.0f ? right  : 0.0f;
+	s_pinBottom = bottom > 0.0f ? bottom : 0.0f;
+	s_pinLeft   = left   > 0.0f ? left   : 0.0f;
+}
+
 // The square panel's frame colour and how far in a pinned icon sits.
 #define MM_SQ_PIN_PAD   9.0f
 
-// Pulls (u, v) in along its own line until it lies inside the half-extents
-// (hw, hh) -- the square panel's stand-in for mmPlace()'s pin circle. False
-// past `limit` windows, the same rule.
-static bool mmPlaceRect(float u, float v, float windowPx, float limit, float hw, float hh,
-		float* du, float* dv) {
+// Pin box bounds relative to the panel centre (cx, cy), respecting any HUD
+// strip margins set via minimap_set_pin_margins().
+static void mmPinBounds(float w, float h, float pad,
+		float* minU, float* maxU, float* minV, float* maxV) {
+	*minU = -w * 0.5f + s_pinLeft   + pad;
+	*maxU =  w * 0.5f - s_pinRight  - pad;
+	*minV = -h * 0.5f + s_pinTop    + pad;
+	*maxV =  h * 0.5f - s_pinBottom - pad;
+	if (*minU > 0.0f) *minU = 0.0f;
+	if (*maxU < 0.0f) *maxU = 0.0f;
+	if (*minV > 0.0f) *minV = 0.0f;
+	if (*maxV < 0.0f) *maxV = 0.0f;
+}
+
+// Pulls (u, v) in along its own ray from (0, 0) until it lies inside
+// [minU, maxU] x [minV, maxV] -- the square panel's stand-in for mmPlace()'s
+// pin circle. False past `limit` windows, the same rule.
+static bool mmPlaceRect(float u, float v, float windowPx, float limit,
+		float minU, float maxU, float minV, float maxV, float* du, float* dv) {
 	if (sqrtf(u * u + v * v) >= limit * windowPx)
 		return false;
 	float k = 1.0f;
-	if (fabsf(u) > hw && hw > 0.0f)
-		k = hw / fabsf(u);
-	if (fabsf(v) * k > hh && hh > 0.0f)
-		k = hh / fabsf(v);
+	if (u > maxU && maxU > 0.0f) {
+		const float t = maxU / u;
+		if (t < k) k = t;
+	} else if (u < minU && minU < 0.0f) {
+		const float t = minU / u;
+		if (t < k) k = t;
+	}
+	if (v > maxV && maxV > 0.0f) {
+		const float t = maxV / v;
+		if (t < k) k = t;
+	} else if (v < minV && minV < 0.0f) {
+		const float t = minV / v;
+		if (t < k) k = t;
+	}
 	*du = u * k;
 	*dv = v * k;
 	return true;
@@ -225,8 +257,13 @@ struct Minimap {
 	float viewZoom;                  // minimap_set_view_zoom, 0 = 1
 	float lastCx, lastCy, lastViewX, lastViewY;
 	float lastX0, lastY0, lastX1, lastY1;
-	bool  drawn;
+	float lastLimit, lastShortAxis;
+	float lastPinMinU, lastPinMaxU, lastPinMinV, lastPinMaxV;
+	bool  drawn, lastSquare;
 };
+
+static bool mmPlace(float u, float v, float windowPx, float limit, float radius,
+	float pad, float* du, float* dv);
 
 void minimap_set_view_zoom(Minimap* m, float z) {
 	if (m)
@@ -246,6 +283,26 @@ bool minimap_world_to_panel(const Minimap* m, float wx, float wy, float* sx, flo
 	*sx = m->lastCx + u * c - v * sn;
 	*sy = m->lastCy + u * sn + v * c;
 	return *sx >= m->lastX0 && *sx < m->lastX1 && *sy >= m->lastY0 && *sy < m->lastY1;
+}
+
+bool minimap_marker_to_panel(const Minimap* m, float wx, float wy, float* sx, float* sy) {
+	if (!m || !m->drawn || m->span <= 0.0f || m->lastPerArt <= 0.0f)
+		return false;
+	const float u = ((wx - m->lastViewX) / m->span) * m->lastPerArt;
+	const float v = ((m->lastViewY - wy) / m->span) * m->lastPerArt;
+	const float c = cosf(m->lastAngle), sn = sinf(m->lastAngle);
+	const float ru = u * c - v * sn;
+	const float rv = u * sn + v * c;
+	float du, dv;
+	if (m->lastSquare
+			? !mmPlaceRect(ru, rv, m->lastShortAxis, m->lastLimit,
+				m->lastPinMinU, m->lastPinMaxU, m->lastPinMinV, m->lastPinMaxV, &du, &dv)
+			: !mmPlace(ru, rv, m->lastShortAxis, m->lastLimit,
+				MM_PIN * m->lastShortAxis, 0.0f, &du, &dv))
+		return false;
+	*sx = m->lastCx + du;
+	*sy = m->lastCy + dv;
+	return true;
 }
 
 void minimap_pan_px(Minimap* m, float dxPx, float dyPx) {
@@ -298,8 +355,14 @@ void minimap_view_get(const Minimap* m, MinimapView* v) {
 	v->lastViewX = m->lastViewX; v->lastViewY = m->lastViewY;
 	v->lastX0 = m->lastX0; v->lastY0 = m->lastY0;
 	v->lastX1 = m->lastX1; v->lastY1 = m->lastY1;
+	v->lastLimit = m->lastLimit; v->lastShortAxis = m->lastShortAxis;
+	v->lastPinMinU = m->lastPinMinU; v->lastPinMaxU = m->lastPinMaxU;
+	v->lastPinMinV = m->lastPinMinV; v->lastPinMaxV = m->lastPinMaxV;
+	v->pinTop = s_pinTop; v->pinRight = s_pinRight;
+	v->pinBottom = s_pinBottom; v->pinLeft = s_pinLeft;
 	v->drawn = m->drawn;
 	v->square = s_square;
+	v->lastSquare = m->lastSquare;
 }
 
 void minimap_view_set(Minimap* m, const MinimapView* v) {
@@ -313,8 +376,14 @@ void minimap_view_set(Minimap* m, const MinimapView* v) {
 	m->lastViewX = v->lastViewX; m->lastViewY = v->lastViewY;
 	m->lastX0 = v->lastX0; m->lastY0 = v->lastY0;
 	m->lastX1 = v->lastX1; m->lastY1 = v->lastY1;
+	m->lastLimit = v->lastLimit; m->lastShortAxis = v->lastShortAxis;
+	m->lastPinMinU = v->lastPinMinU; m->lastPinMaxU = v->lastPinMaxU;
+	m->lastPinMinV = v->lastPinMinV; m->lastPinMaxV = v->lastPinMaxV;
+	s_pinTop = v->pinTop; s_pinRight = v->pinRight;
+	s_pinBottom = v->pinBottom; s_pinLeft = v->pinLeft;
 	m->drawn = v->drawn;
 	s_square = v->square;
+	m->lastSquare = v->lastSquare;
 }
 
 // main.c's scissorLogical(), which is static there. Same contract: logical
@@ -810,6 +879,15 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 	m->lastY1 = y + h;
 	m->drawn = true;
 	const float limit = (gps && (gps->engaged || gps->stageZero)) ? MM_LIMIT_GPS : MM_LIMIT_IDLE;
+	float pinMinU = 0.0f, pinMaxU = 0.0f, pinMinV = 0.0f, pinMaxV = 0.0f;
+	mmPinBounds(w, h, MM_SQ_PIN_PAD, &pinMinU, &pinMaxU, &pinMinV, &pinMaxV);
+	m->lastLimit = limit;
+	m->lastShortAxis = shortAxis;
+	m->lastPinMinU = pinMinU;
+	m->lastPinMaxU = pinMaxU;
+	m->lastPinMinV = pinMinV;
+	m->lastPinMaxV = pinMaxV;
+	m->lastSquare = square;
 	// PORT: the GPS's path, under every icon: a dark casing, then the line,
 	// with round joints, all opaque so the overlaps blend nothing.
 	if (gps && gps->route && gps->routeN >= 2 && perArt > 0.0f) {
@@ -844,6 +922,11 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 			}
 			if (slot < 0 || !m->texValid[slot])
 				continue;
+			const u8 el = markers[i].element;
+			// PORT: during an active race or getaway, never distance-cull AI
+			// racers -- pin them cleanly to the panel edge so every rival stays
+			// readable regardless of minimap zoom or gap.
+			const float mLimit = (el == MINIMAP_ELEM_AIRACER && gps && gps->racing) ? 1e9f : limit;
 			// artX/artY cancel: the difference of the two art mappings is just
 			// the world delta over the span, with Y flipped as the art's V
 			// axis runs south.
@@ -852,32 +935,42 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 			// citro2d rotates content by (x cos - y sin, x sin + y cos), the
 			// same transform the map quad above gets.
 			float du, dv;
-			if (square ? !mmPlaceRect(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
-					w * 0.5f - MM_SQ_PIN_PAD, h * 0.5f - MM_SQ_PIN_PAD, &du, &dv)
-				: !mmPlace(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
+			if (square ? !mmPlaceRect(u * ca - v * sa, u * sa + v * ca, shortAxis, mLimit,
+					pinMinU, pinMaxU, pinMinV, pinMaxV, &du, &dv)
+				: !mmPlace(u * ca - v * sa, u * sa + v * ca, shortAxis, mLimit,
 					MM_PIN * shortAxis, 0.0f, &du, &dv))
 				continue;
 			const float sx = cx + du;
 			const float sy = cy + dv;
-			const u8 el = markers[i].element;
 			C2D_ImageTint tint;
 			u32 col = kElementColor[el < MINIMAP_ELEM_COUNT ? el : MINIMAP_ELEM_NONE];
-			if (markers[i].dim)
+			float mw = MM_MARKER_W, mh = MM_MARKER_H, mz = 0.2f;
+			if (el == MINIMAP_ELEM_AIRACER) {
+				// PORT: match the player arrow's car-arrow proportions (slightly
+				// smaller than player's 1.5x so the player stays dominant) and keep
+				// full opacity so the black outline stays crisp over white race roads.
+				const float acs = square ? 1.35f : 1.0f;
+				mw = acs * MM_CAR_W;
+				mh = acs * MM_CAR_H;
+				col = markers[i].dim ? MM_RGBA(215, 78, 28, 255) : MM_RGBA(255, 165, 32, 255);
+				mz = markers[i].dim ? 0.34f : 0.36f;
+			} else if (markers[i].dim) {
 				col = (col & 0x00FFFFFFu) | 0x80000000u;
+			}
 			C2D_PlainImageTint(&tint, col, 1.0f);
 			if (markers[i].turns) {
 				// The same transform the player's own icon gets below, with
 				// this marker's heading in place of the camera's.
-				C2D_DrawImageAtRotated(m->img[slot], sx, sy, 0.2f,
+				C2D_DrawImageAtRotated(m->img[slot], sx, sy, mz,
 					mapAngle - (markers[i].heading - (float)M_PI * 0.5f), &tint,
-					MM_MARKER_W / (float)m->sub[slot].width,
-					MM_MARKER_H / (float)m->sub[slot].height);
+					mw / (float)m->sub[slot].width,
+					mh / (float)m->sub[slot].height);
 			} else {
 				// Upright: a shop or an event start does not face anywhere.
-				C2D_DrawImageAt(m->img[slot], sx - MM_MARKER_W * 0.5f,
-					sy - MM_MARKER_H * 0.5f, 0.2f, &tint,
-					MM_MARKER_W / (float)m->sub[slot].width,
-					MM_MARKER_H / (float)m->sub[slot].height);
+				C2D_DrawImageAt(m->img[slot], sx - mw * 0.5f,
+					sy - mh * 0.5f, mz, &tint,
+					mw / (float)m->sub[slot].width,
+					mh / (float)m->sub[slot].height);
 			}
 		}
 		C2D_SetTintMode(C2D_TintSolid);
@@ -890,7 +983,7 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 		const float v = ((worldY - gps->iconY) / m->span) * perArt;
 		float du, dv;
 		if (square ? mmPlaceRect(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
-				w * 0.5f - MM_SQ_PIN_PAD, h * 0.5f - MM_SQ_PIN_PAD, &du, &dv)
+				pinMinU, pinMaxU, pinMinV, pinMaxV, &du, &dv)
 			: mmPlace(u * ca - v * sa, u * sa + v * ca, shortAxis, limit,
 				MM_PIN * shortAxis, 0.0f, &du, &dv)) {
 			const float ms = (float)(gps->ms % MM_GPS_LOOP_MS);
@@ -926,9 +1019,10 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 		if (square) {
 			// On the frame along north's line, kept just inside it.
 			const float big = w + h;
+			float nMinU, nMaxU, nMinV, nMaxV;
+			mmPinBounds(w, h, MM_NORTH_W * 0.5f + 2.0f, &nMinU, &nMaxU, &nMinV, &nMaxV);
 			mmPlaceRect(big * sinf(mapAngle), -big * cosf(mapAngle), 1.0f, 1e9f,
-				w * 0.5f - MM_NORTH_W * 0.5f - 2.0f, h * 0.5f - MM_NORTH_W * 0.5f - 2.0f,
-				&nx, &ny);
+				nMinU, nMaxU, nMinV, nMaxV, &nx, &ny);
 		}
 		C2D_ImageTint tint;
 		C2D_PlainImageTint(&tint, MM_NORTH_COLOR, 1.0f);
@@ -956,7 +1050,7 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 			const float v = ((worldY - carWY) / m->span) * perArt;
 			if (square)
 				mmPlaceRect(u * ca - v * sa, u * sa + v * ca, 1.0f, 1e9f,
-					w * 0.5f - MM_SQ_PIN_PAD, h * 0.5f - MM_SQ_PIN_PAD, &px, &py);
+					pinMinU, pinMaxU, pinMinV, pinMaxV, &px, &py);
 			else
 				mmPlace(u * ca - v * sa, u * sa + v * ca, 1.0f, 1e9f,
 					MM_PIN * shortAxis, 0.0f, &px, &py);

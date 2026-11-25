@@ -372,6 +372,7 @@ bool minimap_set_track(Minimap* m, const char* mapPath, int trackId,
 typedef struct {
 	bool  engaged;   // GetGPSStatus reads 0..3
 	bool  stageZero; // the stage global 0x803BB288 reads 0
+	bool  racing;    // PORT: active race or getaway -- never distance-cull AI racers
 	bool  icon;      // the GPS is started: draw the rings at iconX/iconY
 	float iconX, iconY;
 	u32   ms;        // a free-running millisecond clock for the rings' loop
@@ -400,6 +401,11 @@ void minimap_set_gps_colour(u32 rgb);
 // area shows more of the city rather than zooming in.
 void minimap_set_square(bool square);
 
+// PORT: inset margins (in panel pixels) kept clear when pinning icons and the
+// north indicator to a square panel's edges -- e.g. bottom=36 so icons behind
+// the car sit above the opaque 36 px bottom strip instead of hidden under it.
+void minimap_set_pin_margins(float top, float right, float bottom, float left);
+
 // PORT: touch panning, like a GPS. The view's centre is the car plus a world
 // offset; minimap_pan_px() moves it by a finger's drag in panel pixels (the
 // map follows the finger, rotation included), clamped to the city art.
@@ -414,9 +420,13 @@ bool minimap_panned(const Minimap* m);
 // PORT: the view's zoom on top of retail's aperture (1 = retail's; >1 shows
 // less ground bigger), and where a world point landed in the last draw, in
 // panel pixels -- false if it was outside the panel or nothing has been drawn.
+// minimap_marker_to_panel() applies the same edge-pinning and distance culling
+// as minimap_draw(), returning true with the drawn pixel (in-bounds or pinned)
+// iff the marker was actually visible.
 void minimap_set_view_zoom(Minimap* m, float z);
 float minimap_view_zoom(const Minimap* m);
 bool minimap_world_to_panel(const Minimap* m, float wx, float wy, float* sx, float* sy);
+bool minimap_marker_to_panel(const Minimap* m, float wx, float wy, float* sx, float* sy);
 
 // PORT: a second view of the same map (the pause's, on the top screen). The
 // pan, the zoom, the last draw's placement (minimap_world_to_panel(), the
@@ -427,7 +437,10 @@ bool minimap_world_to_panel(const Minimap* m, float wx, float wy, float* sx, flo
 typedef struct {
 	float panX, panY, lastAngle, lastPerArt, lastCarX, lastCarY, viewZoom;
 	float lastCx, lastCy, lastViewX, lastViewY, lastX0, lastY0, lastX1, lastY1;
-	bool  drawn, square;
+	float lastLimit, lastShortAxis;
+	float lastPinMinU, lastPinMaxU, lastPinMinV, lastPinMaxV;
+	float pinTop, pinRight, pinBottom, pinLeft;
+	bool  drawn, square, lastSquare;
 } MinimapView;
 void minimap_view_get(const Minimap* m, MinimapView* v);
 void minimap_view_set(Minimap* m, const MinimapView* v);

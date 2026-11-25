@@ -8517,6 +8517,7 @@ typedef struct {
 	u32 purse;          // GetEventPurse__17PlayerCareerState (0x801275B0)
 	u32 distanceM;      // TrackInfo+0x98 of the event's first track
 	bool haveDistance;
+	float mapCx, mapCy, mapZoom; // TrackRec selCentreX/Y/selZoom for the route layout
 	int bodyVariant;    // bRandom(N)+1, see eventdb_engage_body_variants()
 	// EventEngageDialog's: the challenge or the showcase, the body's language
 	// hash (GetEngageChallengeDialogBody's bRandom pick, drawn once as the
@@ -41662,6 +41663,9 @@ static bool engageDialogOpen(const Config* cfg, MenuState* menu) {
 			if (r) {
 				g_engageDlg.distanceM = r->distanceM;
 				g_engageDlg.haveDistance = true;
+				g_engageDlg.mapCx = r->selCentreX;
+				g_engageDlg.mapCy = r->selCentreY;
+				g_engageDlg.mapZoom = r->selZoom;
 			}
 		}
 	}
@@ -58099,11 +58103,11 @@ static void worldHandleTap(void) {
 	// tap must not pick one of the hidden ones near the finger instead (the
 	// user on hardware, 2026-11-14).
 	const int gpsSt = gps_status();
-	const bool gpsOnly = !g_raceRun.on && gpsSt >= GPS_STATUS_SEARCHING && gpsSt <= GPS_STATUS_ACTIVE &&
-		g_careerStage != 0;
+	const bool gpsOnly = !g_raceRun.on && gpsSt >= GPS_STATUS_SEARCHING && gpsSt <= GPS_STATUS_ACTIVE;
 	int best = -1;
-	float bd = 16.0f * 16.0f;
-	for (int i = 0; i < g_markerCount && !g_raceRun.on; i++) {
+	float bd = 20.0f * 20.0f;
+	// Walk back-to-front so overlapping edge-pinned icons pick the topmost drawn one.
+	for (int i = g_markerCount - 1; i >= 0 && !g_raceRun.on; i--) {
 		float sx, sy;
 		if (gpsOnly) {
 			float target[3], icon[2];
@@ -58113,7 +58117,7 @@ static void worldHandleTap(void) {
 			if (!gps_is_target(target))
 				continue;
 		}
-		if (!minimap_world_to_panel(g_minimap, g_markers[i].worldX, g_markers[i].worldY, &sx, &sy))
+		if (!minimap_marker_to_panel(g_minimap, g_markers[i].worldX, g_markers[i].worldY, &sx, &sy))
 			continue;
 		const float d = (sx - x) * (sx - x) + (sy - y) * (sy - y);
 		if (d < bd) {
@@ -60926,6 +60930,7 @@ static bool drawUiEngage(const MenuState* m) {
 	const float W = m->screenW > 0.0f ? m->screenW : BOTTOM_W, H = BOTTOM_H;
 	C2D_DrawRectSolid(0.0f, 0.0f, UI_Z - 0.1f, W, H, C2D_Color32(0, 0, 0, 140));
 	const bool race = g_engageDlg.kind == ENGAGE_KIND_RACE;
+	const bool hasMap = race && m->trackMap.valid && m->trackMap.image.subtex;
 	const bool event = g_engageDlg.kind == ENGAGE_KIND_CHALLENGE || g_engageDlg.kind == ENGAGE_KIND_SHOWCASE;
 	const float px = 8.0f, pw = W - 16.0f;
 	// The buttons on show.
@@ -60936,17 +60941,23 @@ static bool drawUiEngage(const MenuState* m) {
 			btn[nb++] = k;
 	}
 	const char* body = g_engStr.body;
-	const float bodyPx = 14.0f, lh = 17.0f;
+	const float bodyPx = 14.0f, lh = hasMap ? 16.0f : 17.0f;
+	const float mapS = 116.0f;
+	const float bodyX = hasMap ? px + 10.0f + mapS + 8.0f : px + 12.0f;
+	const float bodyW = hasMap ? (px + pw - 10.0f) - bodyX : pw - 24.0f;
 	static char wrapped[1024];
 	C2D_TextBufClear(wrapBuf);
-	int lines = body[0] ? uiWrap(wrapBuf, body, bodyPx, pw - 24.0f, wrapped, sizeof(wrapped)) : 0;
+	int lines = body[0] ? uiWrap(wrapBuf, body, bodyPx, bodyW, wrapped, sizeof(wrapped)) : 0;
 	// The event and shop dialogs' title. A failed challenge's is empty --
 	// retail's FEPrintf of "" -- and then its line goes, rather than leave
 	// a gap between the label and the message.
 	const char* title = race ? NULL : event ? uiAfterColon(g_engStr.subject) : g_engStr.title;
 	const bool titled = title && title[0];
 	float ph, py;
-	if (race) {
+	if (hasMap) {
+		ph = H - 16.0f;
+		py = floorf((H - ph) * 0.5f);
+	} else if (race) {
 		const float bodyH = lines > 0 ? (float)(lines < 5 ? lines : 5) * lh + 10.0f : 6.0f;
 		ph = fminf(H - 16.0f, 92.0f + bodyH + (nb ? 36.0f + 12.0f : 8.0f));
 		py = floorf((H - ph) * 0.5f);
@@ -60969,20 +60980,60 @@ static bool drawUiEngage(const MenuState* m) {
 		snprintf(fr, sizeof(fr), "%s", g_engStr.from);
 		portstr_upper(fr);
 		uiLabel(buf, fr, px + pw - 12.0f, py + 14.0f, 2, UI_DIM);
-		uiText(buf, uiAfterColon(g_engStr.subject), 19.0f, px + 12.0f, py + 33.0f, 0, UI_WHITE, pw - 24.0f);
-		// The two numbers.
-		const float tw = (pw - 24.0f - 8.0f) * 0.5f, ty = py + 48.0f;
+		uiText(buf, uiAfterColon(g_engStr.subject), hasMap ? 18.0f : 19.0f,
+			px + 12.0f, py + 32.0f, 0, UI_WHITE, pw - 24.0f);
 		const char* k2[2] = { portstr_caps(PS_DISTANCE), portstr_caps(PS_PURSE) };
 		char v2[2][40];
 		snprintf(v2[0], sizeof(v2[0]), "%s", g_engStr.dist[0] ? g_engStr.dist : "--");
 		snprintf(v2[1], sizeof(v2[1]), "$%s", g_engStr.purse[0] ? g_engStr.purse : "0");
-		for (int i = 0; i < 2; i++) {
-			const float x = px + 12.0f + (float)i * (tw + 8.0f);
-			uiRowBar(x, ty, tw, 36.0f, false);
-			uiText(buf, k2[i], UI_LABEL_PX, x + 10.0f, ty + 10.0f, 0, UI_ACCENT, tw - 20.0f);
-			uiText(buf, v2[i], 17.0f, x + 10.0f, ty + 25.0f, 0, UI_WHITE, tw - 20.0f);
+		if (hasMap) {
+			// Route layout preview on the left, cropped to TrackRec's zoom window.
+			const float mx = px + 10.0f, my = py + 45.0f;
+			uiRoundRect(mx, my, mapS, mapS, 4.0f, UI_Z + 0.005f, UI_DEEP);
+			const Tex3DS_SubTexture* s = m->trackMap.image.subtex;
+			Tex3DS_SubTexture win = *s;
+			float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
+			if (g_engageDlg.mapZoom > 0.0f) {
+				u0 = g_engageDlg.mapCx / 512.0f;
+				v0 = g_engageDlg.mapCy / 512.0f;
+				u1 = (g_engageDlg.mapCx + g_engageDlg.mapZoom) / 512.0f;
+				v1 = (g_engageDlg.mapCy + g_engageDlg.mapZoom) / 512.0f;
+				if (u0 < 0.0f) u0 = 0.0f;
+				if (v0 < 0.0f) v0 = 0.0f;
+				if (u1 > 1.0f) u1 = 1.0f;
+				if (v1 > 1.0f) v1 = 1.0f;
+			}
+			win.left   = s->left + (s->right - s->left) * u0;
+			win.right  = s->left + (s->right - s->left) * u1;
+			win.top    = s->top  + (s->bottom - s->top) * v0;
+			win.bottom = s->top  + (s->bottom - s->top) * v1;
+			const float inner = mapS - 6.0f;
+			win.width  = (u16)inner;
+			win.height = (u16)inner;
+			C2D_Image im = m->trackMap.image;
+			im.subtex = &win;
+			C2D_DrawImageAt(im, mx + 3.0f, my + 3.0f, UI_Z + 0.01f, NULL, 1.0f, 1.0f);
+			uiRing(mx, my, mapS, mapS, 4.0f, 1.0f, UI_Z + 0.015f, UI_RIM);
+			// The two numbers beside the map.
+			const float tw = (bodyW - 6.0f) * 0.5f, ty = my, th = 34.0f;
+			for (int i = 0; i < 2; i++) {
+				const float x = bodyX + (float)i * (tw + 6.0f);
+				uiRowBar(x, ty, tw, th, false);
+				uiText(buf, k2[i], UI_LABEL_PX, x + 6.0f, ty + 10.0f, 0, UI_ACCENT, tw - 12.0f);
+				uiText(buf, v2[i], 15.0f, x + 6.0f, ty + 24.0f, 0, UI_WHITE, tw - 12.0f);
+			}
+			y = ty + th + 6.0f;
+		} else {
+			// The two numbers.
+			const float tw = (pw - 24.0f - 8.0f) * 0.5f, ty = py + 48.0f;
+			for (int i = 0; i < 2; i++) {
+				const float x = px + 12.0f + (float)i * (tw + 8.0f);
+				uiRowBar(x, ty, tw, 36.0f, false);
+				uiText(buf, k2[i], UI_LABEL_PX, x + 10.0f, ty + 10.0f, 0, UI_ACCENT, tw - 20.0f);
+				uiText(buf, v2[i], 17.0f, x + 10.0f, ty + 25.0f, 0, UI_WHITE, tw - 20.0f);
+			}
+			y = ty + 44.0f;
 		}
-		y = ty + 44.0f;
 	} else {
 		uiLabel(buf, event ? (g_engageDlg.kind == ENGAGE_KIND_SHOWCASE ? portstr_caps(PS_MK_SHOWCASE)
 			: portstr(PS_WORLD_CHALLENGE)) : portstr(g_engageDlg.kind == ENGAGE_KIND_SHOP ? PS_SHOP : PS_CHALLENGE),
@@ -60998,14 +61049,14 @@ static bool drawUiEngage(const MenuState* m) {
 		y = py + (titled ? 50.0f : 30.0f);
 	}
 	// The message: what fits above the buttons, the size stepped down to fit.
-	const float by = nb ? py + ph - 12.0f - 36.0f : py + ph - 8.0f;
+	const float by = nb ? py + ph - (hasMap ? 10.0f : 12.0f) - 36.0f : py + ph - 8.0f;
 	float bpx = bodyPx, blh = lh;
-	const float room = by - 8.0f - y;
+	const float room = by - (hasMap ? 6.0f : 8.0f) - y;
 	while (lines > 0 && (float)lines * blh > room && bpx > 10.0f) {
 		bpx -= 1.0f;
 		blh -= 1.0f;
 		C2D_TextBufClear(wrapBuf);
-		lines = uiWrap(wrapBuf, body, bpx, pw - 24.0f, wrapped, sizeof(wrapped));
+		lines = uiWrap(wrapBuf, body, bpx, bodyW, wrapped, sizeof(wrapped));
 	}
 	char* line = wrapped;
 	for (int k = 0; k < lines && line && *line; k++) {
@@ -61014,7 +61065,7 @@ static bool drawUiEngage(const MenuState* m) {
 		const float ly = y + blh * 0.5f + (float)k * blh;
 		if (ly + blh * 0.5f > by - 4.0f)
 			break;
-		uiText(buf, line, bpx, px + 12.0f, ly, 0, C2D_Color32(230, 230, 230, 255), pw - 24.0f);
+		uiText(buf, line, bpx, bodyX, ly, 0, C2D_Color32(230, 230, 230, 255), bodyW);
 		line = nl ? nl + 1 : NULL;
 	}
 	// The buttons, the current one lit.
@@ -62900,7 +62951,7 @@ static MinimapMode worldMapContent(const MinimapMarker** marksOut, int* countOut
 		int n = 0;
 		for (int k = 0; k < g_raceRun.field.count && n < OPPONENT_MAX; k++) {
 			const Opponent* o = &g_raceRun.field.car[k];
-			if (!o->simReady)
+			if (!o->simReady || o->inactive)
 				continue;
 			aiMarkers[n].worldX = o->sim.pos[0];
 			aiMarkers[n].worldY = o->sim.pos[1];
@@ -62908,10 +62959,12 @@ static MinimapMode worldMapContent(const MinimapMarker** marksOut, int* countOut
 			aiMarkers[n].element = MINIMAP_ELEM_AIRACER;
 			aiMarkers[n].turns = true;
 			aiMarkers[n].heading = o->sim.yaw;
-			// MinimapElement::Update: solid while it leads the race (its
-			// RacingCar +10, the place, is 1), 0x80 behind (#241).
-			aiMarkers[n].dim = o->raceCar >= 0 &&
-				race_position(&g_raceRun.race, o->raceCar + 1) != 1;
+			// MinimapElement::Update: leader vs trailing racers (#241).
+			const int pos = o->raceCar >= 0
+				? (g_driftOn ? drift_board_pos(o->raceCar + 1)
+					: race_position(&g_raceRun.race, o->raceCar + 1))
+				: 0;
+			aiMarkers[n].dim = pos != 1;
 			n++;
 		}
 		marks = aiMarkers;
@@ -62922,6 +62975,7 @@ static MinimapMode worldMapContent(const MinimapMarker** marksOut, int* countOut
 	float gpsIcon[2] = { 0.0f, 0.0f };
 	gps->engaged = gpsSt >= GPS_STATUS_SEARCHING && gpsSt <= GPS_STATUS_ACTIVE;
 	gps->stageZero = g_careerStage == 0;
+	gps->racing = g_raceRun.on || g_enc.ga.on;
 	// PORT: no GPS rings while a race runs -- the pulsing circle only
 	// distracts there (the user on hardware, 2026-11-13).
 	gps->icon = !g_raceRun.on && gps_icon(gpsIcon);
@@ -63091,7 +63145,16 @@ static void drawWorldBottom(C2D_TextBuf buf, const Config* cfg) {
 	const MinimapMode mapMode = worldMapContent(&marks, &markCount, &gps);
 	// PORT: free roam fills the panel under the bar with a square map; a
 	// race keeps the round one beside its stats.
+	bool hasBottomStrip = g_raceRun.on && g_hud != NULL;
+	if (!hasBottomStrip && !g_raceRun.on && !stage0) {
+		hasBottomStrip = gps.engaged;
+		for (int i = 0; !hasBottomStrip && i < g_markerCount; i++)
+			if (g_markers[i].element >= MINIMAP_ELEM_CIRCUITEVENT && g_markerZone[i])
+				hasBottomStrip = true;
+	}
+	const bool hasTopChips = (g_raceRun.on && g_hud != NULL) || (!g_raceRun.on && !stage0);
 	minimap_set_square(true);
+	minimap_set_pin_margins(hasTopChips ? 38.0f : 0.0f, 0.0f, hasBottomStrip ? 36.0f : 0.0f, 0.0f);
 	if (g_minimap && showMap)
 		worldMapTouch(mapX, mapY, mapW, mapH);
 	if (g_minimap && showMap)
