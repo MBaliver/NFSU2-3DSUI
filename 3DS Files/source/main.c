@@ -60985,6 +60985,17 @@ static bool drawUiHelp(const MenuState* m) {
 	return true;
 }
 
+static void drawTouchCameraBtn(float x, float y, float w, float h) {
+	const float cx = x + w * 0.5f, cy = y + h * 0.5f;
+	uiChip(x, y, w, h, 0);
+	// Simple crisp camera icon: body + viewfinder bump + lens circle.
+	uiRoundRect(cx - 8.0f, cy - 4.5f, 16.0f, 10.5f, 2.0f, UI_Z + 0.025f, UI_WHITE);
+	C2D_DrawRectSolid(cx - 4.0f, cy - 7.0f, UI_Z + 0.025f, 8.0f, 3.0f, UI_WHITE);
+	C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.03f, 3.6f, UI_PANEL_SOLID);
+	C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.035f, 1.8f, UI_ACCENT);
+	uiHit(x - 4.0f, y - 2.0f, w + 8.0f, h + 6.0f, HIT_CAMERA);
+}
+
 // The free-roam HUD over the map, in the U2-UI kit: status as tabs hung from
 // the top edges, zoom as boxes on the right, the destination as a black band
 // across the bottom whose top line takes the GPS target's colour.
@@ -60995,7 +61006,7 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 		C2D_Color32(0, 0, 0, 102), C2D_Color32(0, 0, 0, 102),
 		C2D_Color32(0, 0, 0, 0), C2D_Color32(0, 0, 0, 0));
 
-	// ---- status, top: the bank (or a world challenge's clock), messages ----
+	// ---- status, top: the bank (or a world challenge's clock), messages, camera ----
 	if (counting) {
 		drawWorldCountdown(buf);
 		uiStatChip(buf, 0.0f, 6.0f, portstr_caps(PS_TIME), g_wcChipText, g_wcChipColor);
@@ -61006,6 +61017,11 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 		const float w = uiStatChip(buf, 0.0f, 6.0f, portstr_caps(PS_BANK), v, UI_WHITE);
 		uiHit(0.0f, 4.0f, w, UI_CHIP_H + 4.0f, HIT_BANK);
 	}
+	// ---- optional Touch Camera button in top-right corner (Gameplay > Touch Camera) ----
+	const float camSlotW = g_portPrefs.touchCamera ? 42.0f : 0.0f;
+	if (g_portPrefs.touchCamera)
+		drawTouchCameraBtn(W - 36.0f, 6.0f, 30.0f, UI_CHIP_H);
+
 	const int unread = (int)sms_count_unread(&gProfile);
 	static int lastUnread = -1;
 	if (lastUnread >= 0 && unread > lastUnread)
@@ -61014,13 +61030,23 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 	if (unread > 0) {
 		char n[12];
 		snprintf(n, sizeof(n), "%d", unread);
-		const float w = 18.0f + 16.0f + 7.0f + uiMeasure(buf, n, 19.0f) + 10.0f;
-		const float x = W - w, y = 6.0f, cy = y + UI_CHIP_H * 0.5f;
+		const float y = 6.0f, cy = y + UI_CHIP_H * 0.5f;
 		const u8 a = (u8)(150.0f + 105.0f * (0.5f + 0.5f * sinf((float)(osGetTime() % 1400) / 1400.0f * 6.2831853f)));
-		uiTab(x, y, w, UI_CHIP_H, 1, UI_PANEL);
-		drawEnvelope(x + 18.0f, cy - 16.0f * 0.68f * 0.5f, 16.0f, C2D_Color32(202, 244, 138, a));
-		uiText(buf, n, 19.0f, x + 41.0f, cy, 0, UI_ACCENT, 0.0f);
-		uiHit(x, 4.0f, w, UI_CHIP_H + 4.0f, HIT_SMS);
+		if (g_portPrefs.touchCamera) {
+			const float w = 10.0f + 16.0f + 7.0f + uiMeasure(buf, n, 19.0f) + 10.0f;
+			const float x = W - camSlotW - w;
+			uiChip(x, y, w, UI_CHIP_H, 0);
+			drawEnvelope(x + 10.0f, cy - 16.0f * 0.68f * 0.5f, 16.0f, C2D_Color32(202, 244, 138, a));
+			uiText(buf, n, 19.0f, x + 33.0f, cy, 0, UI_ACCENT, 0.0f);
+			uiHit(x - 2.0f, 4.0f, w + 2.0f, UI_CHIP_H + 4.0f, HIT_SMS);
+		} else {
+			const float w = 18.0f + 16.0f + 7.0f + uiMeasure(buf, n, 19.0f) + 10.0f;
+			const float x = W - w;
+			uiTab(x, y, w, UI_CHIP_H, 1, UI_PANEL);
+			drawEnvelope(x + 18.0f, cy - 16.0f * 0.68f * 0.5f, 16.0f, C2D_Color32(202, 244, 138, a));
+			uiText(buf, n, 19.0f, x + 41.0f, cy, 0, UI_ACCENT, 0.0f);
+			uiHit(x, 4.0f, w, UI_CHIP_H + 4.0f, HIT_SMS);
+		}
 	}
 
 	// ---- zoom, right edge: two 30 px boxes ----
@@ -61033,19 +61059,8 @@ static void drawWorldChips(C2D_TextBuf buf, bool counting) {
 			C2D_DrawRectSolid(cx - 1.0f, cy - 6.0f, UI_Z + 0.03f, 2.0f, 12.0f, UI_WHITE);
 		uiHit(zx - 4.0f, y - 2.0f, 40.0f, 34.0f, k == 0 ? HIT_ZOOM_IN : HIT_ZOOM_OUT);
 	}
-	// ---- optional Touch Camera button (Gameplay > Touch Camera) ----
-	if (g_portPrefs.touchCamera) {
-		const float cy0 = 144.0f, cx = zx + 15.0f, cy = cy0 + 15.0f;
-		uiChip(zx, cy0, 30.0f, 30.0f, 0);
-		// Simple crisp camera icon: body + viewfinder bump + lens circle.
-		uiRoundRect(cx - 8.0f, cy - 4.5f, 16.0f, 10.5f, 2.0f, UI_Z + 0.025f, UI_WHITE);
-		C2D_DrawRectSolid(cx - 4.0f, cy - 7.0f, UI_Z + 0.025f, 8.0f, 3.0f, UI_WHITE);
-		C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.03f, 3.6f, UI_PANEL_SOLID);
-		C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.035f, 1.8f, UI_ACCENT);
-		uiHit(zx - 4.0f, cy0 - 2.0f, 40.0f, 34.0f, HIT_CAMERA);
-	}
 	if (minimap_panned(g_minimap)) {
-		const float ry = g_portPrefs.touchCamera ? 180.0f : 148.0f;
+		const float ry = 148.0f;
 		const float w = uiMeasure(buf, portstr(PS_RECENTER), 14.0f) + 28.0f, x = W - 6.0f - w;
 		uiButton(buf, x, ry, w, 26.0f, 0, portstr(PS_RECENTER), false, false);
 		uiHit(x - 2.0f, ry - 3.0f, w + 4.0f, 32.0f, HIT_RECENTER);
@@ -61783,7 +61798,10 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 	if (r->car.lap < 0 || frac < 0.0f) frac = 0.0f;
 	if (r->car.finished) frac = 1.0f;
 
-	// ---- top-right tab (same slot as SMS in free roam): BEST / LAP / % ----
+	// ---- top-right: optional Touch Camera button + BEST / LAP / % ----
+	const float camSlotW = g_portPrefs.touchCamera ? 42.0f : 0.0f;
+	if (g_portPrefs.touchCamera)
+		drawTouchCameraBtn(W - 36.0f, 6.0f, 30.0f, UI_CHIP_H);
 	{
 		char rLab[32] = "", rVal[24] = "";
 		if (r->laps > 1 && race_best_lap_time(r) > 0) {
@@ -61799,12 +61817,22 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 		}
 		const float lw = rLab[0] ? uiMeasure(buf, rLab, UI_LABEL_PX) + 7.0f : 0.0f;
 		const float vw = uiMeasure(buf, rVal, 18.0f);
-		const float w = 18.0f + lw + vw + 10.0f;
-		const float x = W - w, y = 6.0f, cy = y + UI_CHIP_H * 0.5f;
-		uiTab(x, y, w, UI_CHIP_H, 1, UI_PANEL);
-		if (rLab[0])
-			uiLabel(buf, rLab, x + 18.0f, cy, 0, UI_ACCENT);
-		uiText(buf, rVal, 18.0f, x + 18.0f + lw, cy, 0, UI_WHITE, 0.0f);
+		const float y = 6.0f, cy = y + UI_CHIP_H * 0.5f;
+		if (g_portPrefs.touchCamera) {
+			const float w = 10.0f + lw + vw + 10.0f;
+			const float x = W - camSlotW - w;
+			uiChip(x, y, w, UI_CHIP_H, 0);
+			if (rLab[0])
+				uiLabel(buf, rLab, x + 10.0f, cy, 0, UI_ACCENT);
+			uiText(buf, rVal, 18.0f, x + 10.0f + lw, cy, 0, UI_WHITE, 0.0f);
+		} else {
+			const float w = 18.0f + lw + vw + 10.0f;
+			const float x = W - w;
+			uiTab(x, y, w, UI_CHIP_H, 1, UI_PANEL);
+			if (rLab[0])
+				uiLabel(buf, rLab, x + 18.0f, cy, 0, UI_ACCENT);
+			uiText(buf, rVal, 18.0f, x + 18.0f + lw, cy, 0, UI_WHITE, 0.0f);
+		}
 	}
 
 	// ---- right-edge zoom chips (same as free roam) ----
@@ -61817,15 +61845,6 @@ static void drawRacePanel(C2D_TextBuf buf, const HudRaceStats* st) {
 			if (k == 0)
 				C2D_DrawRectSolid(cx - 1.0f, cy - 6.0f, UI_Z + 0.03f, 2.0f, 12.0f, UI_WHITE);
 			uiHit(zx - 4.0f, zy - 2.0f, 40.0f, 34.0f, k == 0 ? HIT_ZOOM_IN : HIT_ZOOM_OUT);
-		}
-		if (g_portPrefs.touchCamera) {
-			const float cy0 = 144.0f, cx = zx + 15.0f, cy = cy0 + 15.0f;
-			uiChip(zx, cy0, 30.0f, 30.0f, 0);
-			uiRoundRect(cx - 8.0f, cy - 4.5f, 16.0f, 10.5f, 2.0f, UI_Z + 0.025f, UI_WHITE);
-			C2D_DrawRectSolid(cx - 4.0f, cy - 7.0f, UI_Z + 0.025f, 8.0f, 3.0f, UI_WHITE);
-			C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.03f, 3.6f, UI_PANEL_SOLID);
-			C2D_DrawCircleSolid(cx, cy + 0.8f, UI_Z + 0.035f, 1.8f, UI_ACCENT);
-			uiHit(zx - 4.0f, cy0 - 2.0f, 40.0f, 34.0f, HIT_CAMERA);
 		}
 	}
 

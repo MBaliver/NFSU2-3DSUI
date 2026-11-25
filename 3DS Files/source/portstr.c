@@ -385,7 +385,7 @@ static const PortStrDef kStr[PS_COUNT] = {
 		"Sterzo sensore", "Direcci\xC3\xB3n movimiento", "Bewegingsbesturing",
 		"R\xC3\xB6relsestyrning", "Bev\xC3\xA6gelsesstyring" } },
 	[PS_OPT_TOUCH_CAMERA] = { 0, 0, { "Touch Camera", "Cam\xC3\xA9ra tactile", "Touch-Kamera",
-		"Camera touch", "C\xC3\xA1mara t\xC3\xA1ctil", "Touch-camera", "Tryckkamera",
+		"Camera touch", "C\xC3\xA1mara t\xC3\xA1" "ctil", "Touch-camera", "Tryckkamera",
 		"Touch-kamera" } },
 	[PS_NOT_USED] = { 0xF8B4303Bu, 0, { "Not Used" } },
 	[PS_3D_POP] = { 0, 0, { "Pop Out", "En relief", "Nach vorn", "In rilievo",
