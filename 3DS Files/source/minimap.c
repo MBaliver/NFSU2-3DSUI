@@ -944,33 +944,22 @@ void minimap_draw(Minimap* m, float worldX, float worldY, float headingRad,
 			const float sy = cy + dv;
 			C2D_ImageTint tint;
 			u32 col = kElementColor[el < MINIMAP_ELEM_COUNT ? el : MINIMAP_ELEM_NONE];
-			float mw = MM_MARKER_W, mh = MM_MARKER_H, mz = 0.2f;
-			if (el == MINIMAP_ELEM_AIRACER) {
-				// PORT: match the player arrow's car-arrow proportions (slightly
-				// smaller than player's 1.5x so the player stays dominant) and keep
-				// full opacity so the black outline stays crisp over white race roads.
-				const float acs = square ? 1.35f : 1.0f;
-				mw = acs * MM_CAR_W;
-				mh = acs * MM_CAR_H;
-				col = markers[i].dim ? MM_RGBA(215, 78, 28, 255) : MM_RGBA(255, 165, 32, 255);
-				mz = markers[i].dim ? 0.34f : 0.36f;
-			} else if (markers[i].dim) {
+			if (markers[i].dim)
 				col = (col & 0x00FFFFFFu) | 0x80000000u;
-			}
 			C2D_PlainImageTint(&tint, col, 1.0f);
 			if (markers[i].turns) {
 				// The same transform the player's own icon gets below, with
 				// this marker's heading in place of the camera's.
-				C2D_DrawImageAtRotated(m->img[slot], sx, sy, mz,
+				C2D_DrawImageAtRotated(m->img[slot], sx, sy, 0.2f,
 					mapAngle - (markers[i].heading - (float)M_PI * 0.5f), &tint,
-					mw / (float)m->sub[slot].width,
-					mh / (float)m->sub[slot].height);
+					MM_MARKER_W / (float)m->sub[slot].width,
+					MM_MARKER_H / (float)m->sub[slot].height);
 			} else {
 				// Upright: a shop or an event start does not face anywhere.
-				C2D_DrawImageAt(m->img[slot], sx - mw * 0.5f,
-					sy - mh * 0.5f, mz, &tint,
-					mw / (float)m->sub[slot].width,
-					mh / (float)m->sub[slot].height);
+				C2D_DrawImageAt(m->img[slot], sx - MM_MARKER_W * 0.5f,
+					sy - MM_MARKER_H * 0.5f, 0.2f, &tint,
+					MM_MARKER_W / (float)m->sub[slot].width,
+					MM_MARKER_H / (float)m->sub[slot].height);
 			}
 		}
 		C2D_SetTintMode(C2D_TintSolid);

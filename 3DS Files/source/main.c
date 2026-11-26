@@ -5279,8 +5279,10 @@ typedef struct {
 	int feDlgButton[3];
 	int feDlgLabel[3];
 	// PORT: the blurb and the three labels as plain UTF-8, for the lower
-	// screen's own dialog (drawUiDialog()), which wraps them itself.
-	char dlgBlurb[256];
+	// screen's own dialog (drawUiDialog()), which wraps them itself. 512:
+	// English.bin has dialog-length strings past 255 characters, which the
+	// old 256 cut mid-sentence; uiDialogBox() scrolls what does not fit.
+	char dlgBlurb[512];
 	char dlgLabel[3][40];
 	s8 feDlgOwner[FNG_MAX_WIDGETS];
 	// UI_PostRaceResults.fng only (PostRaceResultsScreen, see g_postRace):
@@ -8511,6 +8513,21 @@ typedef enum {
 	ENGAGE_KIND_SHOP,     // EngageShopDialog's own arm: a shop under the car (#370)
 } EngageKind;
 
+// PORT: a kit text box whose words scroll when they run past it, the text
+// kept at its size (the floors, 28c0434) -- the engage message, the
+// dialogs' blurb: the offset in pixels, its limit, a line's step, the box a
+// drag lands in (all set by the box's draw) and which text it last showed,
+// so a new one starts at the top. uiScrollInput() moves it, uiScrollBar()
+// draws its bar.
+typedef struct {
+	float top, max, lh;
+	float x0, y0, x1, y1;
+	u32 key;
+} UiScroll;
+static bool uiScrollInput(UiScroll* s, u32 kDown);
+// MC_Main.fng's question on the lower screen (drawUiMcAsk()).
+static UiScroll g_mcAskScroll;
+
 typedef struct {
 	EngageKind kind;    // ENGAGE_KIND_NONE whenever no dialog is being raised
 	const EventRec* ev; // the race arm's event
@@ -8529,6 +8546,9 @@ typedef struct {
 	const char* fromName;
 	// EngageShopDialog's uniques arm: the goal shop the challenge reached.
 	const ShopRec* shop;
+	// PORT: the message's scroll (drawUiEngage() keeps it at the 14 px
+	// floor and scrolls what runs past its box).
+	UiScroll body;
 } EngageDlgInput;
 static EngageDlgInput g_engageDlg;
 
@@ -10041,7 +10061,9 @@ typedef struct {
 	// The blurb already formatted, in raw English.bin bytes, when the caller
 	// passed arguments (ShowOneButton / ShowTwoButtons are varargs and print
 	// into the config before the package is chosen); "" for textId as is.
-	char text[256];
+	char text[512];
+	// PORT: the blurb's scroll on the lower screen (uiDialogBox()).
+	UiScroll scroll;
 } FeDialog;
 static FeDialog g_feDialog;
 // PORT: the skinned dialog's buttons as drawn last frame, for the touch.
@@ -25350,6 +25372,9 @@ static void traxSound(int ev, int col, const char* why) {
 static u32 feDialogInput(u32* kDown, MenuState* dlg) {
 	if (!g_feDialog.up)
 		return 0;
+	// PORT: UP / DOWN and a drag scroll a blurb longer than the lower
+	// screen's panel (uiDialogBox()); their click is feSoundForKeys()'s.
+	uiScrollInput(&g_feDialog.scroll, *kDown);
 	if (g_feDialog.numButtons >= 2) {
 		int cur = g_feDialog.current;
 		if (*kDown & KEY_LEFT)
@@ -26903,6 +26928,38 @@ static void touchUpdate(void) {
 
 static bool touchTapped(void) {
 	return g_touch.up && !g_touch.drag;
+}
+
+// A UiScroll's input, every frame its box is up: UP / DOWN (the Circle Pad
+// too) a line, and a drag that lands in the box follows the finger, as the
+// SMS reader's. True when a key moved it, for the screens whose own click
+// leaves UP / DOWN out.
+static bool uiScrollInput(UiScroll* s, u32 kDown) {
+	static bool s_drag;
+	static int s_dy;
+	if (g_touch.down) {
+		s_drag = s->max > 0.0f && g_touch.x >= s->x0 && g_touch.x < s->x1 &&
+			g_touch.y >= s->y0 && g_touch.y < s->y1;
+		s_dy = g_touch.y;
+	}
+	if (!g_touch.held)
+		s_drag = false;
+	if (s->max <= 0.0f)
+		return false;
+	const float was = s->top;
+	const float step = s->lh > 0.0f ? s->lh : 16.0f;
+	if (kDown & KEY_UP) s->top -= step;
+	if (kDown & KEY_DOWN) s->top += step;
+	if (s->top > s->max) s->top = s->max;
+	if (s->top < 0.0f) s->top = 0.0f;
+	const bool keyed = s->top != was;
+	if (s_drag && g_touch.drag) {
+		s->top -= (float)(g_touch.y - s_dy);
+		s_dy = g_touch.y;
+		if (s->top > s->max) s->top = s->max;
+		if (s->top < 0.0f) s->top = 0.0f;
+	}
+	return keyed;
 }
 
 // A tap and where it lifted.
@@ -45768,6 +45825,9 @@ static bool postRaceSaveAsk(const Config* cfg, MenuState* dlg, int what) {
 // does nothing. Then the way out the gate held back.
 static bool postRaceSaveInput(MenuState* dlg, u32 kDown, const char** leaveTo) {
 	PostRace* pr = &g_postRace;
+	// PORT: a message past the panel scrolls (uiDialogBox()).
+	if (uiScrollInput(&g_mcAskScroll, kDown))
+		feSoundPlay((kDown & KEY_UP) ? FE_EV_UP : FE_EV_DOWN);
 	int cur = dlg->mcCurrent;
 	if (kDown & KEY_LEFT)
 		cur = 0;
@@ -49738,6 +49798,10 @@ static bool shootInput(const Config* cfg, MenuState* m, MenuState* dlg, u32 kDow
 static bool engageDialogInput(const Config* cfg, MenuState* m, u32 kDown) {
 	const EngageKind kind = g_engageDlg.kind;
 	char b[192];
+	// PORT: the message's scroll when it runs past its box (drawUiEngage()).
+	// Retail's dialog has no vertical message, so UP / DOWN are free; their
+	// click is BaseNotifySound's (feSoundForKeys()).
+	uiScrollInput(&g_engageDlg.body, kDown);
 	// A debug tools preview (g_engagePreview): A or B only closes it.
 	if (g_engagePreview && (kDown & (KEY_A | KEY_B)) &&
 			(kind == ENGAGE_KIND_SHOWCASE || !(kDown & (KEY_LEFT | KEY_RIGHT)))) {
@@ -57834,6 +57898,16 @@ static void uiBand(float x, float y, float w, float h, float r, float d0, float 
 			uiaaStrip(px[k], py[k], c[k], px[k + 1], py[k + 1], c[k + 1], UI_RR_N, true, z);
 }
 // A rim `t` thick just inside a rounded rectangle.
+// A UiScroll's bar, the SMS reader's: a 3 px track `h` tall at (x, y) and
+// the lime thumb sized to the share of the text in view.
+static void uiScrollBar(float x, float y, float h, const UiScroll* s) {
+	if (s->max <= 0.0f || h <= 0.0f)
+		return;
+	const float th = fmaxf(12.0f, h * h / (h + s->max));
+	uiRoundRect(x, y, 3.0f, h, 1.5f, UI_Z + 0.01f, C2D_Color32(255, 255, 255, 26));
+	uiRoundRect(x, y + (h - th) * (s->top / s->max), 3.0f, th, 1.5f, UI_Z + 0.02f, UI_ACCENT);
+}
+
 static void uiRing(float x, float y, float w, float h, float r, float t, float z, u32 c) {
 	uiBand(x, y, w, h, r, 0.0f, -t, z, c, c);
 }
@@ -58270,16 +58344,20 @@ static void uiButton(C2D_TextBuf buf, float x, float y, float w, float h, char k
 // wrapped at 16 px and centred, and the buttons a row of 36 px pills. `ids`
 // names each button for the caller; the one equal to `current` is lit and
 // wears A, the one equal to `noId` wears B (what B does). On the lower
-// screen each button's touch box goes to `hits`.
+// screen each button's touch box goes to `hits`. PORT: a blurb longer than
+// the screen keeps its 16 px -- the panel stops 8 px from the edges and the
+// words scroll in it with a bar (`scroll`, the caller's uiScrollInput()).
 static void uiDialogBox(C2D_TextBuf buf, float W, float H, const char* title, const char* blurb,
 		const char* const* labels, const int* ids, int nb, int current, int noId,
-		UiDlgHit* hits, int* hitN) {
+		UiDlgHit* hits, int* hitN, UiScroll* scroll) {
 	C2D_DrawRectSolid(0.0f, 0.0f, UI_Z - 0.1f, W, H, C2D_Color32(0, 0, 0, 140));
 	const float pw = fminf(W - 20.0f, 340.0f), px = (W - pw) * 0.5f;
-	char wrapped[512];
+	char wrapped[768];
 	const int lines = blurb && blurb[0] ? uiWrap(buf, blurb, 16.0f, pw - 36.0f, wrapped, sizeof(wrapped)) : 0;
 	const float lh = 20.0f, titleH = title && title[0] ? 22.0f : 0.0f;
-	const float ph = 20.0f + titleH + (float)lines * lh + 16.0f + 36.0f + 12.0f, py = floorf((H - ph) * 0.5f);
+	const float chrome = 20.0f + titleH + 16.0f + 36.0f + 12.0f;
+	const float room = fmaxf(0.0f, fminf((float)lines * lh, H - 16.0f - chrome));
+	const float ph = chrome + room, py = floorf((H - ph) * 0.5f);
 	uiRoundRect(px, py, pw, ph, 6.0f, UI_Z, C2D_Color32(0, 0, 0, 209));
 	uiDialogRing(px, py, pw, ph);
 	float y = py + 20.0f;
@@ -58287,12 +58365,37 @@ static void uiDialogBox(C2D_TextBuf buf, float W, float H, const char* title, co
 		uiLabel(buf, title, px + pw * 0.5f, y + 2.0f, 1, UI_ACCENT);
 		y += titleH;
 	}
-	for (char* line = wrapped; lines > 0 && line && *line; ) {
+	static UiScroll s_none;
+	UiScroll* sc = scroll ? scroll : &s_none;
+	u32 key = 2166136261u;
+	for (const char* c = blurb ? blurb : ""; *c; c++)
+		key = (key ^ (u8)*c) * 16777619u;
+	if (key != sc->key) {
+		sc->key = key;
+		sc->top = 0.0f;
+	}
+	sc->max = fmaxf(0.0f, (float)lines * lh - room);
+	sc->lh = lh;
+	if (sc->top > sc->max) sc->top = sc->max;
+	// The drag's box, on the touch screen only.
+	sc->x0 = px;
+	sc->y0 = y;
+	sc->x1 = W == BOTTOM_W ? px + pw : px;
+	sc->y1 = y + room;
+	if (sc->max > 0.0f)
+		scissorLogical(W, H, px + 4.0f, y, pw - 8.0f, room);
+	int k = 0;
+	for (char* line = wrapped; lines > 0 && line && *line; k++) {
 		char* nl = strchr(line, '\n');
 		if (nl) *nl = '\0';
-		uiText(buf, line, 16.0f, px + pw * 0.5f, y + lh * 0.5f - 4.0f, 1, UI_WHITE, 0.0f);
-		y += lh;
+		const float ly = y + (float)k * lh - sc->top;
+		if (ly + lh > y && ly < y + room)
+			uiText(buf, line, 16.0f, px + pw * 0.5f, ly + lh * 0.5f - 4.0f, 1, UI_WHITE, 0.0f);
 		line = nl ? nl + 1 : NULL;
+	}
+	if (sc->max > 0.0f) {
+		scissorReset();
+		uiScrollBar(px + pw - 12.0f, y, room, sc);
 	}
 	const float gap = 10.0f;
 	const float bw = nb == 1 ? fminf(150.0f, pw - 28.0f) : (pw - 28.0f - gap * (float)(nb - 1)) / (float)nb;
@@ -58336,7 +58439,7 @@ static bool drawUiDialog(const MenuState* m) {
 	}
 	const int bId = (nb == 2 && g_feDialog.btnMsg[1] == g_feDialog.cancelMsg) ? 1 : -1;
 	uiDialogBox(buf, W, H, NULL, m->dlgBlurb, labels, btn, nb, g_feDialog.current, bId,
-		g_uiDlgHit, &g_uiDlgHitN);
+		g_uiDlgHit, &g_uiDlgHitN, &g_feDialog.scroll);
 	return true;
 }
 
@@ -58362,7 +58465,7 @@ static bool drawUiMcAsk(const MenuState* m) {
 	// screen already shows -- the same picture twice read as a mistake.
 	uiScreenBackdrop(BOTTOM_W, SCREEN_TOP_H);
 	uiDialogBox(buf, BOTTOM_W, SCREEN_TOP_H, m->mcText[MCT_TITLE_ASK], mcMainMessage(m), labels, ids,
-		note ? 1 : 2, m->mcCurrent, note ? -1 : 1, g_mcDlgHit, &g_mcDlgHitN);
+		note ? 1 : 2, m->mcCurrent, note ? -1 : 1, g_mcDlgHit, &g_mcDlgHitN, &g_mcAskScroll);
 	return true;
 }
 
@@ -61048,25 +61151,44 @@ static bool drawUiEngage(const MenuState* m) {
 			uiText(buf, title, 19.0f, px + 12.0f, py + 33.0f, 0, UI_WHITE, pw - 24.0f);
 		y = py + (titled ? 50.0f : 30.0f);
 	}
-	// The message: what fits above the buttons, the size stepped down to fit.
+	// The message in the box above the buttons, at 14 px (the body floor,
+	// 28c0434): what runs past the box scrolls -- UP / DOWN a line, or a
+	// drag on it (uiScrollInput()) -- with the SMS reader's bar on the
+	// box's right edge, the text narrowed to clear it.
 	const float by = nb ? py + ph - (hasMap ? 10.0f : 12.0f) - 36.0f : py + ph - 8.0f;
-	float bpx = bodyPx, blh = lh;
 	const float room = by - (hasMap ? 6.0f : 8.0f) - y;
-	while (lines > 0 && (float)lines * blh > room && bpx > 10.0f) {
-		bpx -= 1.0f;
-		blh -= 1.0f;
+	float textW = bodyW;
+	float maxTop = fmaxf(0.0f, (float)lines * lh - room);
+	if (maxTop > 0.0f) {
+		textW = bodyW - 9.0f;
 		C2D_TextBufClear(wrapBuf);
-		lines = uiWrap(wrapBuf, body, bpx, bodyW, wrapped, sizeof(wrapped));
+		lines = uiWrap(wrapBuf, body, bodyPx, textW, wrapped, sizeof(wrapped));
+		maxTop = fmaxf(0.0f, (float)lines * lh - room);
 	}
+	UiScroll* sc = &g_engageDlg.body;
+	sc->max = maxTop;
+	sc->lh = lh;
+	if (sc->top > maxTop) sc->top = maxTop;
+	if (sc->top < 0.0f) sc->top = 0.0f;
+	sc->x0 = bodyX - 4.0f;
+	sc->y0 = y;
+	sc->x1 = bodyX + bodyW + 4.0f;
+	sc->y1 = y + room;
+	const float top = sc->top;
+	if (maxTop > 0.0f)
+		scissorLogical(W, H, bodyX - 2.0f, y, textW + 4.0f, room);
 	char* line = wrapped;
 	for (int k = 0; k < lines && line && *line; k++) {
 		char* nl = strchr(line, '\n');
 		if (nl) *nl = '\0';
-		const float ly = y + blh * 0.5f + (float)k * blh;
-		if (ly + blh * 0.5f > by - 4.0f)
-			break;
-		uiText(buf, line, bpx, bodyX, ly, 0, C2D_Color32(230, 230, 230, 255), bodyW);
+		const float ly = y + lh * 0.5f + (float)k * lh - top;
+		if (ly + lh * 0.5f > y && ly - lh * 0.5f < y + room)
+			uiText(buf, line, bodyPx, bodyX, ly, 0, C2D_Color32(230, 230, 230, 255), textW);
 		line = nl ? nl + 1 : NULL;
+	}
+	if (maxTop > 0.0f) {
+		scissorReset();
+		uiScrollBar(bodyX + bodyW - 3.0f, y, room, sc);
 	}
 	// The buttons, the current one lit.
 	if (nb) {
@@ -62959,12 +63081,12 @@ static MinimapMode worldMapContent(const MinimapMarker** marksOut, int* countOut
 			aiMarkers[n].element = MINIMAP_ELEM_AIRACER;
 			aiMarkers[n].turns = true;
 			aiMarkers[n].heading = o->sim.yaw;
-			// MinimapElement::Update: leader vs trailing racers (#241).
-			const int pos = o->raceCar >= 0
-				? (g_driftOn ? drift_board_pos(o->raceCar + 1)
-					: race_position(&g_raceRun.race, o->raceCar + 1))
-				: 0;
-			aiMarkers[n].dim = pos != 1;
+			// MinimapElement::Update: solid while it leads the race (its
+			// RacingCar +10, the place, is 1), 0x80 behind (#241). A drift's
+			// place is its score board's.
+			aiMarkers[n].dim = o->raceCar >= 0 &&
+				(g_driftOn ? drift_board_pos(o->raceCar + 1)
+					: race_position(&g_raceRun.race, o->raceCar + 1)) != 1;
 			n++;
 		}
 		marks = aiMarkers;
@@ -63215,6 +63337,13 @@ static void drawTopDownCue(const char* label, u8 dimAlpha) {
 		C2D_DrawRectSolid(0.0f, 0.0f, 0.05f, W, H, C2D_Color32(0, 0, 0, dimAlpha));
 	if (!buf || !g_uiFont || !label || !label[0])
 		return;
+	// PORT (the user, 2026-11-25): the screen's foot fades to black under
+	// the indicator so it stands out over a bright scene -- clear to half
+	// black, then on to black at the edge, an eased ramp rather than a band.
+	const u32 clear = C2D_Color32(0, 0, 0, 0), mid = C2D_Color32(0, 0, 0, 150),
+		black = C2D_Color32(0, 0, 0, 255);
+	C2D_DrawRectangle(0.0f, H - 84.0f, 0.06f, W, 48.0f, clear, clear, mid, mid);
+	C2D_DrawRectangle(0.0f, H - 36.0f, 0.06f, W, 36.0f, mid, mid, black, black);
 	C2D_TextBufClear(buf);
 	const float lw = uiMeasure(buf, label, UI_LABEL_PX);
 	const float ph = 20.0f, pw = lw + 38.0f;
@@ -67038,6 +67167,9 @@ int main(int argc, char* argv[])
 					dlog(tb);
 				}
 			}
+			// PORT: a message past the panel scrolls (uiDialogBox()).
+			if (uiScrollInput(&g_mcAskScroll, kDown))
+				feSoundPlay((kDown & KEY_UP) ? FE_EV_UP : FE_EV_DOWN);
 			int cur = menu.mcCurrent;
 			if (kDown & KEY_LEFT)
 				cur = 0;
@@ -67374,6 +67506,9 @@ int main(int argc, char* argv[])
 			// Either answer ends in ExitMemcard, back to the screen that entered
 			// the options.
 			if (menu.isMcMain && menu.mcPhase == MCMAIN_SAVE) {
+				// PORT: a message past the panel scrolls (uiDialogBox()).
+				if (uiScrollInput(&g_mcAskScroll, kDown))
+					feSoundPlay((kDown & KEY_UP) ? FE_EV_UP : FE_EV_DOWN);
 				int cur = menu.mcCurrent;
 				if (kDown & KEY_LEFT)
 					cur = 0;
