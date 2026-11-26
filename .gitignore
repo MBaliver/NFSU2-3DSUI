@@ -76,4 +76,6 @@ desktop.ini
 # Left out: decompiled game code and game screenshots.
 /docs/**/*.c
 /docs/**/*.png
+!/docs/screenshots/
+!/docs/screenshots/*.png
 /docs/reference_shots/

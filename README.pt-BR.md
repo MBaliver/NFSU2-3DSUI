@@ -1,145 +1,278 @@
-# Need for Speed: Underground 2 para New 3DS — Fork de UI/UX
+<div align="center">
 
-> 🌐 **Idioma / Language:** **[🇺🇸 English](README.md)** | **Português (Brasil)**
+# Need for Speed: Underground 2 — Fork de UI/UX para New 3DS
 
-Um fork focado em UX/UI do [Octoblimp/NFSU2-3DS](https://github.com/Octoblimp/NFSU2-3DS) (baseado na versão `v1.0.1` do projeto original): um port homebrew nativo e não oficial da versão de PC de **Need for Speed: Underground 2** para **New Nintendo 3DS / New 3DS XL / New 2DS XL**.
+*Uma experiência touch nativa e redesenhada para o port não oficial de Need for Speed: Underground 2 no New 3DS*
 
-Este é o próprio jogo de PC — não um remake. O código foi obtido por engenharia reversa do `SPEED2.EXE` e reimplementado em C (usando a versão de GameCube como referência de console). O jogo roda usando os arquivos convertidos da **sua própria cópia de PC**; **nenhum dado protegido por direitos autorais do jogo é distribuído** neste repositório ou nas releases.
+<p>
+  <a href="https://github.com/MBaliver/NFSU2-3DSUI/releases/latest">
+    <img src="https://img.shields.io/github/v/release/MBaliver/NFSU2-3DSUI?label=Baixar%20.CIA&style=for-the-badge&color=9FD64E&labelColor=14171C" alt="Baixar Última Release">
+  </a>
+  <img src="https://img.shields.io/badge/Plataforma-New%203DS%20%2F%202DS%20XL-2A3038?style=for-the-badge&labelColor=14171C" alt="Exclusivo New 3DS">
+  <a href="https://github.com/Octoblimp/NFSU2-3DS">
+    <img src="https://img.shields.io/badge/Base-Octoblimp%20v1.0.1-2A3038?style=for-the-badge&labelColor=14171C" alt="Baseado no Octoblimp v1.0.1">
+  </a>
+  <img src="https://img.shields.io/badge/Idiomas-8-2A3038?style=for-the-badge&labelColor=14171C" alt="8 Idiomas">
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/Licen%C3%A7a-GPLv3-2A3038?style=for-the-badge&labelColor=14171C" alt="Licença GPLv3">
+  </a>
+</p>
 
-Você tem o jogo de PC completo — mundo aberto em Bayview, modo Carreira, lojas, patrocinadores, capas de revista e DVD, mensagens SMS, mapa-múndi, todos os modos de corrida (Circuit, Sprint, Drift, Drag, Street X, URL, Outrun), Quick Race, customização completa, dinamômetro e tuning, cutscenes, EA TRAX, saves, códigos de trapaça e multiplayer Local Wireless para até 6 consoles — **aprimorado com uma interface touch redesenhada para o 3DS, suporte a 8 idiomas, opções de acessibilidade, direção por movimento e melhorias de qualidade de vida.**
+<p>
+  <a href="README.md"><strong>🇺🇸 English</strong></a> &nbsp;·&nbsp; <strong>🇧🇷 Português (Brasil)</strong>
+</p>
 
-> **Já joga o NFSU2-3DS original do Octoblimp?** Sua pasta `sdmc:/nfsu2` e seus saves de carreira são **100% compatíveis**. Basta instalar o `NFSU2-3DS.cia` deste fork pelo FBI — seus perfis e saves permanecem intactos!
+<br>
+
+<a href="#screenshots">
+  <img src="docs/screenshots/hero-showcase.png" alt="Need for Speed Underground 2 Fork de UI/UX para New 3DS — Tela Inicial, HUD Free Roam com GPS e Mapa-Múndi" width="100%">
+</a>
+
+<p>
+  <sub><em>Capturas reais de tela dupla deste fork: cartão Resume Career na tela inicial, minimapa em tela cheia com rota GPS em tempo real e Mapa-Múndi redesenhado.</em></sub>
+</p>
+
+<p>
+  <a href="#screenshots"><strong>Screenshots</strong></a> &nbsp;•&nbsp;
+  <a href="#novidades-deste-fork"><strong>Novidades</strong></a> &nbsp;•&nbsp;
+  <a href="#como-jogar-instalação"><strong>Como Jogar</strong></a> &nbsp;•&nbsp;
+  <a href="#controles-e-opções-do-fork"><strong>Controles</strong></a> &nbsp;•&nbsp;
+  <a href="#compilando-a-partir-do-código-fonte-build"><strong>Build</strong></a>
+</p>
+
+</div>
 
 ---
 
-## Índice
+Um fork focado em UX/UI do [Octoblimp/NFSU2-3DS](https://github.com/Octoblimp/NFSU2-3DS) (atualizado com o upstream `v1.0.1`): um port homebrew nativo e não oficial da versão de PC de **Need for Speed: Underground 2** para **New Nintendo 3DS / New 3DS XL / New 2DS XL**.
 
-- [Novidades deste Fork](#novidades-deste-fork)
-- [Requisitos](#requisitos)
-- [Como Jogar (Instalação)](#como-jogar-instalação)
-  - [Atualizando a partir do NFSU2-3DS original](#atualizando-a-partir-do-nfsu2-3ds-original)
-  - [Instalação do Zero (Windows — Interface Gráfica)](#instalação-do-zero-windows--interface-gráfica)
-  - [Instalação do Zero (Linux / macOS / Python CLI)](#instalação-do-zero-linux--macos--python-cli)
-  - [Carros Regionais e Áudio](#carros-regionais-e-áudio)
-- [Controles e Opções do Fork](#controles-e-opções-do-fork)
-- [Local Wireless, Cheats e Mods](#local-wireless-cheats-e-mods)
-- [Arquivo de Configuração (`nfsu2_config.txt`)](#arquivo-de-configuração-nfsu2_configtxt)
-- [Regiões](#regiões)
-- [Compilando a partir do Código-Fonte (Build)](#compilando-a-partir-do-código-fonte-build)
-  - [Pré-requisitos](#pré-requisitos)
-  - [Compilando no Linux](#compilando-no-linux)
-  - [Compilando no Windows](#compilando-no-windows)
-  - [Compilando as Ferramentas de PC (Opcional)](#compilando-as-ferramentas-de-pc-opcional)
-  - [Estrutura do Repositório](#estrutura-do-repositório)
-- [Reportando Bugs](#reportando-bugs)
-- [Sobre, Créditos e Licença](#sobre-créditos-e-licença)
+Este é o **próprio jogo de PC** — não um remake. O código foi obtido por engenharia reversa do `SPEED2.EXE` e reimplementado em C (usando a versão de GameCube como referência de console). O jogo roda com os arquivos convertidos da **sua própria cópia de PC**; **nenhum dado protegido por direitos autorais do jogo é distribuído** neste repositório ou nas releases.
+
+Você tem a experiência completa do PC — mundo aberto em Bayview, modo Carreira, lojas, patrocinadores, capas de revista e DVD, mensagens SMS, mapa-múndi, todos os modos de corrida (Circuit, Sprint, Drift, Drag, Street X, URL, Outrun), Quick Race, customização completa, dinamômetro e tuning, cutscenes, EA TRAX, saves, códigos de trapaça e multiplayer Local Wireless para até 6 consoles — **aprimorada com uma interface touch nativa para o 3DS, suporte a 8 idiomas, opções de acessibilidade, direção por movimento e melhorias de qualidade de vida.**
+
+> [!TIP]
+> **Já joga o NFSU2-3DS original do Octoblimp?** Sua pasta `sdmc:/nfsu2` e seus saves de carreira são **100% compatíveis**. Basta instalar o `NFSU2-3DS.cia` deste fork pelo FBI — seus perfis e saves continuam intactos!
+
+---
+
+## Screenshots
+
+### Menus e Hubs
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/title-screen.png" alt="Tela Inicial com cartão Resume Career" width="265"><br>
+      <strong>Tela Inicial</strong><br>
+      <sub>Saudação ao perfil e cartão <em>Resume Career</em> em um toque</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/main-menu.png" alt="Menu Principal redesenhado em grade" width="265"><br>
+      <strong>Menu Principal</strong><br>
+      <sub>Grade hierárquica touch e engrenagem de Opções no topo</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/garage-hub.png" alt="Hub da Garagem" width="265"><br>
+      <strong>Garagem</strong><br>
+      <sub>Grade touch com 7 atalhos, saldo no rodapé e ícones do 3DS</sub>
+    </td>
+  </tr>
+</table>
+
+### Free Roam e Navegação GPS
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/freeroam-gps.png" alt="HUD Free Roam com rota GPS nas ruas" width="265"><br>
+      <strong>Free Roam + Rota GPS</strong><br>
+      <sub>Minimapa em tela cheia com zoom, trajeto nas ruas e distância real</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/freeroam-shop-pill.png" alt="Pílula contextual de Loja e badge de SMS" width="265"><br>
+      <strong>HUD Touch Contextual</strong><br>
+      <sub>Botão <code>SHOP</code>/<code>EVENT</code>, alerta de SMS e <code>Set GPS</code></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/freeroam-marker-card.png" alt="Cartão interativo de marcador no mapa" width="265"><br>
+      <strong>Cartões de Marcador</strong><br>
+      <sub>Toque em qualquer loja ou corrida no mapa para traçar GPS</sub>
+    </td>
+  </tr>
+</table>
+
+### Mapa-Múndi e Corridas
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/world-map.png" alt="Mapa-Múndi redesenhado em tela cheia" width="265"><br>
+      <strong>Mapa-Múndi Renovado</strong><br>
+      <sub>Ícones idênticos ao HUD, corredores da IA e arraste touch</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/world-map-filters.png" alt="Gaveta de filtros do Mapa-Múndi" width="265"><br>
+      <strong>Gaveta de Filtros</strong><br>
+      <sub>Painel lateral com rolagem para exibir/ocultar marcadores</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/race-hud.png" alt="HUD de corrida unificado e barra de classificação" width="265"><br>
+      <strong>HUD de Corrida e Classificação</strong><br>
+      <sub>Chips de posição/progresso, Touch Camera e barra expansível</sub>
+    </td>
+  </tr>
+</table>
+
+### Eventos, Pausa e Configurações
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/event-engage.png" alt="Diálogo de entrada de corrida com traçado da pista" width="265"><br>
+      <strong>Diálogos de Evento</strong><br>
+      <sub>Prévia do traçado da pista, prêmio, distância e texto rolável</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/pause-menu.png" alt="Menu de Pausa na tela inferior" width="265"><br>
+      <strong>Menu de Pausa</strong><br>
+      <sub>Indicador com degradê na tela superior e cartões touch embaixo</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/options-hub.png" alt="Grade de Opções 2x4 com Acessibilidade" width="265"><br>
+      <strong>Opções e Acessibilidade</strong><br>
+      <sub>Nova página <em>Accessibility</em> (8 idiomas, Texto Grande, Alto Contraste)</sub>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary><strong>Ver mais screenshots — Áudio, EA Trax, Quick Race, Estatísticas e Localização</strong></summary>
+<br>
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/audio-sliders.png" alt="Controles deslizantes de Áudio" width="255"><br>
+      <strong>Controles de Áudio</strong><br>
+      <sub>Sliders suaves por toque e barra de rolagem arrastável</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/ea-trax.png" alt="EA GAMES TRAX jukebox" width="255"><br>
+      <strong>EA GAMES™ TRAX</strong><br>
+      <sub>Alterne rotação, reordene faixas e ouça prévias pelo toque</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/quick-race-modes.png" alt="Seleção de modos do Quick Race" width="255"><br>
+      <strong>Modos do Quick Race</strong><br>
+      <sub>Grade touch centralizada com os 7 modos de corrida</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/track-select.png" alt="Seleção de Pista no Quick Race com mapa" width="255"><br>
+      <strong>Seleção de Pista</strong><br>
+      <sub>Prévia do traçado, distância e lista rolável de pistas</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/career-stats.png" alt="Tela de Estatísticas da Carreira" width="255"><br>
+      <strong>Estatísticas da Carreira</strong><br>
+      <sub>Estrelas visuais, barra de progresso e abas de status</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/post-race-localized.png" alt="Tela Pós-Corrida localizada em francês" width="255"><br>
+      <strong>Pós-Corrida e 8 Idiomas</strong><br>
+      <sub>Localização completa dos textos do jogo e da UI do port</sub>
+    </td>
+  </tr>
+</table>
+</details>
 
 ---
 
 ## Novidades deste Fork
 
-Todas as melhorias abaixo ficam dentro do executável do 3DS, mantendo total compatibilidade com os saves originais e com os dados de jogo do upstream (veja [docs/bottom-screen-ui.md](docs/bottom-screen-ui.md) para os detalhes técnicos):
+Todas as melhorias abaixo ficam dentro do executável do 3DS, mantendo total compatibilidade com os saves originais e com os dados do projeto original (veja [docs/bottom-screen-ui.md](docs/bottom-screen-ui.md) para a documentação técnica completa):
 
-- **Kit de Interface Nativo para a Tela Inferior do 3DS (`U2-UI`)**
-  - Cerca de 90 telas de menu e overlays redesenhadas para a tela touch 320×240 usando a identidade visual do próprio NFSU2, formas vetoriais com antialiasing (`uiaa`), áreas de toque mínimas de 32 px, fontes sempre legíveis (rótulos ≥ 12 px / texto ≥ 14–16 px), feedback sonoro ao tocar, barras de rolagem arrastáveis, diálogos longos com rolagem e seleção direta por toque.
-  - Inclui hubs de ícones em grade, Seleção de Carro (Garagem, Concessionária, Quick Race, LAN, Customizar), listas de peças de carroceria e performance, paleta de pintura, gráficos do dinamômetro e tuning, EA Trax, salas LAN, Caixa de Entrada e leitor de SMS, Status da Carreira e diálogos de Ajuda/Engajamento.
-- **HUD Touch Reformulado em Free Roam e Corridas**
-  - Minimapa em tela cheia na tela inferior com zoom (`+`/`−`), arraste por toque e botão `RECENTER`.
-  - **Rota GPS traçada nas ruas em tempo real** com **distância real pelo trajeto** (não em linha reta) e cores combinando com o destino escolhido.
-  - Toque em qualquer marcador no mapa para ver detalhes e ativar **SET GPS** com um toque; toque no chip de dinheiro ou SMS para abrir direto o Status da Carreira ou a Caixa de Mensagens; pílula contextual de **Entrar / Desafiar**; botão opcional **Touch Camera**.
-  - Interface de corrida unificada com chips flutuantes de posição/volta/tempo, bandeira quadriculada na linha de chegada e barra expansível de **Classificação (Standings)** via D-Pad Baixo ou toque.
-- **Mapa-Múndi Renovado**
-  - Mapa em tela cheia arrastável e com zoom, ícones consistentes com o minimapa do HUD, corredores da IA visíveis no free roam, toque direto nos marcadores e gaveta lateral de filtros com rolagem.
-- **Tela Inicial, Carregamento, Pausa, Pós-Corrida e Replay Otimizados**
-  - Cartão de perfil na tela inicial com **Resume Career / Continuar** (vai direto para o mundo aberto sem travar ou piscar no menu principal; um toque pula a introdução).
-  - Carregamento mais rápido ao entrar no mundo (pré-carrega apenas os trechos próximos ao carro) com tela inferior informativa exibindo controles e dicas do jogo.
-  - Menu de **Pausa** redesenhado na tela inferior (com mapa e resumo da carreira na tela superior), telas navegáveis de **Resultados e Estatísticas Pós-Corrida** e **Deck de Replay** touch completo com linha do tempo arrastável.
-- **8 Idiomas + Página de Acessibilidade (*Options > Accessibility*)**
-  - Jogue em **English, Français, Deutsch, Italiano, Español, Nederlands, Svenska ou Dansk** — traduzindo tanto os textos do jogo (`LANGUAGES/<Idioma>.bin`) quanto todas as strings e dicas próprias do port (incluindo correção para espaços inquebráveis em francês).
-  - Modos **Texto Grande** (~1,25×) e **Alto Contraste**, salvos por perfil em um arquivo `port.txt` separado para manter seu save original intacto byte a byte.
-- **Novos Controles e Opções para o 3DS**
-  - **Direção por Movimento / Motion Steering** (*Options > Player*): incline o 3DS para dirigir usando o acelerômetro do console.
-  - **Drag Shift: ZL/ZR** (*Options > Gameplay*): troque marchas em corridas de Drag usando `ZR` (subir) e `ZL` (reduzir).
-  - **Touch Camera** (*Options > Gameplay*): botão touch opcional no canto superior direito da tela inferior para alternar a câmera.
-  - **Câmera Livre no C-Stick** nas câmeras traseiras (além de hidráulica, câmera do dinamômetro e mover o mapa).
-- **Suporte a Toolchain Moderna e Build no Linux**
-  - Inclui script de compilação nativo para Linux (`tools/build_cia.sh`), detecção em tempo de execução da medição de texto do `citro2d` 1.6 / 1.7+ e compatibilidade com `libctru` 2.7.1.
+| Área | Melhorias |
+| --- | --- |
+| **Kit de UI Nativo (`U2-UI`)** | ~90 telas redesenhadas para 320×240 seguindo a identidade visual do NFSU2: formas suavizadas (`uiaa`), alvos de toque ≥ 32 px, fontes legíveis (rótulos ≥ 12 px / corpo ≥ 14–16 px), feedback sonoro ao tocar, scrollbars arrastáveis, diálogos longos roláveis e toque direto. |
+| **HUD Touch em Free Roam e Corridas** | Minimapa em tela cheia com zoom/arraste, **rota GPS traçada pelas ruas** com **distância real do percurso**, cores do GPS seguindo o destino, cartões interativos de marcador (`Set GPS`), chips de Banco/SMS, pílula contextual `SHOP`/`EVENT`, botão opcional **Touch Camera**, bandeira quadriculada e barra expansível de **Classificação**. |
+| **Mapa-Múndi Renovado** | Mapa em tela cheia com ícones idênticos ao minimapa, corredores da IA no free roam, toque direto entre categorias e gaveta lateral de filtros com rolagem. |
+| **Fluxo e Carregamento Otimizados** | Cartão **Resume Career** na tela inicial (pula a piscada/trava do menu principal; um toque pula a intro), carregamento mais rápido ao entrar no mundo com dicas e controles na tela inferior, menus touch de **Pausa** e **Pós-Corrida** e **Deck de Replay** com linha do tempo arrastável. |
+| **8 Idiomas + Acessibilidade** | Suporte a **English, Français, Deutsch, Italiano, Español, Nederlands, Svenska e Dansk** (textos do jogo + strings e dicas do port), além de **Texto Grande** (~1,25×) e **Alto Contraste** em *Options > Accessibility* — salvos em um arquivo `port.txt` separado para preservar os saves originais byte a byte. |
+| **Controles para 3DS** | **Motion Steering** (*Options > Player*, direção inclinando o console via acelerômetro), **Drag Shift: ZL/ZR** e **Touch Camera** (*Options > Gameplay*), e **Câmera Livre no C-Stick**. |
+| **Toolchain Moderna e Build no Linux** | Script nativo de build para Linux (`tools/build_cia.sh`), detecção automática da medição de texto do `citro2d` 1.6 / 1.7+ e compatibilidade com `libctru` 2.7.1. |
 
 ---
 
 ## Requisitos
 
-- Um **New Nintendo 3DS, New 3DS XL ou New 2DS XL** com Custom Firmware (**Luma3DS**) e **FBI**.
-  - *Consoles Old 3DS / Old 3DS XL / Old 2DS não conseguem rodar o port* (pouca memória RAM e CPU insuficiente).
-- **Firmware DSP** extraído para ter som:
-  - Abra o menu **Rosalina** (`L + D-Pad Baixo + SELECT`) → **Miscellaneous options** → **Dump DSP firmware**.
+> [!IMPORTANT]
+> **Exclusivo para New Nintendo 3DS / New 3DS XL / New 2DS XL.** Consoles Old 3DS / Old 3DS XL / Old 2DS não conseguem rodar o port por limitações de memória RAM e CPU.
+
+- Um **New 3DS, New 3DS XL ou New 2DS XL** com Custom Firmware (**Luma3DS**) e **FBI**.
+- **Firmware DSP** extraído para o áudio:
+  - Abra o **Rosalina** (`L + D-Pad Baixo + SELECT`) → **Miscellaneous options** → **Dump DSP firmware**.
   - Isso cria `sdmc:/3ds/dspfirm.cdc` (para `.3dsx`) ou `sdmc:/dspfirm.cdc` (para `.cia` — se só existir em `/3ds/dspfirm.cdc`, copie também para a raiz do SD em `sdmc:/dspfirm.cdc`).
 - **Sua própria cópia de PC** de *Need for Speed: Underground 2* (a pasta onde fica o `SPEED2.EXE`).
   - Testado com a **versão americana (US) atualizada para v1.2**. Outras versões/patches não têm garantia de funcionamento.
 - Cerca de **2,6 GB** livres no cartão SD.
-- Um PC (Windows, Linux ou macOS) para converter os arquivos da sua cópia de PC uma única vez para o cartão SD.
+- Um PC (Windows, Linux ou macOS) para converter os arquivos do jogo uma única vez para o cartão SD.
 
 ---
 
 ## Como Jogar (Instalação)
 
-### Atualizando a partir do NFSU2-3DS original
+### Opção 1 — Atualizando a partir do NFSU2-3DS do Octoblimp
 
-Se você já tem a pasta `sdmc:/nfsu2` funcionando do [Octoblimp/NFSU2-3DS](https://github.com/Octoblimp/NFSU2-3DS):
+Já tem a pasta `sdmc:/nfsu2` funcionando?
 
-1. Baixe o arquivo **`NFSU2-3DS.cia`** mais recente na página de [**Releases**](https://github.com/MBaliver/NFSU2-3DSUI/releases) deste repositório.
-2. Copie o `NFSU2-3DS.cia` para o cartão SD do 3DS e instale-o pelo **FBI** (ele substitui o aplicativo mantendo todos os seus dados e saves intactos).
-3. *(Opcional — para outros idiomas)* Copie os arquivos de idioma desejados (`French.bin`, `German.bin`, `Italian.bin`, `Spanish.bin`, `Dutch.bin`, `Swedish.bin`, `Danish.bin`) da pasta `LANGUAGES/` do seu jogo de PC para `sdmc:/nfsu2/LANGUAGES/`, e escolha o idioma em **Options > Accessibility > Language**.
-4. Abra o **Need for Speed: Underground 2** pelo Menu HOME!
+1. Baixe o **`NFSU2-3DS.cia`** na página de [**Releases**](https://github.com/MBaliver/NFSU2-3DSUI/releases/latest).
+2. Copie para o cartão SD e instale pelo **FBI** (substitui o app mantendo seus dados e saves intactos).
+3. *(Opcional — outros idiomas)* Copie os arquivos de idioma desejados (`French.bin`, `German.bin`, `Italian.bin`, `Spanish.bin`, `Dutch.bin`, `Swedish.bin`, `Danish.bin`) da pasta `LANGUAGES/` do seu jogo de PC para `sdmc:/nfsu2/LANGUAGES/` e selecione o idioma em **Options > Accessibility > Language**.
+4. Abra pelo **Menu HOME**!
 
-### Instalação do Zero (Windows — Interface Gráfica)
+### Opção 2 — Instalação do Zero (Windows — Interface Gráfica)
 
 1. **Converta os arquivos da sua cópia de PC para o cartão SD:**
-   - **Recomendado:** Baixe o `NFSU2-3DS-Tools.zip` na [release v1.0.1 do projeto original](https://github.com/Octoblimp/NFSU2-3DS/releases) (já vem com `ffmpeg.exe`, `vgmstream`, `dspenc` e `tex3ds` prontos, sem precisar instalar nada), **ou** clone este repositório com **Git LFS** instalado e abra [`PC Apps/NFSU2-3DS Tools`](PC%20Apps/NFSU2-3DS%20Tools).
-     > **Atenção ao botão "Download ZIP" do GitHub:** o `ffmpeg.exe` é armazenado via Git LFS, então o ZIP do código-fonte contém apenas um arquivo-ponteiro pequeno. Use o ZIP das ferramentas, clone com Git LFS ou tenha o `ffmpeg` (com `libx264`) no `PATH`.
+   - **Recomendado:** Baixe o `NFSU2-3DS-Tools.zip` na [release v1.0.1 do Octoblimp](https://github.com/Octoblimp/NFSU2-3DS/releases) (já vem com `ffmpeg.exe`, `vgmstream`, `dspenc` e `tex3ds` prontos), **ou** clone este repositório com **Git LFS** instalado e abra [`PC Apps/NFSU2-3DS Tools`](PC%20Apps/NFSU2-3DS%20Tools).
+     > [!NOTE]
+     > O `ffmpeg.exe` é versionado com Git LFS, então o "Download ZIP" do GitHub traz apenas um ponteiro pequeno. Use o ZIP das ferramentas, clone com Git LFS ou tenha o `ffmpeg` (com `libx264`) no `PATH`.
    - Abra o **NFSU2-3DS Data Setup** (`NFSU2-3DS Data Setup.exe`).
-   - Selecione a pasta da sua instalação de PC do NFSU2 (onde está o `SPEED2.EXE`).
-   - Como pasta de destino, escolha uma pasta chamada `nfsu2` na **raiz do cartão SD** (por exemplo, `E:\nfsu2`).
-   - Clique em **Set up / update**. A primeira execução demora um pouco; execuções futuras só processam o que estiver faltando ou desatualizado.
-   - *(Opcional — outros idiomas)* Se você usou o ZIP das ferramentas do upstream e quer outros idiomas além de inglês, copie os arquivos `.bin` desejados (`Spanish.bin`, `French.bin`, etc.) da pasta `LANGUAGES\` do jogo de PC para `<SD>:\nfsu2\LANGUAGES\`. (Usando o `stage.py` deste fork isso já é feito automaticamente.)
-   - *Alternativa por linha de comando no Windows:*
+   - Selecione a pasta da instalação de PC do NFSU2 (onde está o `SPEED2.EXE`) e escolha `nfsu2` na **raiz do cartão SD** como destino (ex.: `E:\nfsu2`).
+   - Clique em **Set up / update** (a primeira conversão demora um pouco; execuções seguintes atualizam apenas o que mudou).
+   - *(Opcional — outros idiomas)* Copie os arquivos `LANGUAGES\<Idioma>.bin` desejados do jogo de PC para `<SD>:\nfsu2\LANGUAGES\` (o `tools/stage.py` deste fork já faz isso automaticamente).
+   - *Equivalente via terminal no Windows:*
      ```cmd
      nfsu2-3ds.exe setup --pc "C:\Caminho\Para\NFSU2" --gamedir E:\nfsu2
      nfsu2-3ds.exe setup --pc "C:\Caminho\Para\NFSU2" --gamedir E:\nfsu2 --list
      ```
-2. **Instale o jogo no New 3DS:**
-   - Baixe o **`NFSU2-3DS.cia`** na página de [**Releases**](https://github.com/MBaliver/NFSU2-3DSUI/releases) deste repositório (ou [compile você mesmo](#compilando-a-partir-do-código-fonte-build)).
-   - Copie o `NFSU2-3DS.cia` para o cartão SD, instale usando o **FBI** e inicie pelo **Menu HOME**.
+2. **Instale e Jogue:**
+   - Baixe o **`NFSU2-3DS.cia`** na página de [**Releases**](https://github.com/MBaliver/NFSU2-3DSUI/releases/latest) deste repositório (ou [compile a partir do código-fonte](#compilando-a-partir-do-código-fonte-build)).
+   - Instale pelo **FBI** e abra pelo **Menu HOME**.
 
-> **CIA vs `.3dsx`:** A versão **`.cia`** é fortemente recomendada e testada em hardware real — apenas o CIA recebe o modo de memória estendida de 178 MB do New 3DS. Na primeira inicialização, o jogo cria automaticamente o `sdmc:/nfsu2_config.txt` apontando para `/nfsu2`. O `.3dsx` roda pelo Homebrew Launcher usando `/3ds/nfsu2`.
+> [!NOTE]
+> **CIA vs `.3dsx`:** Dê preferência ao **`.cia`** em hardware real — apenas o CIA recebe o modo de memória estendida de 178 MB do New 3DS. A primeira execução cria automaticamente `sdmc:/nfsu2_config.txt` apontando para `/nfsu2`. Perfis e saves ficam em `sdmc:/nfsu2/SAVE/` e `sdmc:/nfsu2/profiles/` e nunca são tocados pelo Data Setup. Se algum arquivo obrigatório estiver faltando, o jogo exibe uma tela de diagnóstico indicando o caminho exato.
 
-> **Saves e Diagnóstico de Arquivos:** Seus perfis e saves ficam em `sdmc:/nfsu2/SAVE/` e `sdmc:/nfsu2/profiles/`. O Data Setup nunca apaga nem modifica seus saves. Se faltar algum arquivo (config, pasta `GameDir` ou `dspfirm.cdc`), o jogo exibe uma tela de aviso mostrando exatamente qual caminho faltou, em vez de travar em tela preta.
+### Opção 3 — Instalação do Zero (Linux / macOS / Python CLI)
 
-### Instalação do Zero (Linux / macOS / Python CLI)
-
-Você pode converter os arquivos do jogo em qualquer sistema usando os scripts Python em `tools/`:
-
-1. Instale o **Python 3** e as bibliotecas necessárias:
+1. Instale as dependências em **Python 3**:
    ```bash
    pip install numpy Pillow lz4 pefile unicorn capstone
    ```
-2. Tenha no seu `PATH`:
-   - `ffmpeg` (com suporte a `libx264`)
-   - `vgmstream-cli`
-   - `dspenc` (o código-fonte está em `PC Apps/NFSU2-3DS Tools/bin/dspenc.c`)
-   - `tex3ds` do devkitPro (`sudo dkp-pacman -S 3dstools` no Linux/macOS)
+2. Tenha no `PATH`: `ffmpeg` (com `libx264`), `vgmstream-cli`, `dspenc` (código-fonte em `PC Apps/NFSU2-3DS Tools/bin/dspenc.c`) e `tex3ds` do devkitPro (`sudo dkp-pacman -S 3dstools`).
 3. Execute o script de preparação (que também copia automaticamente todos os idiomas disponíveis!):
    ```bash
    python3 tools/stage.py --pc "/caminho/para/NFSU2" --gamedir "/caminho/para/sd/nfsu2"
    ```
    Ou abra a interface gráfica com `python3 tools/nfsu2_setup.pyw`.
 
-### Carros Regionais e Áudio
+<details>
+<summary><strong>Carros Regionais (Peugeot 106 / Corsa) e Áudio em <code>SDATA\sdat.viv</code></strong></summary>
 
-- **Peugeot 106 e Vauxhall/Opel Corsa:** Esses dois carros só existem na versão europeia (UK/EU) de PC (a versão US tem `CIVIC` e `RSX`). O Data Setup empacota os carros presentes na sua pasta `CARS\` e ignora os ausentes.
-  - Para ter o 106 e o Corsa numa cópia americana, copie as pastas `CARS\PEUGOT106` e `CARS\CORSA` de uma cópia europeia para a pasta `CARS` do seu PC antes de rodar o Data Setup (ou rode novamente depois) e ajuste [`Region=`](#regiões) (`EU`, `ALL`, etc.). Sem essas pastas, mantenha `Region=US`.
-  - O inverso vale para cópias UK/EU sem `CARS\CIVIC` e `CARS\RSX`: use `Region=EU` ou copie essas duas pastas de uma cópia US.
-- **Música e Vozes em `SDATA\sdat.viv`:** Algumas instalações guardam músicas e falas dentro do arquivo `SDATA\sdat.viv` em vez das pastas `pfdata` e `speech`. O Data Setup extrai isso automaticamente para um cache temporário sem alterar a pasta do jogo no PC.
+- **Peugeot 106 e Vauxhall/Opel Corsa:** Presentes apenas na versão europeia (UK/EU) de PC (a versão US tem `CIVIC` e `RSX`). O Data Setup empacota os carros encontrados e ignora os ausentes. Para ter o 106 e o Corsa numa cópia US, copie `CARS\PEUGOT106` e `CARS\CORSA` de uma cópia UK/EU para a pasta `CARS` do seu PC antes de rodar o Data Setup (ou rode novamente depois) e configure [`Region=`](#arquivo-de-configuração-nfsu2_configtxt) (`EU`, `ALL`, etc.). Sem essas pastas, mantenha `Region=US`.
+- **Música e Vozes em `SDATA\sdat.viv`:** Algumas instalações guardam músicas e vozes dentro de `SDATA\sdat.viv` em vez das pastas `pfdata`/`speech`. O Data Setup extrai tudo automaticamente para um cache temporário sem alterar a pasta do jogo no PC.
+
+</details>
 
 ---
 
@@ -149,81 +282,65 @@ Você pode converter os arquivos do jogo em qualquer sistema usando os scripts P
 
 | Controle | Ação |
 | --- | --- |
-| **Circle Pad** *(ou inclinação do 3DS com Motion Steering ativo)* | Esterçar |
-| **A** | Acelerar |
-| **B** | Frear / Ré |
-| **R** | Nitro |
-| **L** | Freio de mão |
-| **X** | Subir marcha |
-| **Y** | Reduzir marcha |
-| **ZR** | Mudar câmera *(ou subir marcha em Drag com **Drag Shift: ZL/ZR** ativo)* |
-| **ZL** | Resetar carro *(ou reduzir marcha em Drag com **Drag Shift: ZL/ZR** ativo)* |
+| **Circle Pad** *(ou inclinação do 3DS com Motion Steering)* | Esterçar |
+| **A** / **B** | Acelerar / Frear e Ré |
+| **R** / **L** | Nitro / Freio de mão |
+| **X** / **Y** | Subir marcha / Reduzir marcha |
+| **ZR** / **ZL** | Mudar câmera / Resetar carro *(ou trocar marchas em Drag com **Drag Shift: ZL/ZR** ativo)* |
 | **C-Stick** | Câmera livre (visões traseiras) / Hidráulica / Mover o mapa |
 | **SELECT** | Olhar para trás |
 | **D-Pad Cima** | Entrar em loja / Desafiar oponente |
 | **D-Pad Baixo** | Mapa-Múndi (free roam) / Alternar Classificação (em corridas) |
-| **D-Pad Esquerda** | Estatísticas da Carreira |
-| **D-Pad Direita** | Mensagens SMS |
+| **D-Pad Esquerda** / **Direita** | Estatísticas da Carreira / Mensagens SMS |
 | **START** | Pausar |
 
-Todas as ações de direção (exceto esterçar e pausar) podem ser remapeadas por perfil em **Options > Controls** (**Default Settings** restaura o padrão e **Delete All Controls** limpa todos os botões).
+Todas as ações de direção (exceto esterçar e pausar) podem ser remapeadas por perfil em **Options > Controls** (**Default Settings** restaura o padrão; **Delete All Controls** limpa tudo).
 
-### Menus e Tela Touch
-
-- Navegue com o **D-Pad** ou **Circle Pad**, confirme com **A**, volte com **B** e role listas ou diálogos longos arrastando o dedo ou usando **Cima/Baixo**.
-- Todas as telas redesenhadas na tela inferior funcionam por **toque direto**, incluindo o minimapa no mundo aberto (arraste para mover, `+`/`−` para zoom, toque nos ícones para traçar GPS), Mapa-Múndi, Caixa de SMS, Pausa, Pós-Corrida e Deck de Replay.
-
-### Opções Extras Adicionadas por este Fork
+### Opções Extras deste Fork
 
 - **Options > Accessibility:** `Language` (8 idiomas), `Large Text` (texto grande), `High Contrast` (alto contraste).
 - **Options > Gameplay:** `GPS Color`, `Drag Shift: ZL/ZR`, `Touch Camera`, `Car Damage`.
-- **Options > Player:** `Motion Steering` (direção por inclinação com o acelerômetro do 3DS).
+- **Options > Player:** `Motion Steering` (direção por inclinação usando o acelerômetro do 3DS).
 
 ---
 
 ## Local Wireless, Cheats e Mods
 
-- **Local Wireless (LAN):** Selecione **LAN** no menu principal para correr com **2 a 6 consoles New 3DS** em qualquer modalidade. Cada console precisa do jogo e da sua própria pasta de dados convertida com a mesma versão das ferramentas. Um console cria a sala e os demais entram.
-- **Códigos de Trapaça (Cheats):** Todos os códigos da versão de PC funcionam na tela inicial usando sequências de botões do 3DS. Veja a lista completa em [CHEAT_CODES.MD](CHEAT_CODES.MD).
-- **Mods:** A maioria dos mods de dados de PC (modelos/texturas de carros, vinis, arte de HUD/menus, textos, sons e músicas) funciona empacotando com o **NFSU2-3DS Mod Packer** em `<GameDir>/mods/`. Mods de código (`.asi`, patches no `SPEED2.EXE`) não rodam no 3DS. Veja [MODDING.md](MODDING.md).
+- **Local Wireless (LAN):** Corra com **2 a 6 consoles New 3DS** em qualquer modalidade pelo menu **LAN**. Cada console precisa da sua própria pasta de dados convertida com a mesma versão das ferramentas.
+- **Códigos de Trapaça (Cheats):** Todos os códigos de PC funcionam na tela inicial com sequências de botões do 3DS — veja [CHEAT_CODES.MD](CHEAT_CODES.MD).
+- **Mods:** A maioria dos mods de dados de PC (modelos/texturas de carros, vinis, arte de HUD/menus, textos, sons e músicas) funciona via **NFSU2-3DS Mod Packer** em `<GameDir>/mods/`. Mods de código (`.asi`, patches no `SPEED2.EXE`) não rodam no 3DS — veja [MODDING.md](MODDING.md).
 
 ---
 
 ## Arquivo de Configuração (`nfsu2_config.txt`)
 
-Fica em `sdmc:/nfsu2_config.txt` (ou ao lado do `.3dsx`). Usa o formato `Chave=Valor` (`#` inicia um comentário). É criado automaticamente na primeira execução e nunca é sobrescrito pelo jogo.
+Fica em `sdmc:/nfsu2_config.txt` (ou ao lado do `.3dsx`). Criado automaticamente no primeiro boot e nunca sobrescrito.
 
 | Linha | O que faz |
 | --- | --- |
-| `GameDir=/nfsu2` | Caminho da pasta de dados do jogo a partir da raiz do cartão SD (**obrigatório**). |
-| `Language=EN` | Idioma inicial: `EN`, `FR`, `DE`, `IT`, `ES`, `NL`, `SV`, `DA` (ou nome completo). Exige o arquivo `LANGUAGES/<Nome>.bin` correspondente em `GameDir`. Também pode ser trocado por perfil em *Options > Accessibility*. |
-| `Region=US` | Região do jogo (`US`, `EU`, `KR`, `JP`, `TW`, `CN`, `TH` ou `ALL`). Veja [Regiões](#regiões). |
-| `Mods=CarPack,HudSkin` | Quais mods de `mods/` carregar e em que ordem (`Mods=off` desativa todos; sem a linha, carrega todos). |
-| `HwVideo=0` | Reproduz os vídeos pela CPU (VP6 por software) em vez do decodificador MVD do New 3DS. |
+| `GameDir=/nfsu2` | Caminho da pasta de dados do jogo na raiz do SD (**obrigatório**). |
+| `Language=EN` | Idioma inicial (`EN`, `FR`, `DE`, `IT`, `ES`, `NL`, `SV`, `DA`). Requer `LANGUAGES/<Nome>.bin`. Também configurável por perfil em *Options > Accessibility*. |
+| `Region=US` | Região do jogo (`US`, `EU`, `KR`, `JP`, `TW`, `CN`, `TH` ou `ALL`). |
+| `Mods=CarPack,HudSkin` | Ordem de carregamento dos mods em `mods/` (`Mods=off` desativa todos; sem a linha, carrega todos). |
+| `HwVideo=0` | Decodifica vídeos na CPU (VP6 por software) em vez do hardware MVD do New 3DS. |
 | `DebugLogging=1` | Grava log de depuração em `sdmc:/nfsu2_debug.txt` (desligado por padrão). |
-| `DevCommands=1` | *(Desenvolvedor)* Lê comandos/capturas via `sdmc:/nfsu2_cmd.txt` (`tools/devcmd.py`) e ativa as ferramentas de debug em `L + R + SELECT`. |
-| `DbgUiAudit=1` | *(Desenvolvedor)* Registra no log áreas de toque menores que 32 px e textos menores que 14 px. |
+| `DevCommands=1` | *(Desenvolvedor)* Lê `sdmc:/nfsu2_cmd.txt` (`tools/devcmd.py`) e ativa ferramentas de debug em `L + R + SELECT`. |
+| `DbgUiAudit=1` | *(Desenvolvedor)* Registra alvos de toque menores que 32 px e textos menores que 14 px. |
 
----
+<details>
+<summary><strong>Tabela de Regiões Suportadas (<code>Region=</code>)</strong></summary>
+<br>
 
-## Regiões
+| `Region=` | Versão | Diferenças |
+| --- | --- | --- |
+| `US` (`NA`) | América do Norte *(padrão)* | Civic e RSX, emblemas US (Miata, Tiburon), vinil Best Buy |
+| `EU` (`EUROPE`, `UK`) | Europa | Peugeot 106 e Vauxhall Corsa, MX-5, Hyundai Coupe |
+| `KR` (`KOREA`) | Coreia | 106 e Opel Corsa, MX-5, Hyundai Tuscani |
+| `JP` (`JAPAN`) | Japão | 106 e Opel Corsa, Miata Roadster, Sprinter Trueno, Altezza, Fairlady Z, Skyline |
+| `TW` / `CN` / `TH` | Taiwan / China / Tailândia | 106 e Opel Corsa, MX-5, Hyundai Coupe |
+| `ALL` | Combinada *(31 carros)* | Emblemas US + 106/Corsa europeus + iniciais US + vinil Best Buy |
 
-O jogo de PC padrão é a versão americana (`US`), mas todas as diferenças regionais existem no código:
-
-| `Region=` | Versão |
-| --- | --- |
-| `US` (`NA`) | América do Norte (padrão) |
-| `EU` (`EUROPE`, `UK`) | Europa |
-| `KR` (`KOREA`) | Coreia |
-| `JP` (`JAPAN`) | Japão |
-| `TW` (`TAIWAN`) | Taiwan |
-| `CN` (`CHINA`) | China |
-| `TH` (`THAILAND`) | Tailândia |
-| `ALL` | Todos os 31 carros juntos (emblemas US + 106/Corsa europeus + vinil Best Buy) |
-
-- **Carros:** A versão `US` tem Honda Civic e Acura RSX; as demais regiões substituem esses dois pelo Peugeot 106 e pelo Corsa (quando convertidos de uma cópia de PC que os possua). `ALL` habilita todos os 31 carros.
-- **Emblemas e Nomes:** Nomes e logotipos fiéis à região escolhida (ex.: Miata / MX-5 / Miata Roadster, Tiburon / Coupe / Tuscani, Vauxhall / Opel Corsa, Sprinter Trueno, Altezza, Fairlady Z, Skyline).
-- **Vinil Best Buy:** Disponível em `US` e `ALL`.
+</details>
 
 ---
 
@@ -231,42 +348,32 @@ O jogo de PC padrão é a versão americana (`US`), mas todas as diferenças reg
 
 ### Pré-requisitos
 
-- **Toolchain 3DS do devkitPro:**
-  - `3ds-dev` (`devkitARM`, `libctru`, `citro2d`, `citro3d`, `3dstools`, `picasso`)
-  - `3ds-zlib` (`libz`)
-- **Python 3** *(recomendado)* — executa `tools/pica_output_check.py` (evita shaders PICA200 que travam o console real) e opcionalmente recria o banner do Menu HOME (`tools/make_banner.py`). Sem Python ou sem os arquivos de PC, o banner já incluído em `3DS Files/meta/nfsu2/` é usado.
-- **Nota sobre versões das bibliotecas:** O upstream original foi testado com `libctru 2.4.1`, `citro2d 1.6.0` e `citro3d 1.7.1` (e o `build_cia.ps1` exibe um aviso no Windows se outra versão estiver instalada). Este fork corrige a medição de texto em tempo de execução para `citro2d 1.7.x` e adiciona suporte ao `libctru 2.7.1` — as releases deste fork são compiladas e testadas no Linux com o devkitPro atual (`libctru 2.7.1` + `citro2d 1.7.x`).
+- **Toolchain 3DS do devkitPro:** `3ds-dev` (`devkitARM`, `libctru`, `citro2d`, `citro3d`, `3dstools`, `picasso`) + `3ds-zlib` (`libz`).
+- **Python 3** *(recomendado)* — executa `tools/pica_output_check.py` (evita bugs de shader PICA200 que travam hardware real) e opcionalmente recria o banner do Menu HOME (`tools/make_banner.py`). Sem Python ou dados de PC, o banner já versionado em `3DS Files/meta/nfsu2/` é usado.
+- **Nota sobre versões do SDK:** O projeto original foi testado com `libctru 2.4.1`, `citro2d 1.6.0` e `citro3d 1.7.1`. Este fork adiciona compatibilidade em tempo de execução com `citro2d 1.7.x` e suporte ao `libctru 2.7.1`, e suas releases são compiladas e testadas no Linux com o devkitPro atual (`libctru 2.7.1` + `citro2d 1.7.x`).
 
 ### Compilando no Linux
 
-1. **Instale os pacotes 3DS do devkitPro** (usando o [devkitPro pacman](https://devkitpro.org/wiki/devkitPro_pacman)):
+1. **Instale os pacotes 3DS do devkitPro** (via [devkitPro pacman](https://devkitpro.org/wiki/devkitPro_pacman)):
    ```bash
    sudo dkp-pacman -S 3ds-dev 3ds-zlib
    ```
-2. **Baixe os binários Linux de `makerom` e `bannertool`:**
-   O `makerom` e o `bannertool` não vêm nos repositórios do devkitPro (o repositório inclui os `.exe` de Windows em `tools/3ds-bin/`). Baixe os binários Linux x86_64:
-   - `makerom` em [releases do 3DSGuy/Project_CTR](https://github.com/3DSGuy/Project_CTR/releases)
-   - `bannertool` em [releases do Steveice10/bannertool](https://github.com/Steveice10/bannertool/releases)
-
-   Coloque ambos em `tools/3ds-bin/` e dê permissão de execução:
+2. **Coloque os binários Linux de `makerom` e `bannertool` em `tools/3ds-bin/`:**
+   Baixe os binários Linux x86_64 de [`makerom`](https://github.com/3DSGuy/Project_CTR/releases) e [`bannertool`](https://github.com/Steveice10/bannertool/releases), coloque-os em `tools/3ds-bin/` e torne-os executáveis:
    ```bash
    chmod +x tools/3ds-bin/makerom tools/3ds-bin/bannertool
    ```
-3. **Compile o `.3dsx` e o `.cia`:**
-   Como o GNU Make com `3ds_rules` do devkitPro não funciona em caminhos com espaços (`3DS Files`), o script `tools/build_cia.sh` faz automaticamente um bind-mount de `3DS Files/` em `build_3ds/` dentro de um namespace sem privilégios (`unshare -rm`) e executa `make -j$(nproc) cia`:
+3. **Execute o script de build Linux** (usa `unshare -rm` para montar `3DS Files/` em `build_3ds/` sem espaços no caminho, contornando a limitação do GNU Make):
    ```bash
    # Instalação padrão do devkitPro (/opt/devkitpro):
    DEVKITPRO=/opt/devkitpro bash tools/build_cia.sh
 
-   # Ou se o devkitPro estiver em ~/.local/share/devkitpro/opt/devkitpro (padrão do script):
+   # Ou instalação local do usuário (~/.local/share/devkitpro/opt/devkitpro, padrão do script):
    bash tools/build_cia.sh
    ```
-4. **Arquivos gerados:**
-   - `3DS Files/NFSU2-3DS.cia`
-   - `3DS Files/NFSU2-3DS.3dsx`
-   - `3DS Files/NFSU2-3DS.elf`
+4. **Saídas geradas:** `3DS Files/NFSU2-3DS.cia`, `3DS Files/NFSU2-3DS.3dsx` e `3DS Files/NFSU2-3DS.elf`.
 
-*(Dica: você pode enviar e instalar o `.cia` compilado diretamente no New 3DS via Wi-Fi usando o **3dsDL** — veja os comandos de `curl` em [docs/bottom-screen-ui.md](docs/bottom-screen-ui.md#1-build-and-deploy-on-linux).)*
+*(Dica: você pode enviar e instalar o `.cia` diretamente no 3DS por Wi-Fi usando o **3dsDL** — veja os comandos em [docs/bottom-screen-ui.md](docs/bottom-screen-ui.md#1-build-and-deploy-on-linux).)*
 
 ### Compilando no Windows
 
@@ -274,16 +381,14 @@ O jogo de PC padrão é a versão americana (`US`), mas todas as diferenças reg
    ```bash
    pacman -S 3ds-dev 3ds-zlib
    ```
-2. Os binários de Windows (`makerom.exe` e `bannertool.exe`) já estão incluídos em `tools/3ds-bin/`.
+2. Os binários `makerom.exe` e `bannertool.exe` de Windows já estão incluídos em `tools/3ds-bin/`.
 3. Na raiz do repositório, abra o **PowerShell** e execute:
    ```powershell
    powershell -ExecutionPolicy Bypass -File tools/build_cia.ps1
    ```
-   O script mapeia temporariamente uma letra de unidade sem espaços (`subst`), valida os shaders, gera `3DS Files/NFSU2-3DS.3dsx` e `3DS Files/NFSU2-3DS.cia` pelo bash MSYS2 do devkitPro e remove o mapeamento ao terminar.
+   O script mapeia temporariamente uma letra de unidade sem espaços (`subst`), valida os shaders, compila `3DS Files/NFSU2-3DS.3dsx` e `3DS Files/NFSU2-3DS.cia` e remove o mapeamento ao terminar.
 
 ### Compilando as Ferramentas de PC (Opcional)
-
-Para reconstruir os executáveis de Windows em `PC Apps/NFSU2-3DS Tools/` a partir dos scripts em `tools/`:
 
 ```bash
 python tools/build_apps.py
@@ -291,20 +396,16 @@ python tools/build_apps.py
 
 ### Estrutura do Repositório
 
-- `3DS Files/` — projeto devkitARM: `source/` (código C/C++ do port e shaders PICA200), `data/` (fontes e ícones de botões embutidos), `meta/` (banner, ícone e `app.rsf` do CIA).
-- `tools/` — scripts de build (`build_cia.sh`, `build_cia.ps1`), ferramentas Python de conversão/empacotamento (`stage.py`, `devcmd.py`, etc.), scripts Ghidra e `tools/3ds-bin/` (`makerom` / `bannertool`).
-- `PC Apps/NFSU2-3DS Tools/` — executáveis de Windows do Data Setup e Mod Packer, código-fonte e utilitários incluídos (`ffmpeg`, `vgmstream`, `dspenc`, `tex3ds`) com suas licenças.
-- `docs/` — documentação técnica do retrabalho de interface (`docs/bottom-screen-ui.md`), formatos de arquivos e comportamento original do jogo.
+- `3DS Files/` — projeto devkitARM: `source/` (código C/C++ e shaders PICA200), `data/` (fontes e ícones de botões), `meta/` (banner, ícone e `app.rsf` do CIA).
+- `tools/` — scripts de build (`build_cia.sh`, `build_cia.ps1`), ferramentas Python (`stage.py`, `devcmd.py`), scripts Ghidra e `tools/3ds-bin/`.
+- `PC Apps/NFSU2-3DS Tools/` — executáveis Windows do Data Setup e Mod Packer, código-fonte e utilitários incluídos (`ffmpeg`, `vgmstream`, `dspenc`, `tex3ds`).
+- `docs/` — documentação do retrabalho de UI ([bottom-screen-ui.md](docs/bottom-screen-ui.md)), screenshots (`docs/screenshots/`), formatos de arquivos e comportamento original do jogo.
 
 ---
 
 ## Reportando Bugs
 
-O jogo não gera log por padrão. Para reportar um problema:
-
-1. Adicione `DebugLogging=1` ao arquivo `sdmc:/nfsu2_config.txt`.
-2. Jogue até o problema acontecer novamente.
-3. Envie o arquivo `sdmc:/nfsu2_debug.txt` junto com o crash dump do Luma3DS (caso o console tenha travado), informando a versão/release utilizada.
+Adicione `DebugLogging=1` ao `sdmc:/nfsu2_config.txt`, reproduza o problema e envie `sdmc:/nfsu2_debug.txt` junto com o crash dump do Luma3DS (se travou) e a versão/commit testada.
 
 ---
 
@@ -312,8 +413,8 @@ O jogo não gera log por padrão. Para reportar um problema:
 
 - **Port Original:** Criado por [**Octoblimp**](https://github.com/Octoblimp/NFSU2-3DS).
 - **Fork de UI/UX:** Mantido por [**MBaliver**](https://github.com/MBaliver/NFSU2-3DSUI).
-- **Aviso Legal:** Projeto de fã sem fins lucrativos, não feito, endossado ou apoiado pela Electronic Arts. *Need for Speed* e *Need for Speed: Underground 2* são marcas registradas da Electronic Arts Inc. Este repositório não contém dados do jogo e funciona somente com arquivos de uma cópia que você possui (a única exceção é o banner, ícone e som do Menu HOME do CIA em `3DS Files/meta/nfsu2/`, gerados por `tools/make_banner.py` para permitir compilar o CIA de forma independente).
-- **Licença:** O código do port é distribuído sob a **GNU General Public License v3.0** ([LICENSE](LICENSE)). O jogo, seus dados e sua arte continuam sendo propriedade da Electronic Arts. Os binários de terceiros incluídos (`makerom`, `bannertool`, `ffmpeg`, `vgmstream`, `dspenc`, `tex3ds`) mantêm suas próprias licenças.
+- **Aviso Legal:** Projeto de fã sem fins lucrativos, não feito, endossado ou apoiado pela Electronic Arts. *Need for Speed* e *Need for Speed: Underground 2* são marcas registradas da Electronic Arts Inc. Este repositório não contém dados do jogo e funciona apenas com arquivos de uma cópia de PC que você possui (a única exceção é o banner, ícone e som do Menu HOME do CIA em `3DS Files/meta/nfsu2/`, gerados por `tools/make_banner.py` para compilar o CIA de forma independente).
+- **Licença:** Código distribuído sob a **GNU General Public License v3.0** ([LICENSE](LICENSE)). Os dados e artes do jogo permanecem propriedade da Electronic Arts. Os binários de terceiros incluídos mantêm suas respectivas licenças.
 
 ### Transparência sobre Uso de IA
 
